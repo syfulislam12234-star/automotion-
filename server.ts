@@ -5,6 +5,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { ServerDatabase } from './server/db';
 import { TelegramAdminService } from './server/telegramAdmin';
+import { TelegramBotService } from './server/telegramBot';
 
 dotenv.config();
 
@@ -49,19 +50,83 @@ const CENTRAL_PLATFORM_STATUS = {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({
+  // Initialize Real Production Telegram Bot Engine (Polling or Webhook mode)
+  try {
+    await TelegramBotService.init();
+  } catch (tgInitErr) {
+    console.error('❌ [TelegramBot] Startup initialization exception:', tgInitErr);
+  }
+
+  // ==========================================
+  // HEALTH & DIAGNOSTIC ENDPOINTS
+  // ==========================================
+  const healthHandler = (req: express.Request, res: express.Response) => {
+    const tgStatus = TelegramBotService.getStatus();
+    const dbStats = ServerDatabase.getStats();
+
+    return res.status(200).json({
       status: 'ok',
-      service: 'Universal Bot Centralized AI & VPS Management Gateway',
+      service: 'Universal Bot Centralized AI & Telegram Gateway',
+      environment: process.env.NODE_ENV || 'production',
+      uptimeSeconds: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
+      telegramBot: {
+        isConfigured: tgStatus.isConfigured,
+        isRunning: tgStatus.isRunning,
+        mode: tgStatus.mode,
+        botUsername: tgStatus.botUsername,
+        botId: tgStatus.botId,
+        totalUpdatesProcessed: tgStatus.totalUpdatesProcessed,
+        activeChatSessions: tgStatus.activeChatSessions,
+        lastUpdateTimestamp: tgStatus.lastUpdateTimestamp,
+        lastError: tgStatus.lastError,
+      },
+      aiCascade: tgStatus.aiCascade,
+      database: {
+        registeredUsers: dbStats.usersCount,
+        savedBotConfigs: dbStats.savedBotConfigsCount,
+        activeSessions: dbStats.activeSessionsCount,
+      },
       platform: CENTRAL_PLATFORM_STATUS,
     });
-  });
+  };
+
+  // Serve both /health and /api/health as pure JSON (Never let /health hit SPA catch-all!)
+  app.get('/health', healthHandler);
+  app.get('/api/health', healthHandler);
+
+  // ==========================================
+  // TELEGRAM WEBHOOK INGRESS ENDPOINTS
+  // ==========================================
+  const webhookHandler = async (req: express.Request, res: express.Response) => {
+    try {
+      const secretHeader = (req.headers['x-telegram-bot-api-secret-token'] as string) || '';
+      const update = req.body;
+
+      if (!update) {
+        return res.status(200).json({ ok: true, reason: 'Empty body' });
+      }
+
+      // Process update asynchronously so Telegram receives 200 OK fast
+      TelegramBotService.handleUpdate(update, secretHeader).catch((err) => {
+        console.error('❌ [Webhook Handler] Async update processing error:', err);
+      });
+
+      return res.status(200).json({ ok: true });
+    } catch (err: any) {
+      console.error('❌ [Webhook Handler] Error:', err);
+      return res.status(200).json({ ok: true, error: err?.message });
+    }
+  };
+
+  // Mount at both /webhook and /api/webhook
+  app.post('/webhook', webhookHandler);
+  app.post('/api/webhook', webhookHandler);
+  app.post('/api/telegram-admin/webhook', webhookHandler);
 
   // Centralized Infrastructure Status Endpoint for Pro Users
   app.get('/api/infrastructure/status', (req, res) => {
@@ -494,14 +559,22 @@ async function startServer() {
   // TELEGRAM ADMIN BOT CONTROLLER ROUTES
   // ==========================================
 
-  // Get Telegram Admin Config and Status
+  // Get Telegram Admin Config and Status (Tokens safely redacted for security)
   app.get('/api/telegram-admin/config', (req, res) => {
     try {
       const config = TelegramAdminService.getConfig();
       const logs = TelegramAdminService.getLogs();
+
+      // Safely redact any token before returning to client
+      const safeConfig = {
+        ...config,
+        adminBotToken: config.adminBotToken ? '••••••••••••••••' : '',
+        isTokenConfigured: Boolean(config.adminBotToken && config.adminBotToken.includes(':')),
+      };
+
       return res.json({
         success: true,
-        config,
+        config: safeConfig,
         logs: logs.slice(0, 30),
       });
     } catch (err: any) {
@@ -620,9 +693,21 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Universal Bot Server running on http://0.0.0.0:${PORT}`);
   });
+
+  const shutdown = async (signal: string) => {
+    console.log(`\n🛑 [Server] Received ${signal}. Initiating graceful shutdown...`);
+    await TelegramBotService.stop();
+    server.close(() => {
+      console.log('✅ [Server] HTTP server closed. Process exiting.');
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();
