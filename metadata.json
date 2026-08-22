@@ -1,0 +1,8 @@
+{
+  "name": "Remix Telegram Groq Bot Builder",
+  "description": "Universal multi-platform AI Bot generator supporting 10 messaging gateways on a 20-Tier multi-provider AI engine with VPS Server Management & Monitoring Dashboard, n8n Webhook & Automation Suite, Dual-Key load balancing, Admin PIN Code Studio privacy protection, and Multi-Cloud Hosting Manifests.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
