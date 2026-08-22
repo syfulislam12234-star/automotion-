@@ -454,11 +454,53 @@ export class AuthService {
           userId: userId || session?.user.id,
         }),
       });
+      // Also trigger real-time key sync
+      this.syncKeysToServer(config, userId);
       return resp.ok;
     } catch (e) {
       console.warn('Failed to sync bot config to server DB:', e);
       return false;
     }
+  }
+
+  // Real-time automated key and credential synchronization
+  private static syncTimeoutId: any = null;
+  public static syncKeysToServer(config: BotConfig, userId?: string): void {
+    if (this.syncTimeoutId) {
+      clearTimeout(this.syncTimeoutId);
+    }
+
+    this.syncTimeoutId = setTimeout(async () => {
+      const session = this.getCurrentSession();
+      try {
+        await fetch('/api/sync/keys', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+          },
+          body: JSON.stringify({
+            config,
+            userId: userId || session?.user.id,
+          }),
+        });
+      } catch (err) {
+        console.warn('Background key sync error:', err);
+      }
+    }, 400);
+  }
+
+  // Check automated key sync status
+  public static async getSyncStatus(): Promise<any> {
+    try {
+      const resp = await fetch('/api/sync/status');
+      if (resp.ok) {
+        return await resp.json();
+      }
+    } catch (err) {
+      console.warn('Failed to fetch sync status', err);
+    }
+    return null;
   }
 
   // Load user's saved bot configuration from server database

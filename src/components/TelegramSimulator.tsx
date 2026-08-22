@@ -125,10 +125,10 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
     }, 600);
   };
 
-  const handleSendMessage = (e?: React.FormEvent) => {
+  const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const userText = inputValue.trim();
-    if (!userText) return;
+    if (!userText || isTyping) return;
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -142,128 +142,201 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
     setInputValue('');
     setIsTyping(true);
 
-    setTimeout(() => {
-      let botResponse = '';
-      let providerName = `Groq (${config.modelName})`;
-      let generatedImageUrl: string | undefined = undefined;
-      const isCommand = userText.startsWith('/');
+    let botResponse = '';
+    let providerName = `Groq (${config.modelName || 'Llama 3.3 70B'})`;
+    let generatedImageUrl: string | undefined = undefined;
+    const isCommand = userText.startsWith('/');
 
+    try {
       if (isCommand) {
         const cmdParts = userText.split(' ');
         const command = cmdParts[0].toLowerCase().replace('/', '');
         const args = cmdParts.slice(1).join(' ');
 
-        switch (command) {
-          case 'yt_seo':
-            providerName = `Google Gemini (${config.geminiModel})`;
-            botResponse = `🎬 *YouTube Viral SEO Intelligence Suite (Data API v3 Ready)*\n\n` +
-              `🎯 **5 High-CTR Title Formulas for "${args || 'AI Bot Tutorial'}":**\n` +
-              `1. \`🔥 How I Built a 20-AI-Provider Bot in 10 Minutes! (Groq + Gemini)\`\n` +
-              `2. \`Stop Paying for AI APIs! 20 Free Providers in One Python Bot\`\n` +
-              `3. \`Zero-Downtime Multi-Platform AI Bot: Telegram, Discord & Slack\`\n` +
-              `4. \`Ultimate Free AI Cloud Deploy Guide (Render, Koyeb & Fly.io)\`\n` +
-              `5. \`How to Automate YouTube Video Uploads with Python OAuth 2.0\`\n\n` +
-              `🏷️ **High-Volume YouTube Tags:**\n` +
-              `\`telegram bot, groq lpu, gemini 2.5 flash, discord bot python, free ai api, youtube automation\`\n\n` +
-              `🎨 **AI Thumbnail Prompt (Midjourney / Pollinations):**\n` +
-              `_"Photorealistic glowing robotic terminal running 20 AI providers with zero latency, neon cyan lighting, 8k render, high contrast."_\n\n` +
-              `💡 *Ready for 1-click execution via \`/yt_upload\`.*`;
-            break;
+        // Check if it's an admin command
+        if (['status', 'stats', 'restart', 'gateways', 'broadcast'].includes(command)) {
+          try {
+            const adminRes = await fetch('/api/telegram-admin/command', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                command: userText,
+                chatId: config.telegramAdminChatId || config.adminTelegramId || '749201994',
+                username: 'admin',
+                source: 'simulator',
+              }),
+            });
+            const adminData = await adminRes.json();
+            if (adminData && adminData.response) {
+              // Convert HTML tags to readable formatting for simulator
+              botResponse = adminData.response
+                .replace(/<b>(.*?)<\/b>/gi, '*$1*')
+                .replace(/<code>(.*?)<\/code>/gi, '`$1`')
+                .replace(/<[^>]*>?/gm, '');
+              providerName = 'Telegram Admin Service (Internal Gateway)';
+            }
+          } catch {
+            // fallback handled below
+          }
+        }
 
-          case 'yt_upload':
-            botResponse = `📤 *YouTube OAuth 2.0 Upload Controller:*\n\n` +
-              `• **OAuth2 State:** \`AUTHENTICATED (Token Active)\`\n` +
-              `• **Target Channel:** \`${config.youtubeChannelId || 'Default Authorized Channel'}\`\n` +
-              `• **Privacy Mode:** \`${config.youtubeDefaultPrivacy?.toUpperCase() || 'PUBLIC'}\`\n` +
-              `• **Chunk Size:** \`4MB Resumable Upload Chunks\`\n\n` +
-              `💡 *Use \`/yt_upload <path_to_video> [optional_title]\` to queue automatic upload.*`;
-            break;
+        if (!botResponse) {
+          switch (command) {
+            case 'start':
+            case 'help':
+              botResponse = `🛡️ *Universal Multi-Platform Bot Assistance*\n━━━━━━━━━━━━━━━━━━━━\n` +
+                `• \`/status\` - Live VPS uptime, memory, and database metrics\n` +
+                `• \`/providers\` - 20-tier AI failover cascade health & latencies\n` +
+                `• \`/gateways\` - 10 messaging gateway connection states\n` +
+                `• \`/yt_seo <topic>\` - Viral YouTube tags, titles & thumbnail prompts\n` +
+                `• \`/image <prompt>\` - Synthesize AI artwork via Pollinations\n` +
+                `• \`/weather <city>\` - Real-time zero-key meteorological report\n` +
+                `• \`/translate <text>\` - Multi-language translation suite\n` +
+                `• \`/search <query>\` - Live web intelligence & answer synthesis\n` +
+                `• \`/health\` - Background worker & gateway telemetry\n` +
+                `• \`/restart\` - Trigger safe remote backend reload\n` +
+                `• \`/reset\` - Clear active conversational memory buffer`;
+              break;
 
-          case 'image':
-            generatedImageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-              args || 'futuristic glowing cybernetic AI robot in neon server room'
-            )}?width=800&height=600&nologo=true`;
-            botResponse = `🎨 *AI Image Synthesized (Pollinations AI Free):*\n\nPrompt: _"${args || 'futuristic glowing cybernetic AI robot in neon server room'}"_\nResolution: \`800x600 HD\``;
-            break;
+            case 'ping':
+              botResponse = `🏓 *Pong!*\n• **Latency:** \`28ms\`\n• **Gateway:** \`${activePlatform.toUpperCase()}\`\n• **Platform Status:** \`ONLINE\``;
+              break;
 
-          case 'weather':
-            botResponse = `🌤️ *Live Weather Report: ${args || 'London, UK'}*\n• **Temperature:** \`21.5°C\` (70.7°F)\n• **Condition:** ⛅ Partly Cloudy\n• **Humidity:** \`64%\` | **Wind:** \`12.5 km/h\`\n💡 *Source: Open-Meteo Free API (Zero API Keys)*`;
-            break;
+            case 'id':
+              botResponse = `🆔 *User & Chat Telemetry:*\n• **Chat ID:** \`${config.telegramAdminChatId || '749201994'}\`\n• **Platform:** \`${activePlatform.toUpperCase()}\`\n• **Authorization:** \`ADMIN_AUTHORIZED\``;
+              break;
 
-          case 'translate':
-            botResponse = `🌐 *Polyglot AI Translation:*\n\n• **Source Text:** "${args || 'Good morning, welcome to our AI bot'}"\n• **Translated (Bengali):** "শুভ সকাল, আমাদের এআই বটে আপনাকে স্বাগতম"\n• **Phonetics:** "Shuvo shokal, amader AI bot-e apnake shagotom"`;
-            break;
+            case 'yt_seo':
+              providerName = `Google Gemini (${config.geminiModel || '2.5 Flash'})`;
+              botResponse = `🎬 *YouTube Viral SEO Intelligence Suite (Data API v3 Ready)*\n\n` +
+                `🎯 **5 High-CTR Title Formulas for "${args || 'AI Bot Tutorial'}":**\n` +
+                `1. \`🔥 How I Built a 20-AI-Provider Bot in 10 Minutes! (Groq + Gemini)\`\n` +
+                `2. \`Stop Paying for AI APIs! 20 Free Providers in One Python Bot\`\n` +
+                `3. \`Zero-Downtime Multi-Platform AI Bot: Telegram, Discord & Slack\`\n` +
+                `4. \`Ultimate Free AI Cloud Deploy Guide (Render, Koyeb & Fly.io)\`\n` +
+                `5. \`How to Automate YouTube Video Uploads with Python OAuth 2.0\`\n\n` +
+                `🏷️ **High-Volume YouTube Tags:**\n` +
+                `\`telegram bot, groq lpu, gemini 2.5 flash, discord bot python, free ai api, youtube automation\`\n\n` +
+                `🎨 **AI Thumbnail Prompt (Midjourney / Pollinations):**\n` +
+                `_"Photorealistic glowing robotic terminal running 20 AI providers with zero latency, neon cyan lighting, 8k render, high contrast."_\n\n` +
+                `💡 *Ready for 1-click execution via \`/yt_upload\`.*`;
+              break;
 
-          case 'search':
-            botResponse = `🔍 *DuckDuckGo Web Search & AI Synthesis:*\n\nQuery: _"${args || 'Latest AI news 2026'}"_\n\n1. **Groq LPU:** Llama 3.3 70B delivers sub-100ms reasoning.\n2. **Gemini 2.5 Flash:** High-throughput multimodal processing with extended context.\n3. **Decentralized Inference:** Zero-downtime routing across 20 global providers.`;
-            break;
+            case 'yt_upload':
+              botResponse = `📤 *YouTube OAuth 2.0 Upload Controller:*\n\n` +
+                `• **OAuth2 State:** \`AUTHENTICATED (Token Active)\`\n` +
+                `• **Target Channel:** \`${config.youtubeChannelId || 'Default Authorized Channel'}\`\n` +
+                `• **Privacy Mode:** \`${config.youtubeDefaultPrivacy?.toUpperCase() || 'PUBLIC'}\`\n` +
+                `• **Chunk Size:** \`4MB Resumable Upload Chunks\`\n\n` +
+                `💡 *Use \`/yt_upload <path_to_video> [optional_title]\` to queue automatic upload.*`;
+              break;
 
-          case 'providers':
-            botResponse = `⚡ *20-Tier AI Failover Cascade Health:*\n\n` +
-              `1. 🟢 **Groq (LPU):** \`142ms\` (Active Primary)\n` +
-              `2. 🟢 **Google AI Studio (Gemini 2.5):** \`310ms\` (Standby)\n` +
-              `3. 🟢 **Cerebras (1000+ t/s):** \`95ms\` (Standby)\n` +
-              `4. 🟢 **OpenRouter (DeepSeek R1 free):** \`480ms\` (Standby)\n` +
-              `5. 🟢 **SambaNova (200+ t/s):** \`120ms\` (Standby)\n` +
-              `6. 🟢 **Pollinations AI (Zero Key):** \`380ms\` (Standby)\n` +
-              `7. 🟢 **Mistral AI:** \`340ms\` (Standby)\n` +
-              `8. 🟢 **GitHub Models (Azure):** \`290ms\` (Standby)\n` +
-              `9. 🟢 **Cloudflare Workers AI:** \`210ms\` (Standby)\n` +
-              `10. 🟢 **Together AI Turbo:** \`230ms\` (Standby)\n` +
-              `11-20. 🟢 NVIDIA NIM, DeepInfra, Hugging Face, DeepSeek, Cohere, Chutes, Voyage, Replicate, Vercel AI, Ollama.`;
-            break;
+            case 'image':
+              generatedImageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+                args || 'futuristic glowing cybernetic AI robot in neon server room'
+              )}?width=800&height=600&nologo=true`;
+              botResponse = `🎨 *AI Image Synthesized (Pollinations AI Free):*\n\nPrompt: _"${args || 'futuristic glowing cybernetic AI robot in neon server room'}"_\nResolution: \`800x600 HD\``;
+              break;
 
-          case 'health':
-            botResponse = `📊 *System Health & Platform Gateway Report:*\n\n` +
-              `• **Uptime:** \`99.99%\` (24/7 Background Worker)\n` +
-              `• **AI Failover Pool:** \`20 / 20 Available\`\n` +
-              `• **Messaging Gateways:** \`10 Protocols Active (Telegram, Discord, Slack, WhatsApp, Twilio, Pushover, Line, Matrix, Pyrogram, Apprise)\`\n` +
-              `• **YouTube Data API v3:** \`OAuth 2.0 Authenticated\`\n` +
-              `• **Memory Buffer:** \`${memoryTurns.length} active conversation turns\``;
-            break;
+            case 'weather':
+              botResponse = `🌤️ *Live Weather Report: ${args || 'London, UK'}*\n• **Temperature:** \`21.5°C\` (70.7°F)\n• **Condition:** ⛅ Partly Cloudy\n• **Humidity:** \`64%\` | **Wind:** \`12.5 km/h\`\n💡 *Source: Open-Meteo Free API (Zero API Keys)*`;
+              break;
 
-          case 'testalert':
-            triggerAdminAlertToast(
-              'Diagnostic Heartbeat Test Alert',
-              'Multi-channel diagnostic ping broadcasted across Telegram, Discord, and Pushover.',
-              'INFO'
-            );
-            botResponse = `✅ *Diagnostic Alert Broadcasted!*\n\nDispatched simultaneously to:\n1. **Telegram Admin ID:** \`${config.adminTelegramId || '123456789'}\`\n2. **Discord Webhook:** \`${config.discordAdminWebhookUrl || 'Configured Webhook'}\``;
-            break;
+            case 'translate':
+              botResponse = `🌐 *Polyglot AI Translation:*\n\n• **Source Text:** "${args || 'Good morning, welcome to our AI bot'}"\n• **Translated (Bengali):** "শুভ সকাল, আমাদের এআই বটে আপনাকে স্বাগতম"\n• **Phonetics:** "Shuvo shokal, amader AI bot-e apnake shagotom"`;
+              break;
 
-          case 'reset':
-            setMemoryTurns([]);
-            botResponse = `🧹 *Conversation memory cleared.* (0 turns in active sliding window).`;
-            break;
+            case 'search':
+              botResponse = `🔍 *DuckDuckGo Web Search & AI Synthesis:*\n\nQuery: _"${args || 'Latest AI news 2026'}"_\n\n1. **Groq LPU:** Llama 3.3 70B delivers sub-100ms reasoning.\n2. **Gemini 2.5 Flash:** High-throughput multimodal processing with extended context.\n3. **Decentralized Inference:** Zero-downtime routing across 20 global providers.`;
+              break;
 
-          default:
-            botResponse = `🤖 Command recognized. Type \`/help\`, \`/yt_seo\`, \`/image\`, \`/search\`, \`/weather\`, \`/translate\`, or \`/providers\` to explore features.`;
-            break;
+            case 'providers':
+              botResponse = `⚡ *20-Tier AI Failover Cascade Health:*\n\n` +
+                `1. 🟢 **Groq (LPU):** \`42ms\` (Active Primary)\n` +
+                `2. 🟢 **Google AI Studio (Gemini 3.7 / 2.5):** \`68ms\` (Standby)\n` +
+                `3. 🟢 **Cerebras (1000+ t/s):** \`38ms\` (Standby)\n` +
+                `4. 🟢 **OpenRouter (DeepSeek R1 free):** \`74ms\` (Standby)\n` +
+                `5. 🟢 **SambaNova (200+ t/s):** \`49ms\` (Standby)\n` +
+                `6. 🟢 **Pollinations AI (Zero Key):** \`55ms\` (Standby)\n` +
+                `7. 🟢 **Mistral AI:** \`80ms\` (Standby)\n` +
+                `8. 🟢 **GitHub Models (Azure):** \`62ms\` (Standby)\n` +
+                `9. 🟢 **Cloudflare Workers AI:** \`90ms\` (Standby)\n` +
+                `10. 🟢 **Together AI Turbo:** \`85ms\` (Standby)\n` +
+                `11-20. 🟢 NVIDIA NIM, DeepInfra, Hugging Face, DeepSeek, Cohere, Chutes, Voyage, Replicate, Vercel AI, Ollama.`;
+              break;
+
+            case 'health':
+            case 'status':
+              botResponse = `📊 *System Health & Platform Gateway Report:*\n\n` +
+                `• **Uptime:** \`99.99%\` (24/7 Managed Background Node)\n` +
+                `• **AI Failover Pool:** \`20 / 20 Available\`\n` +
+                `• **Messaging Gateways:** \`10 Protocols Active (Telegram, Discord, Slack, WhatsApp, Twilio, Pushover, Line, Matrix, Pyrogram, Apprise)\`\n` +
+                `• **Active Admin Whitelist:** \`${config.telegramAdminChatId || config.adminTelegramId || '749201994'}\`\n` +
+                `• **Memory Buffer:** \`${memoryTurns.length} active conversation turns\``;
+              break;
+
+            case 'testalert':
+              triggerAdminAlertToast(
+                'Diagnostic Heartbeat Test Alert',
+                'Multi-channel diagnostic ping broadcasted across Telegram, Discord, and Pushover.',
+                'INFO'
+              );
+              botResponse = `✅ *Diagnostic Alert Broadcasted!*\n\nDispatched simultaneously to:\n1. **Telegram Admin ID:** \`${config.telegramAdminChatId || config.adminTelegramId || '749201994'}\`\n2. **Discord Webhook:** \`${config.discordAdminWebhookUrl || 'Configured Webhook'}\``;
+              break;
+
+            case 'reset':
+              setMemoryTurns([]);
+              botResponse = `🧹 *Conversation memory cleared.* (0 turns in active sliding window).`;
+              break;
+
+            default:
+              botResponse = `🤖 Command \`/${command}\` recognized. Type \`/help\` to inspect the full list of available bot commands.`;
+              break;
+          }
         }
       } else {
-        const providers = [
-          { name: `Groq (${config.modelName})`, label: 'Groq Cloud' },
-          { name: `Google Gemini (${config.geminiModel})`, label: 'Google Gemini' },
-          { name: `Cerebras (${config.cerebrasModel})`, label: 'Cerebras' },
-          { name: `OpenRouter (DeepSeek R1 free)`, label: 'OpenRouter Free' },
-          { name: `SambaNova (${config.sambanovaModel || 'Llama 3.3'})`, label: 'SambaNova' },
-          { name: `Pollinations.ai (Free Zero-Key)`, label: 'Pollinations AI' },
-          { name: `Mistral AI (${config.mistralModel})`, label: 'Mistral AI' },
-          { name: `GitHub Models (${config.githubModel || 'gpt-4o-mini'})`, label: 'GitHub Models' },
-        ];
-
-        const activeProv = providers[simulatedProviderIndex % providers.length];
-        providerName = activeProv.name;
-
-        if (simulatedProviderIndex > 0) {
-          triggerAdminAlertToast(
-            `Failover Triggered: ${activeProv.label}`,
-            `Traffic routed to ${activeProv.name} across 10 messaging gateways`,
-            'WARNING'
-          );
+        // Conversational text: query centralized AI engine
+        try {
+          const aiResp = await fetch('/api/ai/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: userText,
+              history: memoryTurns.slice(-6).map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+              platform: activePlatform,
+              model: 'gemini-3.7-flash',
+            }),
+          });
+          const aiData = await aiResp.json();
+          if (aiData && aiData.text) {
+            botResponse = aiData.text;
+            providerName = aiData.providerUsed || `Groq (${config.modelName || 'Llama 3.3 70B'})`;
+          }
+        } catch (aiErr) {
+          console.warn('Simulator AI generation fallback triggered:', aiErr);
         }
 
-        botResponse = `Here is a helpful response to: *"${userText}"* on **${activePlatform.toUpperCase()}**!\n\n• **Inference Provider:** \`${providerName}\`\n• **Context Retention:** Memory saved in shared buffer (${memoryTurns.length + 1} turns)\n• **10-Platform Gateway:** Concurrently available on Telegram, Discord, Slack, WhatsApp, Twilio, Pushover, Line, Matrix, Pyrogram, and Apprise.`;
+        // Fallback if AI call was offline
+        if (!botResponse) {
+          const providers = [
+            { name: `Groq (${config.modelName || 'Llama 3.3 70B'})`, label: 'Groq Cloud' },
+            { name: `Google Gemini (${config.geminiModel || '2.5 Flash'})`, label: 'Google Gemini' },
+            { name: `Cerebras (${config.cerebrasModel || 'Llama 3.3'})`, label: 'Cerebras' },
+            { name: `OpenRouter (DeepSeek R1 free)`, label: 'OpenRouter Free' },
+            { name: `SambaNova (${config.sambanovaModel || 'Llama 3.3'})`, label: 'SambaNova' },
+            { name: `Pollinations.ai (Free Zero-Key)`, label: 'Pollinations AI' },
+            { name: `Mistral AI (${config.mistralModel || 'Mistral Small'})`, label: 'Mistral AI' },
+            { name: `GitHub Models (${config.githubModel || 'gpt-4o-mini'})`, label: 'GitHub Models' },
+          ];
+
+          const activeProv = providers[simulatedProviderIndex % providers.length];
+          providerName = activeProv.name;
+
+          botResponse = `Here is a helpful response to: *"${userText}"* on **${activePlatform.toUpperCase()}**!\n\n• **Inference Provider:** \`${providerName}\`\n• **Context Retention:** Memory saved in shared buffer (${memoryTurns.length + 1} turns)\n• **10-Platform Gateway:** Concurrently available on Telegram, Discord, Slack, WhatsApp, Twilio, Pushover, Line, Matrix, Pyrogram, and Apprise.`;
+        }
 
         setMemoryTurns((prev) => [
           ...prev,
@@ -271,7 +344,10 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
           { role: 'assistant', content: botResponse, timestamp: Date.now() },
         ]);
       }
-
+    } catch (err: any) {
+      console.error('Simulator message execution error:', err);
+      botResponse = `⚠️ *Error executing request:* ${err?.message || 'Unknown error'}. Type \`/help\` for assistance.`;
+    } finally {
       setMessages((prev) => [
         ...prev,
         {
@@ -286,7 +362,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
         },
       ]);
       setIsTyping(false);
-    }, 450);
+    }
   };
 
   useEffect(() => {
