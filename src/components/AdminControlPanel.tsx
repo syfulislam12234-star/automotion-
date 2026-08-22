@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BotConfig, AIProviderStatus, MessagingPlatformStatus, YouTubeUploadQueueItem } from '../types';
 import { AuthService } from '../services/authService';
+import { AiMediaScanner } from './AiMediaScanner';
 import {
   ShieldCheck,
   Server,
@@ -47,6 +48,7 @@ import {
   UploadCloud,
   FolderSync,
   FileCheck,
+  Scan,
 } from 'lucide-react';
 
 interface AdminControlPanelProps {
@@ -70,7 +72,7 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
   onToggleCodeStudioLock,
   onOpenPinModal,
 }) => {
-  const [activeAdminTab, setActiveAdminTab] = useState<'providers' | 'messaging' | 'youtube' | 'logs' | 'appsgeyser' | 'privacy' | 'database'>('providers');
+  const [activeAdminTab, setActiveAdminTab] = useState<'providers' | 'messaging' | 'youtube' | 'logs' | 'appsgeyser' | 'privacy' | 'database' | 'scanner'>('providers');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'desktop' | 'mobile_preview' | 'telegram_mini_app'>('desktop');
   const [adminPinInput, setAdminPinInput] = useState(config.adminPin || '7788');
@@ -935,6 +937,21 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
             <span>Server Database & Backup</span>
             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
               Permanent
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveAdminTab('scanner')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeAdminTab === 'scanner'
+                ? 'bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 text-white shadow-md shadow-cyan-500/25'
+                : 'bg-slate-800/60 text-slate-300 hover:bg-slate-800 hover:text-white border border-slate-700/60'
+            }`}
+          >
+            <Scan className="w-4 h-4 text-cyan-300" />
+            <span>AI Media Provenance Scanner</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+              AI Detection
             </span>
           </button>
         </div>
@@ -1950,6 +1967,13 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* View 8: AI Media Provenance & Detection Scanner */}
+        {activeAdminTab === 'scanner' && (
+          <div className="space-y-6">
+            <AiMediaScanner onShowToast={onShowToast} />
           </div>
         )}
       </div>

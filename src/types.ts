@@ -345,3 +345,34 @@ export interface AuthSession {
   user: UserAccount;
   expiresAt: number;
 }
+
+export interface MediaProvenanceScanResult {
+  id: string;
+  mediaUrl: string;
+  mediaType: 'image' | 'video' | 'audio';
+  scannedAt: string;
+  isAiGenerated: boolean;
+  aiProbability: number;
+  confidencePercentage: number;
+  verdict: 'AI_SYNTHETIC' | 'AI_ASSISTED' | 'AUTHENTIC_NATURAL' | 'DEEPFAKE_MODIFIED';
+  likelyModel: string;
+  modelFamily: string;
+  c2paManifestStatus: 'valid_c2pa' | 'synthid_detected' | 'stripped_metadata' | 'no_credentials';
+  analysisStages: {
+    metadata: { score: number; status: string; details: string };
+    spectralFrequency: { score: number; status: string; checkerboardArtifacts: boolean; details: string };
+    latentDiffusionResiduals: { score: number; status: string; details: string };
+    anatomicalTemporalCoherence?: { score: number; status: string; details: string };
+    acousticPhaseConsistency?: { score: number; status: string; details: string };
+  };
+  forensicIndicators: {
+    name: string;
+    level: 'low' | 'moderate' | 'high' | 'critical';
+    description: string;
+  }[];
+  provenanceChain: {
+    step: string;
+    status: string;
+    details: string;
+  }[];
+}

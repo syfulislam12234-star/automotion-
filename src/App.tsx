@@ -14,6 +14,7 @@ import { SubscriptionModal } from './components/SubscriptionModal';
 import { AdminPinModal } from './components/AdminPinModal';
 import { AuthModal } from './components/AuthModal';
 import { VpsManager } from './components/VpsManager';
+import { AiMediaScanner } from './components/AiMediaScanner';
 import { AuthService } from './services/authService';
 import {
   Download,
@@ -42,6 +43,7 @@ import {
   Activity,
   User,
   Fingerprint,
+  Scan,
 } from 'lucide-react';
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -291,7 +293,7 @@ export default function App() {
   const currentUser = session?.user || null;
 
   // Default to Live Simulator mode for general users
-  const [activeTab, setActiveTab] = useState<'simulator' | 'admin' | 'vps' | 'studio'>('simulator');
+  const [activeTab, setActiveTab] = useState<'simulator' | 'admin' | 'vps' | 'scanner' | 'studio'>('simulator');
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
   const [isPortalOpen, setIsPortalOpen] = useState(false);
@@ -545,29 +547,11 @@ venv/
           <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
           <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="space-y-2 max-w-2xl">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center gap-1.5">
-                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-                  20 AI Providers
-                </span>
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center gap-1.5">
-                  <Radio className="w-3.5 h-3.5 text-indigo-400" />
-                  10 Messaging Gateways
-                </span>
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20 flex items-center gap-1.5">
-                  <Video className="w-3.5 h-3.5 text-rose-400" />
-                  YouTube OAuth2 Suite
-                </span>
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
-                  <Rocket className="w-3.5 h-3.5" />
-                  Multi-Cloud Ready
-                </span>
-              </div>
               <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
                 Universal Multi-Platform & 20-AI Bot Generator
               </h2>
               <p className="text-sm text-slate-300 leading-relaxed">
-                Zero-downtime Python architecture with <strong>20 free AI API providers</strong> (Groq, Gemini 2.5 Flash, Cerebras, OpenRouter, Mistral, Cloudflare, GitHub Models, SambaNova, Pollinations, Cohere, NVIDIA, Together, DeepInfra, Chutes, Voyage, Replicate, Vercel AI, DeepSeek, HuggingFace, Ollama) and <strong>10 messaging platforms</strong> (Telegram, Discord, Slack, WhatsApp, Twilio, Pushover, Pyrogram, Line, Matrix, Apprise) with <strong>YouTube OAuth 2.0 Automation</strong> and Sentinel Admin Alerting.
+                Zero-downtime Python architecture powering multi-provider AI routing, unified messaging gateways, YouTube OAuth automation, and real-time media provenance inspection.
               </p>
             </div>
 
@@ -669,7 +653,23 @@ venv/
               )}
             </button>
 
-            {/* View 4: Code & Architecture Studio (Protected) */}
+            {/* View 4: AI Media Provenance & Detection Scanner */}
+            <button
+              onClick={() => setActiveTab('scanner')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'scanner'
+                  ? 'bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 text-white shadow-md shadow-cyan-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Scan className="w-4 h-4 text-cyan-300" />
+              <span>AI Media Scanner</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                New
+              </span>
+            </button>
+
+            {/* View 5: Code & Architecture Studio (Protected) */}
             {(!config.hideCodeStudioTab || isCodeStudioUnlocked) && (
               <button
                 onClick={handleStudioTabClick}
@@ -802,7 +802,14 @@ venv/
           </div>
         )}
 
-        {/* View 4: Studio Mode (Protected Area) */}
+        {/* View 4: AI Media Provenance & Detection Scanner */}
+        {activeTab === 'scanner' && (
+          <div className="space-y-6">
+            <AiMediaScanner onShowToast={showToast} />
+          </div>
+        )}
+
+        {/* View 5: Studio Mode (Protected Area) */}
         {activeTab === 'studio' && (
           <>
             {isCodeStudioUnlocked ? (
