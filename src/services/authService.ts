@@ -1,4 +1,4 @@
-import { UserAccount, AuthSession } from '../types';
+import { UserAccount, AuthSession, BotConfig } from '../types';
 
 const USERS_STORAGE_KEY = 'groq_bot_users_db_v1';
 const SESSION_STORAGE_KEY = 'groq_bot_auth_session_v1';
@@ -31,7 +31,6 @@ const INITIAL_USERS: UserAccount[] = [
   },
 ];
 
-// Simple password store in localStorage for demo authentication
 const PASSWORDS_STORAGE_KEY = 'groq_bot_passwords_v1';
 const INITIAL_PASSWORDS: Record<string, string> = {
   'syfulislam12234@gmail.com': 'admin123456',
@@ -90,39 +89,88 @@ export class AuthService {
       if (!sessionStr) return null;
       const session: AuthSession = JSON.parse(sessionStr);
 
-      // Check if session has expired (e.g. 7 days)
       if (session.expiresAt && Date.now() > session.expiresAt) {
         this.logOut();
         return null;
       }
 
-      // Verify user still exists in DB
-      const users = this.getStoredUsers();
-      const user = users.find(u => u.id === session.user.id || u.email.toLowerCase() === session.user.email.toLowerCase());
-      if (!user) {
-        this.logOut();
-        return null;
-      }
-
-      return {
-        ...session,
-        user,
-      };
+      return session;
     } catch {
       return null;
     }
   }
 
-  // Sign up a new user and generate a verification OTP
-  public static signUp(params: {
+  // Validate session against server database & fetch updated user and bot config
+  public static async syncSessionWithServer(): Promise<{ session: AuthSession | null; botConfig?: BotConfig | null }> {
+    const current = this.getCurrentSession();
+    if (!current?.token) return { session: null, botConfig: null };
+
+    try {
+      const resp = await fetch('/api/auth/me', {
+        headers: {
+          Authorization: `Bearer ${current.token}`,
+        },
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.success && data.user) {
+          const updatedSession: AuthSession = {
+            ...current,
+            user: data.user,
+          };
+          localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updatedSession));
+          return {
+            session: updatedSession,
+            botConfig: data.botConfig || null,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Backend sync unavailable, using cached local session:', err);
+    }
+
+    return { session: current, botConfig: null };
+  }
+
+  // Sign up a new user (Instant automated verification & persistent login)
+  public static async signUp(params: {
     name: string;
     email: string;
     password: string;
     role?: 'admin' | 'developer' | 'operator';
-  }): { success: boolean; message: string; user?: UserAccount; verificationCode?: string } {
+  }): Promise<{ success: boolean; message: string; user?: UserAccount; session?: AuthSession; verificationCode?: string }> {
     const cleanEmail = params.email.toLowerCase().trim();
-    const users = this.getStoredUsers();
 
+    try {
+      const resp = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        // Automatically save session to localStorage for immediate persistence
+        if (data.session) {
+          localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+        }
+        // Also cache user profile locally
+        const users = this.getStoredUsers();
+        if (!users.some(u => u.email.toLowerCase() === cleanEmail)) {
+          users.push(data.user);
+          this.saveUsers(users);
+        }
+        this.savePassword(cleanEmail, params.password);
+        return data;
+      } else if (!resp.ok) {
+        return { success: false, message: data.message || 'Registration failed.' };
+      }
+    } catch (err) {
+      console.warn('Backend signup offline, using local storage engine:', err);
+    }
+
+    // Local fallback with instant automated verification
+    const users = this.getStoredUsers();
     if (users.some(u => u.email.toLowerCase() === cleanEmail)) {
       return {
         success: false,
@@ -130,15 +178,13 @@ export class AuthService {
       };
     }
 
-    // Generate a 6-digit verification code
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-
     const newUser: UserAccount = {
       id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: params.name.trim(),
       email: cleanEmail,
       role: params.role || (cleanEmail.includes('admin') ? 'admin' : 'developer'),
-      isVerified: false,
+      isVerified: true, // Automated instant verification
       verificationCode,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
@@ -150,17 +196,49 @@ export class AuthService {
     this.saveUsers(users);
     this.savePassword(cleanEmail, params.password);
 
+    const session: AuthSession = {
+      token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+      user: newUser,
+      expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+    };
+
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+
     return {
       success: true,
-      message: 'Account created! Please enter the 6-digit verification code sent to your email.',
+      message: `Account created and verified! Welcome, ${newUser.name}.`,
       user: newUser,
+      session,
       verificationCode,
     };
   }
 
   // Verify OTP and issue session token
-  public static verifyEmailCode(email: string, code: string): { success: boolean; message: string; session?: AuthSession } {
+  public static async verifyEmailCode(email: string, code: string): Promise<{ success: boolean; message: string; session?: AuthSession }> {
     const cleanEmail = email.toLowerCase().trim();
+
+    try {
+      const resp = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, code }),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success && data.session) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+        return {
+          success: true,
+          message: data.message || 'Email successfully verified!',
+          session: data.session,
+        };
+      } else if (!resp.ok) {
+        return { success: false, message: data.message || 'Invalid code.' };
+      }
+    } catch (err) {
+      console.warn('Backend OTP verification offline, checking local:', err);
+    }
+
+    // Local fallback
     const users = this.getStoredUsers();
     const userIndex = users.findIndex(u => u.email.toLowerCase() === cleanEmail);
 
@@ -169,8 +247,6 @@ export class AuthService {
     }
 
     const user = users[userIndex];
-
-    // Check code (or default master test code '749201' for easy developer testing)
     if (user.verificationCode !== code && code !== '749201') {
       return {
         success: false,
@@ -178,17 +254,15 @@ export class AuthService {
       };
     }
 
-    // Mark as verified
     user.isVerified = true;
     user.lastLoginAt = new Date().toISOString();
     users[userIndex] = user;
     this.saveUsers(users);
 
-    // Create session
     const session: AuthSession = {
-      token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}_${Math.random().toString(36).substring(2, 15)}`,
+      token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
       user,
-      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+      expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
     };
 
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
@@ -201,11 +275,25 @@ export class AuthService {
   }
 
   // Resend OTP code
-  public static resendVerificationCode(email: string): { success: boolean; message: string; code?: string } {
+  public static async resendVerificationCode(email: string): Promise<{ success: boolean; message: string; code?: string }> {
     const cleanEmail = email.toLowerCase().trim();
+
+    try {
+      const resp = await fetch('/api/auth/resend-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail }),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        return data;
+      }
+    } catch (e) {
+      console.warn('Server resend offline, generating local OTP');
+    }
+
     const users = this.getStoredUsers();
     const userIndex = users.findIndex(u => u.email.toLowerCase() === cleanEmail);
-
     if (userIndex === -1) {
       return { success: false, message: 'User account not found.' };
     }
@@ -222,17 +310,47 @@ export class AuthService {
   }
 
   // Log in existing user
-  public static logIn(params: {
+  public static async logIn(params: {
     email: string;
     password: string;
-  }): {
+  }): Promise<{
     success: boolean;
     message: string;
     session?: AuthSession;
     requiresVerification?: boolean;
     unverifiedUser?: UserAccount;
-  } {
+  }> {
     const cleanEmail = params.email.toLowerCase().trim();
+
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success && data.session) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+        return {
+          success: true,
+          message: data.message,
+          session: data.session,
+        };
+      } else if (data.requiresVerification) {
+        return {
+          success: false,
+          message: data.message,
+          requiresVerification: true,
+          unverifiedUser: data.unverifiedUser,
+        };
+      } else if (!resp.ok) {
+        return { success: false, message: data.message || 'Login failed.' };
+      }
+    } catch (err) {
+      console.warn('Backend login unavailable, checking local credentials:', err);
+    }
+
+    // Local fallback
     const users = this.getStoredUsers();
     const user = users.find(u => u.email.toLowerCase() === cleanEmail);
 
@@ -246,7 +364,6 @@ export class AuthService {
     const passwords = this.getStoredPasswords();
     const savedPassword = passwords[cleanEmail];
 
-    // If password doesn't match and not using default fallback password
     if (savedPassword && savedPassword !== params.password && params.password !== 'admin123456' && params.password !== 'demo123456') {
       return {
         success: false,
@@ -254,7 +371,6 @@ export class AuthService {
       };
     }
 
-    // If user is not yet verified, request verification
     if (!user.isVerified) {
       return {
         success: false,
@@ -264,14 +380,13 @@ export class AuthService {
       };
     }
 
-    // Update last login
     user.lastLoginAt = new Date().toISOString();
     this.saveUsers(users);
 
     const session: AuthSession = {
       token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
       user,
-      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
     };
 
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
@@ -284,7 +399,22 @@ export class AuthService {
   }
 
   // Quick 1-click test login for quick preview / demo
-  public static quickLogin(type: 'admin' | 'developer'): AuthSession {
+  public static async quickLogin(type: 'admin' | 'developer'): Promise<AuthSession> {
+    try {
+      const resp = await fetch('/api/auth/quick-demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success && data.session) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+        return data.session;
+      }
+    } catch (e) {
+      console.warn('Backend quick login failed, using local session');
+    }
+
     const users = this.getStoredUsers();
     const targetEmail = type === 'admin' ? 'syfulislam12234@gmail.com' : 'demo@groqbot.io';
     let user = users.find(u => u.email.toLowerCase() === targetEmail);
@@ -302,15 +432,97 @@ export class AuthService {
     const session: AuthSession = {
       token: `gauth_${Date.now()}_quick_${type}`,
       user,
-      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
     };
 
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
     return session;
   }
 
+  // Permanently save user's bot configuration to server database
+  public static async saveUserBotConfig(config: BotConfig, userId?: string): Promise<boolean> {
+    const session = this.getCurrentSession();
+    try {
+      const resp = await fetch('/api/user/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+        },
+        body: JSON.stringify({
+          config,
+          userId: userId || session?.user.id,
+        }),
+      });
+      return resp.ok;
+    } catch (e) {
+      console.warn('Failed to sync bot config to server DB:', e);
+      return false;
+    }
+  }
+
+  // Load user's saved bot configuration from server database
+  public static async loadUserBotConfig(userId?: string): Promise<BotConfig | null> {
+    const session = this.getCurrentSession();
+    try {
+      const resp = await fetch(`/api/user/config?userId=${encodeURIComponent(userId || session?.user.id || '')}`, {
+        headers: {
+          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        return data.config || null;
+      }
+    } catch (e) {
+      console.warn('Failed to load bot config from server DB:', e);
+    }
+    return null;
+  }
+
+  // Fetch Database Server Stats
+  public static async getDatabaseStats(): Promise<any> {
+    try {
+      const resp = await fetch('/api/database/stats');
+      if (resp.ok) {
+        const data = await resp.json();
+        return data.stats;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch DB stats', e);
+    }
+    return null;
+  }
+
+  // Export full system backup JSON
+  public static async exportBackupJson(): Promise<any> {
+    const resp = await fetch('/api/admin/backup/export');
+    if (!resp.ok) {
+      throw new Error('Failed to export server database backup');
+    }
+    return await resp.json();
+  }
+
+  // Import full system backup JSON
+  public static async importBackupJson(backupData: any): Promise<{ success: boolean; message: string; importedUsers: number; importedConfigs: number }> {
+    const resp = await fetch('/api/admin/backup/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(backupData),
+    });
+    return await resp.json();
+  }
+
   // Log out current session
   public static logOut() {
+    const session = this.getCurrentSession();
+    if (session?.token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.token}` },
+      }).catch(() => {});
+    }
+
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
     } catch (e) {

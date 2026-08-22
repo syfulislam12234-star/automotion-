@@ -3,8 +3,12 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { ServerDatabase } from './server/db';
 
 dotenv.config();
+
+// Initialize permanent database storage
+ServerDatabase.init();
 
 // Centralized AI Client with Lazy Initialization
 let geminiClient: GoogleGenAI | null = null;
@@ -146,6 +150,239 @@ async function startServer() {
       centralVpsNode: CENTRAL_PLATFORM_STATUS.vpsNode,
     });
   });
+
+  // ==========================================
+  // PERMANENT DATABASE & AUTHENTICATION ROUTES
+  // ==========================================
+
+  // Database System Stats
+  app.get('/api/database/stats', (req, res) => {
+    try {
+      const stats = ServerDatabase.getStats();
+      return res.json({ success: true, stats });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // User Sign Up
+  app.post('/api/auth/signup', (req, res) => {
+    try {
+      const { name, email, password, role } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
+      }
+
+      const result = ServerDatabase.registerUser({ name, email, password, role });
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      return res.status(201).json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Registration failed' });
+    }
+  });
+
+  // User Login
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ success: false, message: 'Email and password are required.' });
+      }
+
+      const result = ServerDatabase.verifyPasswordAndLogin({ email, password });
+      if (!result.success) {
+        return res.status(401).json(result);
+      }
+
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Login failed' });
+    }
+  });
+
+  // Verify OTP
+  app.post('/api/auth/verify-otp', (req, res) => {
+    try {
+      const { email, code } = req.body;
+      if (!email || !code) {
+        return res.status(400).json({ success: false, message: 'Email and 6-digit OTP code are required.' });
+      }
+
+      const result = ServerDatabase.verifyOtp(email, code);
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Verification failed' });
+    }
+  });
+
+  // Resend OTP
+  app.post('/api/auth/resend-otp', (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Email is required.' });
+      }
+
+      const result = ServerDatabase.resendOtp(email);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Quick Demo Login
+  app.post('/api/auth/quick-demo', (req, res) => {
+    try {
+      const { type } = req.body; // 'admin' | 'developer'
+      const session = ServerDatabase.quickLogin(type === 'admin' ? 'admin' : 'developer');
+      return res.json({
+        success: true,
+        message: `Quick logged in as ${session.user.name}`,
+        session,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Validate Active Session
+  app.get('/api/auth/me', (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).json({ success: false, message: 'No authorization header provided.' });
+      }
+
+      const user = ServerDatabase.getSessionUser(authHeader);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Session expired or invalid.' });
+      }
+
+      // Also fetch user's saved bot config
+      const savedConfig = ServerDatabase.getBotConfig(user.id) || ServerDatabase.getBotConfig(user.email);
+
+      return res.json({
+        success: true,
+        user,
+        botConfig: savedConfig?.config || null,
+        configUpdatedAt: savedConfig?.updatedAt || null,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Log Out
+  app.post('/api/auth/logout', (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        ServerDatabase.removeSession(authHeader);
+      }
+      return res.json({ success: true, message: 'Logged out successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Save User's Bot Configuration to Server DB
+  app.post('/api/user/config', (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const { config, userId } = req.body;
+
+      let targetId = userId;
+      if (authHeader) {
+        const user = ServerDatabase.getSessionUser(authHeader);
+        if (user) {
+          targetId = user.id;
+        }
+      }
+
+      if (!targetId) {
+        targetId = 'global_default_user';
+      }
+
+      if (!config) {
+        return res.status(400).json({ success: false, message: 'Missing bot configuration payload.' });
+      }
+
+      const result = ServerDatabase.saveBotConfig(targetId, config);
+      return res.json({
+        success: true,
+        message: 'Bot configuration permanently saved to server database.',
+        targetId,
+        ...result,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Get User's Bot Configuration from Server DB
+  app.get('/api/user/config', (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const queryUser = req.query.userId as string;
+
+      let targetId = queryUser;
+      if (authHeader) {
+        const user = ServerDatabase.getSessionUser(authHeader);
+        if (user) {
+          targetId = user.id;
+        }
+      }
+
+      if (!targetId) {
+        targetId = 'global_default_user';
+      }
+
+      const saved = ServerDatabase.getBotConfig(targetId);
+      return res.json({
+        success: true,
+        targetId,
+        config: saved?.config || null,
+        updatedAt: saved?.updatedAt || null,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // ==========================================
+  // ADMIN BACKUP & MIGRATION EXPORT/IMPORT
+  // ==========================================
+
+  // Export full JSON backup of database
+  app.get('/api/admin/backup/export', (req, res) => {
+    try {
+      const backup = ServerDatabase.exportBackup();
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename=groq_bot_backup_${Date.now()}.json`);
+      return res.json(backup);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Import / Restore full JSON backup
+  app.post('/api/admin/backup/import', (req, res) => {
+    try {
+      const backupData = req.body;
+      const result = ServerDatabase.importBackup(backupData);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

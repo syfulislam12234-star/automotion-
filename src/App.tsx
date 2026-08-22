@@ -311,6 +311,26 @@ export default function App() {
   });
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
 
+  // Sync session & load permanently saved user bot config from server database on mount
+  useEffect(() => {
+    let isMounted = true;
+    AuthService.syncSessionWithServer().then(({ session: updatedSession, botConfig: serverConfig }) => {
+      if (!isMounted) return;
+      if (updatedSession) {
+        setSession(updatedSession);
+        if (updatedSession.user.role === 'admin') {
+          setIsCodeStudioUnlocked(true);
+        }
+      }
+      if (serverConfig) {
+        setConfig(prev => ({ ...prev, ...serverConfig }));
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const handleConfigChange = (newConfig: BotConfig) => {
     setConfig(newConfig);
     try {
@@ -318,7 +338,10 @@ export default function App() {
     } catch (e) {
       console.error('Failed to persist config to localStorage:', e);
     }
+    // Permanently sync with server database
+    AuthService.saveUserBotConfig(newConfig, currentUser?.id);
   };
+
 
   // Protected Gatekeeper: checks authentication before navigating to sensitive routes
   const requireAuth = (featureName: string, action: () => void) => {

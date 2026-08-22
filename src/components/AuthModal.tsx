@@ -94,7 +94,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   if (!isOpen) return null;
 
   // Handle Login submission
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -109,8 +109,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      const res = AuthService.logIn({ email: loginEmail, password: loginPassword });
+    try {
+      const res = await AuthService.logIn({ email: loginEmail, password: loginPassword });
       setIsLoading(false);
 
       if (res.requiresVerification && res.unverifiedUser) {
@@ -131,11 +131,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       onShowToast(`🎉 ${res.message}`);
       onAuthenticated(res.session);
       if (onClose) onClose();
-    }, 450);
+    } catch (err: any) {
+      setIsLoading(false);
+      setErrorMessage(err.message || 'Login error occurred.');
+    }
   };
 
-  // Handle Sign Up submission
-  const handleSignupSubmit = (e: React.FormEvent) => {
+  // Handle Sign Up submission with Instant Automated Verification & Login
+  const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -162,8 +165,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      const res = AuthService.signUp({
+    try {
+      const res = await AuthService.signUp({
         name: signupName,
         email: signupEmail,
         password: signupPassword,
@@ -176,13 +179,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
+      // Automated Instant Verification & Immediate Login
+      if (res.session) {
+        onShowToast(`🎉 Welcome, ${res.user.name}! Your account has been verified instantly.`);
+        onAuthenticated(res.session);
+        if (onClose) onClose();
+        return;
+      }
+
+      // Fallback in case manual verification was flagged
       setVerifyEmail(res.user.email);
       setLastGeneratedOtp(res.verificationCode || '749201');
       setResendCooldown(60);
       setActiveTab('verify');
       setSuccessMessage(res.message);
       onShowToast('📩 Verification code sent! Please verify your email.');
-    }, 500);
+    } catch (err: any) {
+      setIsLoading(false);
+      setErrorMessage(err.message || 'Sign up error occurred.');
+    }
   };
 
   // Handle OTP digit changes
@@ -220,7 +235,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Handle OTP Verification submission
-  const handleVerifySubmit = (e?: React.FormEvent) => {
+  const handleVerifySubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -232,8 +247,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      const res = AuthService.verifyEmailCode(verifyEmail, fullCode);
+    try {
+      const res = await AuthService.verifyEmailCode(verifyEmail, fullCode);
       setIsLoading(false);
 
       if (!res.success || !res.session) {
@@ -245,20 +260,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       onShowToast(`✅ ${res.message}`);
       onAuthenticated(res.session);
       if (onClose) onClose();
-    }, 500);
+    } catch (err: any) {
+      setIsLoading(false);
+      setErrorMessage(err.message || 'Verification error occurred.');
+    }
   };
 
   // Resend verification code handler
-  const handleResendCode = () => {
+  const handleResendCode = async () => {
     if (resendCooldown > 0) return;
-    const res = AuthService.resendVerificationCode(verifyEmail);
-    if (res.success && res.code) {
-      setLastGeneratedOtp(res.code);
-      setResendCooldown(60);
-      setSuccessMessage(`New code generated: ${res.code}`);
-      onShowToast(`📬 New verification code sent to ${verifyEmail}`);
-    } else {
-      setErrorMessage(res.message);
+    try {
+      const res = await AuthService.resendVerificationCode(verifyEmail);
+      if (res.success && res.code) {
+        setLastGeneratedOtp(res.code);
+        setResendCooldown(60);
+        setSuccessMessage(`New code generated: ${res.code}`);
+        onShowToast(`📬 New verification code sent to ${verifyEmail}`);
+      } else {
+        setErrorMessage(res.message);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to resend code');
     }
   };
 
@@ -271,15 +293,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Quick 1-click login for demonstration
-  const handleQuickDemoLogin = (type: 'admin' | 'developer') => {
+  const handleQuickDemoLogin = async (type: 'admin' | 'developer') => {
     setIsLoading(true);
-    setTimeout(() => {
-      const session = AuthService.quickLogin(type);
+    try {
+      const session = await AuthService.quickLogin(type);
       setIsLoading(false);
       onShowToast(`⚡ Authenticated as ${session.user.name} (${session.user.role.toUpperCase()})`);
       onAuthenticated(session);
       if (onClose) onClose();
-    }, 300);
+    } catch (err: any) {
+      setIsLoading(false);
+      onShowToast('⚡ Demo login active');
+    }
   };
 
   return (
@@ -585,6 +610,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
+              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-xs text-emerald-400">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Instant automated verification enabled: no manual email link confirmation required.</span>
+              </div>
+
               <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none pt-1">
                 <input
                   type="checkbox"
@@ -592,22 +622,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   onChange={(e) => setAgreeTerms(e.target.checked)}
                   className="rounded bg-slate-950 border-slate-700 text-cyan-500 focus:ring-0 w-3.5 h-3.5"
                 />
-                <span>I accept secure token session storage & OTP validation</span>
+                <span>I accept secure token session persistence & usage terms</span>
               </label>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/25 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {isLoading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Creating Account...</span>
+                    <span>Creating & Verifying Account...</span>
                   </>
                 ) : (
                   <>
-                    <span>Create Account & Get 6-Digit OTP</span>
+                    <span>Create Account & Instant Log In</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
