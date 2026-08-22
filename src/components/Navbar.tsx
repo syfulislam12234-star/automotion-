@@ -33,6 +33,7 @@ interface NavbarProps {
   onCopyAll: () => void;
   onOpenPortal?: () => void;
   onOpenSubscriptionModal?: () => void;
+  onOpenAiChat?: () => void;
   isCodeStudioUnlocked?: boolean;
   onOpenAdminPinModal?: () => void;
   onLockCodeStudio?: () => void;
@@ -49,6 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onCopyAll,
   onOpenPortal,
   onOpenSubscriptionModal,
+  onOpenAiChat,
   isCodeStudioUnlocked = false,
   onOpenAdminPinModal,
   onLockCodeStudio,
@@ -72,6 +74,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Actions: Clean, modern, minimal essential controls */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {onOpenAiChat && (
+            <button
+              onClick={onOpenAiChat}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold text-cyan-300 bg-cyan-950/60 border border-cyan-500/40 hover:bg-cyan-900/50 hover:border-cyan-400 transition shadow-sm cursor-pointer"
+              title="Open AI Assistant & Copilot Chat"
+            >
+              <Bot className="w-4 h-4 text-cyan-400" />
+              <span>AI Chat</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse hidden sm:inline-block"></span>
+            </button>
+          )}
+
           {onOpenSubscriptionModal && (
             <button
               onClick={onOpenSubscriptionModal}

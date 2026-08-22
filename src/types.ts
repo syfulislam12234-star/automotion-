@@ -122,6 +122,13 @@ export interface BotConfig {
   discordAdminWebhookUrl: string;
   enableAdminAlerts: boolean;
   enableHeartbeatNotifications: boolean;
+
+  // Telegram Admin Bot Controller
+  enableTelegramAdminController?: boolean;
+  telegramAdminBotToken?: string;
+  telegramAdminChatId?: string;
+  telegramAdminStrictWhitelist?: boolean;
+  telegramAdminAllowRestart?: boolean;
   
   // 10 Platform Messaging Gateways
   // 1. Telegram

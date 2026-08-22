@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BotConfig, AIProviderStatus, MessagingPlatformStatus, YouTubeUploadQueueItem } from '../types';
 import { AuthService } from '../services/authService';
 import { AiMediaScanner } from './AiMediaScanner';
+import { TelegramAdminController } from './TelegramAdminController';
 import {
   ShieldCheck,
   Server,
@@ -72,7 +73,9 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
   onToggleCodeStudioLock,
   onOpenPinModal,
 }) => {
-  const [activeAdminTab, setActiveAdminTab] = useState<'providers' | 'messaging' | 'youtube' | 'logs' | 'appsgeyser' | 'privacy' | 'database' | 'scanner'>('providers');
+  const [activeAdminTab, setActiveAdminTab] = useState<
+    'providers' | 'messaging' | 'youtube' | 'logs' | 'appsgeyser' | 'privacy' | 'database' | 'scanner' | 'telegram_admin'
+  >('providers');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'desktop' | 'mobile_preview' | 'telegram_mini_app'>('desktop');
   const [adminPinInput, setAdminPinInput] = useState(config.adminPin || '7788');
@@ -952,6 +955,21 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
             <span>AI Media Provenance Scanner</span>
             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
               AI Detection
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveAdminTab('telegram_admin')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeAdminTab === 'telegram_admin'
+                ? 'bg-gradient-to-r from-sky-500 via-indigo-600 to-cyan-500 text-white shadow-md shadow-sky-500/25'
+                : 'bg-slate-800/60 text-slate-300 hover:bg-slate-800 hover:text-white border border-slate-700/60'
+            }`}
+          >
+            <Send className="w-4 h-4 text-sky-400" />
+            <span>Telegram Admin Controller</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+              BOT CONTROL
             </span>
           </button>
         </div>
@@ -1974,6 +1992,17 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
         {activeAdminTab === 'scanner' && (
           <div className="space-y-6">
             <AiMediaScanner onShowToast={onShowToast} />
+          </div>
+        )}
+
+        {/* View 9: Telegram Admin Bot Controller */}
+        {activeAdminTab === 'telegram_admin' && (
+          <div className="space-y-6">
+            <TelegramAdminController
+              config={config}
+              onChange={onChange}
+              onShowToast={onShowToast}
+            />
           </div>
         )}
       </div>

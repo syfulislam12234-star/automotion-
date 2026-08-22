@@ -15,6 +15,7 @@ import { AdminPinModal } from './components/AdminPinModal';
 import { AuthModal } from './components/AuthModal';
 import { VpsManager } from './components/VpsManager';
 import { AiMediaScanner } from './components/AiMediaScanner';
+import { AiChatModal } from './components/AiChatModal';
 import { AuthService } from './services/authService';
 import {
   Download,
@@ -44,6 +45,8 @@ import {
   User,
   Fingerprint,
   Scan,
+  MessageSquare,
+  MessageCircle,
 } from 'lucide-react';
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -167,10 +170,17 @@ const DEFAULT_CONFIG: BotConfig = {
   ollamaModel: 'llama3.3:latest',
 
   // Admin Alerting & Heartbeats
-  adminTelegramId: '',
+  adminTelegramId: '749201994',
   discordAdminWebhookUrl: '',
   enableAdminAlerts: true,
   enableHeartbeatNotifications: true,
+
+  // Telegram Admin Bot Controller
+  enableTelegramAdminController: true,
+  telegramAdminBotToken: '',
+  telegramAdminChatId: '749201994',
+  telegramAdminStrictWhitelist: true,
+  telegramAdminAllowRestart: true,
 
   // 10 Platform Messaging Gateways
   enableTelegram: true,
@@ -298,6 +308,7 @@ export default function App() {
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
   const [isPortalOpen, setIsPortalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [portalInitialServiceId, setPortalInitialServiceId] = useState<string | undefined>(undefined);
   const [isZipping, setIsZipping] = useState(false);
   const [copiedAll, setCopiedAll] = useState(false);
@@ -535,6 +546,7 @@ venv/
         onCopyAll={handleCopyMainCode}
         onOpenPortal={() => handleOpenPortal('groq')}
         onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
+        onOpenAiChat={() => setIsAiChatOpen(true)}
         isCodeStudioUnlocked={isCodeStudioUnlocked}
         onOpenAdminPinModal={() => setIsPinModalOpen(true)}
         onLockCodeStudio={handleLockCodeStudio}
@@ -988,6 +1000,49 @@ venv/
         featureProtectedName={authFeatureContext}
         onAuthenticated={handleAuthenticated}
         onShowToast={showToast}
+      />
+
+      {/* Floating In-App AI Chat Assistant FAB (Quick-Toggle Button) */}
+      <div className="fixed bottom-6 left-6 sm:bottom-8 sm:left-8 z-40">
+        <button
+          onClick={() => setIsAiChatOpen(!isAiChatOpen)}
+          className={`relative group flex items-center gap-2.5 px-4 py-3 rounded-full shadow-2xl transition-all duration-300 active:scale-95 cursor-pointer border ${
+            isAiChatOpen
+              ? 'bg-slate-900 border-cyan-400 text-cyan-300 shadow-cyan-500/20'
+              : 'bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 border-cyan-400/40 text-white shadow-cyan-500/30 hover:shadow-cyan-500/50 hover:scale-105'
+          }`}
+          title={isAiChatOpen ? 'Close AI Assistant' : 'Open AI Assistant & Copilot'}
+        >
+          <div className="relative">
+            <Bot className={`w-5 h-5 ${isAiChatOpen ? 'text-cyan-400' : 'text-white animate-pulse'}`} />
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-400 border-2 border-slate-900 rounded-full"></span>
+          </div>
+          <span className="text-xs font-bold tracking-wide">
+            {isAiChatOpen ? 'Close AI Copilot' : 'AI Assistant'}
+          </span>
+          <span className="hidden sm:inline-block px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase bg-white/20 text-white">
+            PRO
+          </span>
+        </button>
+      </div>
+
+      {/* In-App AI Chat Assistant Modal / Panel */}
+      <AiChatModal
+        isOpen={isAiChatOpen}
+        onClose={() => setIsAiChatOpen(false)}
+        config={config}
+        onShowToast={showToast}
+        onNavigateTab={(tab) => {
+          if (tab === 'studio') {
+            handleStudioTabClick();
+          } else if (tab === 'admin') {
+            handleAdminTabClick();
+          } else if (tab === 'vps') {
+            handleVpsTabClick();
+          } else {
+            setActiveTab(tab);
+          }
+        }}
       />
 
       {/* Toast Notification */}
