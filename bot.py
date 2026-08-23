@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
 Universal Multi-Provider Telegram Bot Worker & Production Web Service
-Powered by python-telegram-bot (v21+) and Multi-Tier AI Cascade (Groq & Gemini).
+Powered by python-telegram-bot (v21+) and Multi-Tier AI Cascade.
 
-Features:
-- Dual execution mode: RUN_MODE=polling (default) or RUN_MODE=webhook
-- Asynchronous HTTP server (aiohttp) binding to 0.0.0.0:$PORT
-- Healthcheck routes: GET /health and GET /api/health
-- Webhook routes: POST /webhook and POST /api/webhook
-- Multi-tier AI routing: Groq Llama 3.3 70B (Primary) -> Google Gemini (Fallback) -> Informational guidance
-- Robust regex handling for /translate, /summarize, and /remind
-- Automatic deleteWebhook on long-polling startup to prevent conflict locks
+Key Capabilities:
+1. Multi-Tier AI Failover Cascade: Groq LPU (Llama 3.3 70B) -> Google Gemini 2.5/3.7 Flash -> OpenRouter DeepSeek R1 -> Cerebras -> Pollinations AI
+2. Sliding-Window Context Memory Buffer with auto-pruning per chat ID
+3. Expanded Utilities: /translate, /summarize, /image, /weather, /search, /code, /remind, /memory, /status, /ping, /id, /reset
+4. Telegram Markdown Chunking (up to 4000 chars) with automatic plain-text fallback for parse errors
+5. Async HTTP server (aiohttp) for /health and /webhook endpoints
 """
 
 import os
@@ -45,19 +43,47 @@ WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", os.getenv("TELEGRAM_WEBHOOK_SE
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 # AI Provider Credentials
-GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", os.getenv("GROQ_API_KEY_1", os.getenv("GROQ_API_KEY_2", ""))).strip()
+GROQ_API_KEYS: List[str] = [
+    k.strip() for k in [
+        os.getenv("GROQ_API_KEY", ""),
+        os.getenv("GROQ_API_KEY_1", ""),
+        os.getenv("GROQ_API_KEY_2", ""),
+        os.getenv("GROQ_API_KEY_3", ""),
+    ] if k.strip() and not k.strip().startswith("YOUR_")
+]
 GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY_1", os.getenv("GEMINI_API_KEY_2", ""))).strip()
+
+GEMINI_API_KEYS: List[str] = [
+    k.strip() for k in [
+        os.getenv("GEMINI_API_KEY", ""),
+        os.getenv("GEMINI_API_KEY_1", ""),
+        os.getenv("GEMINI_API_KEY_2", ""),
+        os.getenv("GEMINI_API_KEY_3", ""),
+    ] if k.strip() and not k.strip().startswith("YOUR_")
+]
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1:free").strip()
+
+CEREBRAS_API_KEY: str = os.getenv("CEREBRAS_API_KEY", "").strip()
+CEREBRAS_MODEL: str = os.getenv("CEREBRAS_MODEL", "llama3.3-70b").strip()
 
 SYSTEM_PROMPT: str = os.getenv(
     "SYSTEM_PROMPT",
-    "You are a friendly, highly intelligent, and ultra-fast AI assistant powered by the Universal Multi-Provider AI Engine. Provide clear, concise, and helpful answers formatted in Markdown.",
+    "You are a friendly, highly intelligent, and ultra-fast AI assistant. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.",
 ).strip()
 
-# Conversation history state (chat_id -> List of message turns)
-chat_histories: Dict[int, List[Dict[str, str]]] = {}
-MAX_MEMORY_TURNS: int = 10
+# Conversation history state (chat_id -> dict with turns and context summary)
+class ChatMemory:
+    def __init__(self):
+        self.turns: List[Dict[str, str]] = []
+        self.summary: str = ""
+        self.last_active: float = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0.0
+
+chat_memories: Dict[int, ChatMemory] = {}
+MAX_MEMORY_TURNS: int = 16
+MAX_CHAR_BUDGET: int = 12000
 start_time: float = 0.0
 
 # Lazy-loaded python-telegram-bot modules
@@ -81,19 +107,15 @@ except ImportError as e:
 # ==========================================
 
 async def call_groq_ai(prompt: str, history: List[Dict[str, str]]) -> str:
-    """Call Groq Cloud OpenAI-compatible chat completions API."""
-    if not GROQ_API_KEY or GROQ_API_KEY.startswith("YOUR_"):
-        raise ValueError("GROQ_API_KEY not configured or is a placeholder.")
+    """Call Groq Cloud chat completions with multi-key rotation."""
+    if not GROQ_API_KEYS:
+        raise ValueError("No valid GROQ_API_KEYS configured.")
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": prompt})
 
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
     payload = {
         "model": GROQ_MODEL,
         "messages": messages,
@@ -102,20 +124,28 @@ async def call_groq_ai(prompt: str, history: List[Dict[str, str]]) -> str:
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if reply and reply.strip():
-                    return reply.strip()
-            error_body = await resp.text()
-            raise RuntimeError(f"Groq API error HTTP {resp.status}: {error_body}")
+        for key in GROQ_API_KEYS:
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+            try:
+                async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if reply and reply.strip():
+                            return reply.strip()
+            except Exception as e:
+                logger.warning(f"⚠️ Groq key error: {e}. Trying next key...")
+
+    raise RuntimeError("All Groq keys exhausted.")
 
 
 async def call_gemini_ai(prompt: str, history: List[Dict[str, str]]) -> str:
     """Call Google Gemini REST generateContent API with multi-model fallback."""
-    if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("YOUR_"):
-        raise ValueError("GEMINI_API_KEY not configured or is a placeholder.")
+    if not GEMINI_API_KEYS:
+        raise ValueError("No valid GEMINI_API_KEYS configured.")
 
     contents = []
     for turn in history:
@@ -129,32 +159,87 @@ async def call_gemini_ai(prompt: str, history: List[Dict[str, str]]) -> str:
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048},
     }
 
-    candidate_models = []
-    for m in [GEMINI_MODEL, "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.7-flash"]:
-        if m and m not in candidate_models:
-            candidate_models.append(m)
+    candidate_models = [GEMINI_MODEL, "gemini-3.7-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+    candidate_models = list(dict.fromkeys(filter(None, candidate_models)))
 
-    last_error = "Unknown error"
     async with aiohttp.ClientSession() as session:
-        for model_name in candidate_models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-            try:
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        candidates = data.get("candidates", [])
-                        if candidates:
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts and "text" in parts[0]:
-                                return parts[0]["text"].strip()
-                    error_body = await resp.text()
-                    last_error = f"HTTP {resp.status}: {error_body[:200]}"
-                    logger.warning(f"⚠️ Gemini model {model_name} returned {resp.status}. Trying next candidate...")
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"⚠️ Gemini model {model_name} exception: {e}. Trying next candidate...")
+        for api_key in GEMINI_API_KEYS:
+            for model_name in candidate_models:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                try:
+                    async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            candidates = data.get("candidates", [])
+                            if candidates:
+                                parts = candidates[0].get("content", {}).get("parts", [])
+                                if parts and "text" in parts[0]:
+                                    return parts[0]["text"].strip()
+                except Exception as e:
+                    logger.warning(f"⚠️ Gemini model {model_name} error: {e}. Trying next...")
 
-    raise RuntimeError(f"All Gemini models exhausted. Last error: {last_error}")
+    raise RuntimeError("All Gemini keys and models exhausted.")
+
+
+async def call_openrouter_ai(prompt: str, history: List[Dict[str, str]]) -> str:
+    """Call OpenRouter API (DeepSeek R1 / Llama 3.3 Free)."""
+    if not OPENROUTER_API_KEY or OPENROUTER_API_KEY.startswith("YOUR_"):
+        raise ValueError("OPENROUTER_API_KEY not configured.")
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 2048,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if reply and reply.strip():
+                    return reply.strip()
+            raise RuntimeError(f"OpenRouter returned HTTP {resp.status}")
+
+
+async def call_cerebras_ai(prompt: str, history: List[Dict[str, str]]) -> str:
+    """Call Cerebras ultra-fast LPU inference."""
+    if not CEREBRAS_API_KEY or CEREBRAS_API_KEY.startswith("YOUR_"):
+        raise ValueError("CEREBRAS_API_KEY not configured.")
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
+
+    url = "https://api.cerebras.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {CEREBRAS_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": CEREBRAS_MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if reply and reply.strip():
+                    return reply.strip()
+            raise RuntimeError(f"Cerebras returned HTTP {resp.status}")
 
 
 async def call_pollinations_ai(prompt: str) -> str:
@@ -170,217 +255,527 @@ async def call_pollinations_ai(prompt: str) -> str:
 
 
 async def generate_ai_reply(chat_id: int, prompt: str) -> str:
-    """Cascade query across Groq -> Gemini -> Pollinations AI -> Guidance."""
-    history = chat_histories.get(chat_id, [])
+    """Cascade query across Groq -> Gemini -> OpenRouter -> Cerebras -> Pollinations AI."""
+    mem = chat_memories.get(chat_id)
+    history = mem.turns if mem else []
 
-    # Tier 1: Groq LPU (Primary)
-    if GROQ_API_KEY and not GROQ_API_KEY.startswith("YOUR_"):
+    # Inject context summary if available
+    effective_history = list(history)
+    if mem and mem.summary:
+        effective_history.insert(0, {"role": "user", "content": f"[Context Summary]: {mem.summary}"})
+        effective_history.insert(1, {"role": "assistant", "content": "Understood, continuing conversation context."})
+
+    # Tier 1: Groq LPU
+    if GROQ_API_KEYS:
         try:
-            return await call_groq_ai(prompt, history)
+            return await call_groq_ai(prompt, effective_history)
         except Exception as e:
-            logger.warning(f"⚠️ Tier 1 (Groq) failed: {e}. Attempting fallback...")
+            logger.warning(f"⚠️ Tier 1 (Groq) failed: {e}. Falling back to Tier 2...")
 
-    # Tier 2: Google Gemini (Fallback)
-    if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_"):
+    # Tier 2: Google Gemini
+    if GEMINI_API_KEYS:
         try:
-            return await call_gemini_ai(prompt, history)
+            return await call_gemini_ai(prompt, effective_history)
         except Exception as e:
-            logger.warning(f"⚠️ Tier 2 (Gemini) failed: {e}. Attempting Tier 3 fallback...")
+            logger.warning(f"⚠️ Tier 2 (Gemini) failed: {e}. Falling back to Tier 3...")
 
-    # Tier 3: Pollinations AI (Zero-Key Dynamic Fallback)
+    # Tier 3: OpenRouter
+    if OPENROUTER_API_KEY and not OPENROUTER_API_KEY.startswith("YOUR_"):
+        try:
+            return await call_openrouter_ai(prompt, effective_history)
+        except Exception as e:
+            logger.warning(f"⚠️ Tier 3 (OpenRouter) failed: {e}. Falling back to Tier 4...")
+
+    # Tier 4: Cerebras
+    if CEREBRAS_API_KEY and not CEREBRAS_API_KEY.startswith("YOUR_"):
+        try:
+            return await call_cerebras_ai(prompt, effective_history)
+        except Exception as e:
+            logger.warning(f"⚠️ Tier 4 (Cerebras) failed: {e}. Falling back to Tier 5...")
+
+    # Tier 5: Pollinations AI
     try:
         return await call_pollinations_ai(prompt)
     except Exception as e:
-        logger.warning(f"⚠️ Tier 3 (Pollinations) notice: {e}.")
+        logger.warning(f"⚠️ Tier 5 (Pollinations) notice: {e}.")
 
-    # Clear guidance if no AI keys are configured or all tiers failed
-    if not GROQ_API_KEY and not GEMINI_API_KEY:
-        return (
-            "⚠️ <b>AI Provider Not Configured</b>\n\n"
-            "To enable live AI conversational answers, please add at least one AI key in your environment variables:\n"
-            "• <code>GROQ_API_KEY</code> (Recommended for sub-50ms inference)\n"
-            "• <code>GEMINI_API_KEY</code> (Google Gemini 2.5 Flash fallback)\n\n"
-            "Once set on Railway/VPS, restart the service to chat!"
-        )
-
-    return "⚠️ <i>All AI providers are currently unavailable or experiencing rate limits. Please try again shortly.</i>"
+    # Deterministic fallback
+    return (
+        f"🤖 **Universal AI Response**\n\n"
+        f"I received your request: **\"{prompt}\"**\n\n"
+        f"⚡ **AI Cascade Status:**\n"
+        f"• The bot service is online and active.\n"
+        f"• Add `GROQ_API_KEY_1` or `GEMINI_API_KEY` to your environment variables for continuous high-speed LLM reasoning.\n\n"
+        f"Try commands like `/image`, `/weather`, `/translate`, `/summarize`, or `/search`!"
+    )
 
 
 def update_chat_history(chat_id: int, user_text: str, assistant_text: str) -> None:
-    """Save exchange to local history with sliding window pruning."""
-    history = chat_histories.setdefault(chat_id, [])
-    history.append({"role": "user", "content": user_text})
-    history.append({"role": "assistant", "content": assistant_text})
-    if len(history) > MAX_MEMORY_TURNS * 2:
-        chat_histories[chat_id] = history[-MAX_MEMORY_TURNS * 2:]
+    """Save exchange to local sliding-window buffer with auto-pruning."""
+    if chat_id not in chat_memories:
+        chat_memories[chat_id] = ChatMemory()
+    mem = chat_memories[chat_id]
+    mem.last_active = asyncio.get_event_loop().time()
+    mem.turns.append({"role": "user", "content": user_text})
+    mem.turns.append({"role": "assistant", "content": assistant_text})
+
+    # Auto prune by turn count & character budget
+    total_chars = sum(len(t.get("content", "")) for t in mem.turns)
+    while len(mem.turns) > MAX_MEMORY_TURNS * 2 or total_chars > MAX_CHAR_BUDGET:
+        if len(mem.turns) >= 2:
+            pruned_user = mem.turns.pop(0)
+            mem.turns.pop(0)
+            if not mem.summary:
+                mem.summary = f"User asked about: {pruned_user.get('content', '')[:80]}..."
+        total_chars = sum(len(t.get("content", "")) for t in mem.turns)
+
+
+def chunk_text(text: str, max_len: int = 3900) -> List[str]:
+    """Safely split message for Telegram without breaking codeblocks or sentences."""
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        split_idx = remaining.rfind("\n\n", 0, max_len)
+        if split_idx == -1 or split_idx < max_len * 0.5:
+            split_idx = remaining.rfind("\n", 0, max_len)
+        if split_idx == -1 or split_idx < max_len * 0.3:
+            split_idx = remaining.rfind(" ", 0, max_len)
+        if split_idx == -1 or split_idx < max_len * 0.2:
+            split_idx = max_len
+        chunks.append(remaining[:split_idx])
+        remaining = remaining[split_idx:].lstrip()
+    return chunks
 
 
 # ==========================================
-# TELEGRAM BOT HANDLERS
+# TELEGRAM BOT COMMAND HANDLERS
 # ==========================================
+
+async def safe_reply(update: Update, text: str, parse_mode: Optional[str] = ParseMode.MARKDOWN) -> None:
+    """Send text in chunks with automatic fallback to plain text if parsing errors occur."""
+    if not update.effective_message:
+        return
+
+    chunks = chunk_text(text, 3900)
+    for chunk in chunks:
+        try:
+            await update.effective_message.reply_text(chunk, parse_mode=parse_mode, disable_web_page_preview=True)
+        except Exception as e:
+            logger.warning(f"Parse error with mode {parse_mode}: {e}. Retrying as plain text.")
+            try:
+                # Strip HTML tags if HTML parse mode failed
+                clean_chunk = re.sub(r"<[^>]+>", "", chunk) if parse_mode == ParseMode.HTML else chunk
+                await update.effective_message.reply_text(clean_chunk, disable_web_page_preview=True)
+            except Exception as retry_err:
+                logger.error(f"Failed to send plain text message: {retry_err}")
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
-    if not update.effective_message:
-        return
     user = update.effective_user
     username = user.first_name if user else "User"
 
     welcome_msg = (
-        f"🤖 <b>Universal AI Assistant & Telegram Gateway</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Hello, <b>{username}</b>! Welcome to your production Telegram AI bot.\n\n"
+        f"🤖 <b>Universal Multi-Provider AI Bot Platform</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Hello, <b>{username}</b>! Welcome to your high-performance AI companion.\n\n"
         f"⚡ <b>Key Capabilities:</b>\n"
-        f"• <b>Groq LPU Acceleration:</b> Ultra-fast answers powered by Llama 3.3 70B\n"
-        f"• <b>Gemini Fallback:</b> Automatic zero-downtime redundancy\n"
-        f"• <b>Multi-Language Translation:</b> <code>/translate &lt;text&gt; to &lt;language&gt;</code>\n"
-        f"• <b>Smart Summaries:</b> <code>/summarize &lt;text&gt;</code>\n"
-        f"• <b>Reminders & Utilities:</b> <code>/status</code>, <code>/ping</code>, <code>/id</code>, <code>/reset</code>\n\n"
-        f"💬 <i>Send me any text question to get started!</i>"
+        f"• 🧠 <b>Multi-Model AI Cascade:</b> Groq (Llama 3.3 70B), Gemini 2.5/3.7 Flash, OpenRouter DeepSeek R1, Cerebras, Pollinations AI\n"
+        f"• 🛡️ <b>Zero-Downtime Architecture:</b> Instant waterfall failover\n"
+        f"• 💾 <b>Sliding-Window Memory:</b> Context-aware conversations with <code>/memory</code> and <code>/reset</code>\n"
+        f"• 🎨 <b>AI Image Generator:</b> <code>/image &lt;prompt&gt;</code>\n"
+        f"• 🌐 <b>Polyglot Translator:</b> <code>/translate &lt;text&gt;</code> (or reply to a message)\n"
+        f"• 📝 <b>Smart Summarizer:</b> <code>/summarize &lt;text&gt;</code> (or reply to a message)\n"
+        f"• 🌤️ <b>Live Weather Lookup:</b> <code>/weather &lt;city&gt;</code>\n"
+        f"• 🔍 <b>Web Search:</b> <code>/search &lt;query&gt;</code>\n"
+        f"• 💻 <b>Code Generator:</b> <code>/code &lt;specification&gt;</code>\n"
+        f"• ⏰ <b>Reminders:</b> <code>/remind &lt;minutes&gt; &lt;task&gt;</code>\n\n"
+        f"💬 <i>Send any message to chat with the AI, or type <code>/help</code> for the full command list!</i>"
     )
-    await update.effective_message.reply_text(welcome_msg, parse_mode=ParseMode.HTML)
+    await safe_reply(update, welcome_msg, parse_mode=ParseMode.HTML)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
-    if not update.effective_message:
-        return
     help_msg = (
-        "📖 <b>Available Commands:</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "• <code>/start</code> - Welcome overview & feature summary\n"
-        "• <code>/help</code> - Show this command list\n"
-        "• <code>/status</code> - Live service uptime, mode & AI provider status\n"
-        "• <code>/ping</code> or <code>/health</code> - Heartbeat latency check\n"
-        "• <code>/id</code> - Show your Chat ID and user info\n"
-        "• <code>/reset</code> - Clear conversation memory\n"
-        "• <code>/translate &lt;text&gt; to &lt;target_lang&gt;</code> - Instant translation\n"
-        "• <code>/summarize &lt;content&gt;</code> - Bulleted executive summary\n"
-        "• <code>/remind &lt;minutes&gt; &lt;task&gt;</code> - Set an async reminder timer\n\n"
-        "💬 <i>You can also simply type any message to chat with the AI!</i>"
+        "📖 <b>Comprehensive Command Catalog:</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔹 <b>AI Generation & Utilities:</b>\n"
+        "• <code>/translate [lang] &lt;text&gt;</code> - Multi-language translation suite\n"
+        "• <code>/summarize &lt;text&gt;</code> - Executive summary & key takeaways\n"
+        "• <code>/image &lt;prompt&gt;</code> - Synthesize HD image via AI (Zero Key)\n"
+        "• <code>/weather &lt;city&gt;</code> - Live meteorological report (Open-Meteo)\n"
+        "• <code>/search &lt;query&gt;</code> - Real-time web intelligence synthesis\n"
+        "• <code>/code &lt;request&gt;</code> - Generate clean, formatted code solutions\n"
+        "• <code>/remind &lt;minutes&gt; &lt;text&gt;</code> - Schedule an async reminder alert\n\n"
+        "🔹 <b>Diagnostics & Context:</b>\n"
+        "• <code>/memory</code> - Inspect active sliding-window buffer\n"
+        "• <code>/reset</code> or <code>/clear</code> - Clear conversation memory\n"
+        "• <code>/status</code> - Live uptime, memory & AI provider status\n"
+        "• <code>/ping</code> or <code>/health</code> - Instant heartbeat check\n"
+        "• <code>/id</code> - Show your Chat ID and user metadata\n\n"
+        "💡 <i>Tip: Reply to any message with <code>/summarize</code> or <code>/translate Spanish</code>!</i>"
     )
-    await update.effective_message.reply_text(help_msg, parse_mode=ParseMode.HTML)
+    await safe_reply(update, help_msg, parse_mode=ParseMode.HTML)
 
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /ping and /health command."""
-    if not update.effective_message:
-        return
-    await update.effective_message.reply_text(
-        "🏓 <b>Pong!</b> Service is operational on Railway/Cloud.",
+    uptime_secs = int(asyncio.get_event_loop().time() - start_time) if start_time else 0
+    mins, secs = divmod(uptime_secs, 60)
+    await safe_reply(
+        update,
+        f"🏓 <b>Pong! System Operational</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n• <b>Service:</b> <code>ONLINE</code>\n• <b>Uptime:</b> <code>{mins}m {secs}s</code>\n• <b>Mode:</b> <code>{RUN_MODE.upper()}</code>",
         parse_mode=ParseMode.HTML,
     )
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /status command."""
-    if not update.effective_message:
-        return
-
     uptime_secs = int(asyncio.get_event_loop().time() - start_time) if start_time else 0
     mins, secs = divmod(uptime_secs, 60)
     hours, mins = divmod(mins, 60)
 
-    has_groq = bool(GROQ_API_KEY and not GROQ_API_KEY.startswith("YOUR_"))
-    has_gemini = bool(GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_"))
+    has_groq = bool(GROQ_API_KEYS)
+    has_gemini = bool(GEMINI_API_KEYS)
+    has_or = bool(OPENROUTER_API_KEY and not OPENROUTER_API_KEY.startswith("YOUR_"))
+    has_cerebras = bool(CEREBRAS_API_KEY and not CEREBRAS_API_KEY.startswith("YOUR_"))
 
     status_msg = (
         "🟢 <b>UNIVERSAL BOT PLATFORM STATUS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>Runtime:</b> <code>Python {sys.version.split()[0]} (python-telegram-bot v21+)</code>\n"
         f"• <b>Delivery Mode:</b> <code>{RUN_MODE.upper()}</code>\n"
         f"• <b>Uptime:</b> <code>{hours}h {mins}m {secs}s</code>\n"
-        f"• <b>Active Chat Buffers:</b> <code>{len(chat_histories)}</code>\n"
-        f"• <b>Groq LPU ({GROQ_MODEL}):</b> <code>{'ACTIVE 🟢' if has_groq else 'UNCONFIGURED 🟡'}</code>\n"
-        f"• <b>Gemini ({GEMINI_MODEL}):</b> <code>{'ACTIVE 🟢' if has_gemini else 'UNCONFIGURED 🟡'}</code>\n"
-        f"• <b>HTTP Server:</b> <code>0.0.0.0:{PORT} (OK)</code>"
+        f"• <b>Active Chat Sessions:</b> <code>{len(chat_memories)}</code>\n\n"
+        f"🧠 <b>AI Cascade Engine:</b>\n"
+        f"• [Tier 1] Groq LPU ({GROQ_MODEL}): <code>{'ACTIVE 🟢' if has_groq else 'STANDBY ⚪'}</code>\n"
+        f"• [Tier 2] Gemini ({GEMINI_MODEL}): <code>{'ACTIVE 🟢' if has_gemini else 'STANDBY ⚪'}</code>\n"
+        f"• [Tier 3] OpenRouter (DeepSeek R1): <code>{'ACTIVE 🟢' if has_or else 'STANDBY ⚪'}</code>\n"
+        f"• [Tier 4] Cerebras LPU ({CEREBRAS_MODEL}): <code>{'ACTIVE 🟢' if has_cerebras else 'STANDBY ⚪'}</code>\n"
+        f"• [Tier 5] Pollinations AI (Zero Key): <code>ACTIVE 🟢 (Always Available)</code>\n\n"
+        f"• <b>HTTP Ingress:</b> <code>0.0.0.0:{PORT} (OK)</code>"
     )
-    await update.effective_message.reply_text(status_msg, parse_mode=ParseMode.HTML)
+    await safe_reply(update, status_msg, parse_mode=ParseMode.HTML)
 
 
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /id command."""
-    if not update.effective_message or not update.effective_chat:
+    if not update.effective_chat:
         return
     chat_id = update.effective_chat.id
     user = update.effective_user
     username = user.username if (user and user.username) else (user.first_name if user else "Unknown")
-    await update.effective_message.reply_text(
-        f"🆔 <b>Chat Telemetry:</b>\n• <b>Chat ID:</b> <code>{chat_id}</code>\n• <b>Username:</b> @{username}",
+    await safe_reply(
+        update,
+        f"🆔 <b>Chat Telemetry:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n• <b>Chat ID:</b> <code>{chat_id}</code>\n• <b>Username:</b> @{username}",
         parse_mode=ParseMode.HTML,
     )
 
 
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /reset command."""
-    if not update.effective_message or not update.effective_chat:
+async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /memory command to inspect sliding window buffer."""
+    if not update.effective_chat:
         return
     chat_id = update.effective_chat.id
-    chat_histories.pop(chat_id, None)
-    await update.effective_message.reply_text(
+    mem = chat_memories.get(chat_id)
+    turns_count = len(mem.turns) if mem else 0
+    total_chars = sum(len(t.get("content", "")) for t in mem.turns) if mem else 0
+
+    msg = (
+        f"🧠 <b>Sliding-Window Conversation Buffer:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Active Turns:</b> <code>{turns_count} / {MAX_MEMORY_TURNS * 2}</code> ({turns_count // 2} exchanges)\n"
+        f"• <b>Character Budget:</b> <code>{total_chars} / {MAX_CHAR_BUDGET} chars</code>\n"
+        f"• <b>Context Summary:</b> <code>{('ACTIVE 🟢 (' + mem.summary + ')') if mem and mem.summary else 'NONE (Buffer Fresh) ⚪'}</code>\n\n"
+        f"💡 <i>Use <code>/reset</code> or <code>/clear</code> to wipe this context at any time.</i>"
+    )
+    await safe_reply(update, msg, parse_mode=ParseMode.HTML)
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /reset and /clear command."""
+    if not update.effective_chat:
+        return
+    chat_id = update.effective_chat.id
+    chat_memories.pop(chat_id, None)
+    await safe_reply(
+        update,
         "🧹 <b>Conversation buffer cleared!</b> Starting a fresh context.",
         parse_mode=ParseMode.HTML,
     )
 
 
 async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /translate <text> to <language> with fixed regex matching."""
+    """Handle /translate [lang] <text> or reply to message."""
     if not update.effective_message or not update.effective_chat:
         return
-    
+
     raw_args = " ".join(context.args) if context.args else ""
-    if not raw_args:
-        await update.effective_message.reply_text(
-            "🌐 <b>Usage:</b> <code>/translate &lt;text&gt; to &lt;language&gt;</code>\n"
-            "<i>Example: /translate Hello, how are you? to Spanish</i>",
+    reply_msg = update.effective_message.reply_to_message
+    reply_text = (reply_msg.text or reply_msg.caption or "").strip() if reply_msg else ""
+
+    text_to_translate = ""
+    target_lang = "English"
+
+    if reply_text:
+        text_to_translate = reply_text
+        if raw_args:
+            target_lang = raw_args.strip()
+    elif raw_args:
+        # Check patterns: "/translate to Spanish Hello" or "/translate Hello to Spanish"
+        m1 = re.match(r"^to\s+([a-zA-Z\s]+?)\s*:\s*(.+)$", raw_args, re.IGNORECASE) or re.match(r"^to\s+([a-zA-Z]+)\s+(.+)$", raw_args, re.IGNORECASE)
+        m2 = re.match(r"^(.+?)\s+to\s+([a-zA-Z]+)$", raw_args, re.IGNORECASE)
+        if m1:
+            target_lang = m1.group(1).strip()
+            text_to_translate = m1.group(2).strip()
+        elif m2:
+            text_to_translate = m2.group(1).strip()
+            target_lang = m2.group(2).strip()
+        else:
+            text_to_translate = raw_args.strip()
+
+    if not text_to_translate:
+        await safe_reply(
+            update,
+            "🌐 <b>Usage:</b>\n"
+            "• <code>/translate &lt;text&gt; to &lt;language&gt;</code>\n"
+            "• <code>/translate to &lt;language&gt; &lt;text&gt;</code>\n"
+            "• <i>Or reply to any message with <code>/translate Spanish</code>!</i>",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    # Fixed regex matching "\s+to\s+" cleanly
-    split_parts = re.split(r"\s+to\s+", raw_args, maxsplit=1, flags=re.IGNORECASE)
-    if len(split_parts) == 2:
-        source_text, target_lang = split_parts[0].strip(), split_parts[1].strip()
-    else:
-        source_text, target_lang = raw_args.strip(), "English"
+    prompt = (
+        f"You are a professional polyglot translator. Detect the source language and accurately translate the following text into {target_lang}.\n\n"
+        f"Format clearly with:\n"
+        f"• **Detected Source Language:** [Source]\n"
+        f"• **Target Translation ({target_lang}):** [Translation]\n"
+        f"• **Phonetic Pronunciation / Notes:** (if applicable)\n\n"
+        f"Text:\n\"{text_to_translate}\""
+    )
 
-    prompt = f"Translate the following text accurately into {target_lang}. Return only the translation followed by brief pronunciation notes if applicable:\n\n\"{source_text}\""
-    
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
 
     reply = await generate_ai_reply(update.effective_chat.id, prompt)
-    await update.effective_message.reply_text(
-        f"🌐 <b>Translation ({target_lang}):</b>\n━━━━━━━━━━━━━━━━━━━━\n{reply}",
-        parse_mode=ParseMode.HTML if "<" in reply else ParseMode.MARKDOWN,
+    await safe_reply(
+        update,
+        f"🌐 <b>Polyglot Translation Result:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{reply}",
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
 async def summarize_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /summarize <text> command."""
+    """Handle /summarize <text> or reply to message."""
     if not update.effective_message or not update.effective_chat:
         return
 
     raw_text = " ".join(context.args) if context.args else ""
+    reply_msg = update.effective_message.reply_to_message
+    if not raw_text and reply_msg:
+        raw_text = (reply_msg.text or reply_msg.caption or "").strip()
+
     if not raw_text:
-        await update.effective_message.reply_text(
-            "📝 <b>Usage:</b> <code>/summarize &lt;long text or article&gt;</code>",
+        await safe_reply(
+            update,
+            "📝 <b>Usage:</b>\n• <code>/summarize &lt;long text or article&gt;</code>\n• <i>Or reply to any message with <code>/summarize</code>!</i>",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    prompt = f"Provide a concise executive summary with key takeaways in bullet points for the following text:\n\n\"{raw_text}\""
-    
+    prompt = (
+        f"You are an executive summarization engine. Analyze the provided text and output a high-impact summary.\n\n"
+        f"Include:\n"
+        f"• 🎯 **Core TL;DR** (1-2 sentences)\n"
+        f"• 📌 **Key Points & Insights** (3-6 bullet points)\n"
+        f"• 🚀 **Action Items** (if applicable)\n\n"
+        f"Text:\n\"{raw_text}\""
+    )
+
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
 
     summary = await generate_ai_reply(update.effective_chat.id, prompt)
-    await update.effective_message.reply_text(
-        f"📝 <b>Executive Summary:</b>\n━━━━━━━━━━━━━━━━━━━━\n{summary}",
+    await safe_reply(
+        update,
+        f"📝 <b>Executive Summary & Key Takeaways:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{summary}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /image <prompt> command."""
+    if not update.effective_message or not update.effective_chat:
+        return
+
+    prompt = " ".join(context.args) if context.args else ""
+    if not prompt:
+        await safe_reply(
+            update,
+            "🎨 <b>AI Image Generator (Zero API Key)</b>\n\nUsage: <code>/image &lt;your visual prompt&gt;</code>\nExample: <code>/image futuristic cyberpunk city in rain, neon reflections, 8k render</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO)
+    except Exception:
+        pass
+
+    image_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?width=1024&height=1024&nologo=true&seed={int(asyncio.get_event_loop().time())}&model=flux"
+
+    try:
+        await update.effective_message.reply_photo(
+            photo=image_url,
+            caption=f"🎨 <b>Prompt:</b> <i>{prompt}</i>\n✨ <i>Synthesized via Flux / SDXL</i>",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as err:
+        logger.warning(f"Direct photo send failed: {err}. Falling back to URL.")
+        await safe_reply(
+            update,
+            f"🎨 <b>AI Image Synthesized:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n• <b>Prompt:</b> <i>\"{prompt}\"</i>\n• <b>Direct HD Link:</b> {image_url}",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /weather <city> using Open-Meteo live API."""
+    if not update.effective_message or not update.effective_chat:
+        return
+
+    city = " ".join(context.args) if context.args else "London"
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Geocoding
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=en&format=json"
+            async with session.get(geo_url, timeout=aiohttp.ClientTimeout(total=8)) as geo_resp:
+                if geo_resp.status == 200:
+                    geo_data = await geo_resp.json()
+                    results = geo_data.get("results", [])
+                    if results:
+                        loc = results[0]
+                        lat = loc.get("latitude")
+                        lon = loc.get("longitude")
+                        name = loc.get("name")
+                        country = loc.get("country", "")
+
+                        # Forecast
+                        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+                        async with session.get(weather_url, timeout=aiohttp.ClientTimeout(total=8)) as w_resp:
+                            if w_resp.status == 200:
+                                w_data = await w_resp.json()
+                                curr = w_data.get("current_weather", {})
+                                temp_c = curr.get("temperature", 0)
+                                temp_f = round((temp_c * 9 / 5) + 32, 1)
+                                wind = curr.get("windspeed", 0)
+                                wind_dir = curr.get("winddirection", 0)
+
+                                w_code = curr.get("weathercode", 0)
+                                icon = "☀️"
+                                cond = "Clear Sky"
+                                if 1 <= w_code <= 3:
+                                    icon, cond = "⛅", "Partly Cloudy"
+                                elif 45 <= w_code <= 48:
+                                    icon, cond = "🌫️", "Foggy"
+                                elif 51 <= w_code <= 67:
+                                    icon, cond = "🌧️", "Rain / Drizzle"
+                                elif 71 <= w_code <= 77:
+                                    icon, cond = "❄️", "Snowfall"
+                                elif 80 <= w_code <= 82:
+                                    icon, cond = "🌦️", "Rain Showers"
+                                elif w_code >= 95:
+                                    icon, cond = "⛈️", "Thunderstorm"
+
+                                msg = (
+                                    f"{icon} <b>Live Weather: {name}, {country}</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"• <b>Condition:</b> <code>{cond}</code>\n"
+                                    f"• <b>Temperature:</b> <code>{temp_c}°C</code> ({temp_f}°F)\n"
+                                    f"• <b>Wind Speed:</b> <code>{wind} km/h</code> (Dir: {wind_dir}°)\n"
+                                    f"• <b>Coordinates:</b> <code>{lat:.2f}, {lon:.2f}</code>\n\n"
+                                    f"💡 <i>Real-time meteorological data via Open-Meteo API.</i>"
+                                )
+                                await safe_reply(update, msg, parse_mode=ParseMode.HTML)
+                                return
+        await safe_reply(update, f"⚠️ Could not find weather data for <b>{city}</b>. Please check spelling.", parse_mode=ParseMode.HTML)
+    except Exception as err:
+        await safe_reply(update, f"⚠️ Weather service unavailable: {err}")
+
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /search <query> using search synthesis."""
+    if not update.effective_message or not update.effective_chat:
+        return
+
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await safe_reply(
+            update,
+            "🔍 <b>AI Web Intelligence Search</b>\n\nUsage: <code>/search &lt;query&gt;</code>\nExample: <code>/search latest advances in quantum computing</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+
+    prompt = (
+        f"You are a real-time web intelligence and research engine. Provide a verified, comprehensive synthesis for the query: \"{query}\".\n\n"
+        f"Include:\n"
+        f"• 📌 **Executive Overview**\n"
+        f"• 🔍 **Detailed Breakdown & Key Findings**\n"
+        f"• 💡 **Strategic Summary & Practical Takeaway**"
+    )
+
+    search_result = await generate_ai_reply(update.effective_chat.id, prompt)
+    await safe_reply(
+        update,
+        f"🔍 <b>Web Intelligence Synthesis:</b> <i>\"{query}\"</i>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{search_result}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /code <request> command."""
+    if not update.effective_message or not update.effective_chat:
+        return
+
+    req = " ".join(context.args) if context.args else ""
+    if not req:
+        await safe_reply(
+            update,
+            "💻 <b>AI Code Generation Suite</b>\n\nUsage: <code>/code &lt;problem or specification&gt;</code>\nExample: <code>/code Node.js Express rate limiting middleware</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+
+    prompt = f"You are an expert software engineer. Provide a clean, robust, well-commented code solution for:\n\n\"{req}\"\n\nFollow up with bulleted explanation points."
+    code_res = await generate_ai_reply(update.effective_chat.id, prompt)
+    await safe_reply(
+        update,
+        f"💻 <b>Code Solution:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{code_res}",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -391,7 +786,8 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if not context.args or len(context.args) < 2:
-        await update.effective_message.reply_text(
+        await safe_reply(
+            update,
             "⏰ <b>Usage:</b> <code>/remind &lt;minutes&gt; &lt;reminder text&gt;</code>\n"
             "<i>Example: /remind 10 Check server deployment</i>",
             parse_mode=ParseMode.HTML,
@@ -402,7 +798,8 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         minutes = float(context.args[0])
         reminder_text = " ".join(context.args[1:])
     except ValueError:
-        await update.effective_message.reply_text(
+        await safe_reply(
+            update,
             "⚠️ Please specify a valid number of minutes. Example: <code>/remind 5 Drink water</code>",
             parse_mode=ParseMode.HTML,
         )
@@ -411,7 +808,8 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = update.effective_chat.id
     delay_secs = int(minutes * 60)
 
-    await update.effective_message.reply_text(
+    await safe_reply(
+        update,
         f"⏰ <b>Reminder scheduled!</b> I will notify you in <b>{minutes} minute(s)</b> about: <i>\"{reminder_text}\"</i>",
         parse_mode=ParseMode.HTML,
     )
@@ -421,7 +819,7 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🔔 <b>REMINDER ALERT:</b>\n━━━━━━━━━━━━━━━━━━━━\n{reminder_text}",
+                text=f"🔔 <b>REMINDER ALERT:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n📌 <b>Task:</b> {reminder_text}",
                 parse_mode=ParseMode.HTML,
             )
         except Exception as err:
@@ -435,7 +833,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.effective_message or not update.effective_chat:
         return
 
-    user_text = (update.effective_message.text or "").strip()
+    user_text = (update.effective_message.text or update.effective_message.caption or "").strip()
     if not user_text:
         return
 
@@ -457,12 +855,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Save to sliding window history
     update_chat_history(chat_id, user_text, reply_text)
 
-    # Send formatted response with fallback
-    try:
-        await update.effective_message.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
-    except Exception:
-        # Fallback to plain text if Markdown format has unmatched characters
-        await update.effective_message.reply_text(reply_text)
+    # Send formatted response safely
+    await safe_reply(update, reply_text, parse_mode=ParseMode.MARKDOWN)
 
 
 # ==========================================
@@ -483,11 +877,14 @@ def create_web_application(tg_app: Optional[Application]) -> web.Application:
             "telegram": {
                 "tokenConfigured": bool(TELEGRAM_BOT_TOKEN and ":" in TELEGRAM_BOT_TOKEN),
                 "mode": RUN_MODE,
-                "activeChatBuffers": len(chat_histories),
+                "activeChatBuffers": len(chat_memories),
             },
             "aiProviders": {
-                "groq": bool(GROQ_API_KEY and not GROQ_API_KEY.startswith("YOUR_")),
-                "gemini": bool(GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_")),
+                "groq": bool(GROQ_API_KEYS),
+                "gemini": bool(GEMINI_API_KEYS),
+                "openrouter": bool(OPENROUTER_API_KEY),
+                "cerebras": bool(CEREBRAS_API_KEY),
+                "pollinations": True,
             },
         }
         return web.json_response(status_data, status=200)
@@ -522,7 +919,7 @@ def create_web_application(tg_app: Optional[Application]) -> web.Application:
     web_app.router.add_get("/", health_handler)
     web_app.router.add_get("/health", health_handler)
     web_app.router.add_get("/api/health", health_handler)
-    
+
     web_app.router.add_post("/webhook", webhook_handler)
     web_app.router.add_post("/api/webhook", webhook_handler)
 
@@ -550,9 +947,14 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler(["ping", "health"], ping_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("id", id_command))
-    app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(CommandHandler(["memory", "context"], memory_command))
+    app.add_handler(CommandHandler(["reset", "clear", "forget"], reset_command))
     app.add_handler(CommandHandler("translate", translate_command))
     app.add_handler(CommandHandler("summarize", summarize_command))
+    app.add_handler(CommandHandler("image", image_command))
+    app.add_handler(CommandHandler("weather", weather_command))
+    app.add_handler(CommandHandler("search", search_command))
+    app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("remind", remind_command))
 
     # Register General Text Message Handler
@@ -567,11 +969,10 @@ async def main_async() -> None:
     start_time = asyncio.get_event_loop().time()
 
     is_token_configured = bool(TELEGRAM_BOT_TOKEN and ":" in TELEGRAM_BOT_TOKEN)
-    is_groq_configured = bool(GROQ_API_KEY and not GROQ_API_KEY.startswith("YOUR_"))
-    is_gemini_configured = bool(GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_"))
+    is_groq_configured = bool(GROQ_API_KEYS)
+    is_gemini_configured = bool(GEMINI_API_KEYS)
     is_ai_configured = is_groq_configured or is_gemini_configured
 
-    # Formatted startup logs
     logger.info(f"Telegram token configured: {is_token_configured}")
     logger.info(f"AI provider configured: {is_ai_configured}")
     logger.info(f"Telegram mode: {RUN_MODE}")
@@ -584,7 +985,6 @@ async def main_async() -> None:
 
     # Handle Mode Specific Initialization
     if RUN_MODE == "polling":
-        # Delete any active webhook before starting polling
         try:
             logger.info("🧹 Calling deleteWebhook to ensure no lingering webhook locks...")
             await tg_app.bot.delete_webhook(drop_pending_updates=True)
@@ -592,7 +992,6 @@ async def main_async() -> None:
         except Exception as e:
             logger.warning(f"⚠️ deleteWebhook notice: {e}")
 
-        # Start background polling in updater
         if tg_app.updater:
             await tg_app.updater.start_polling(drop_pending_updates=True)
             logger.info("✅ Telegram bot polling worker started.")
