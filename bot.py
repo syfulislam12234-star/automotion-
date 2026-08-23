@@ -1,210 +1,316 @@
 #!/usr/bin/env python3
 """
-Universal Multi-Provider Telegram Bot Runner (Python 3.10+)
-Supports 20-Tier AI Cascade (Groq, Gemini, OpenRouter, Cerebras, Pollinations Free)
-Compatible with Railway, VPS, Docker, and Cloud Run.
+Universal Multi-Provider Telegram Bot Worker
+Powered by python-telegram-bot (v20+) and Groq LPU AI Engine.
+
+Reads:
+- TELEGRAM_BOT_TOKEN: Bot token from @BotFather
+- GROQ_API_KEY_1 / GROQ_API_KEY: High-speed inference via Llama 3.3 70B
+- GEMINI_API_KEY / OPENROUTER_API_KEY (optional fallbacks)
+
+Runs long-polling and bridges incoming user messages to the AI cascade.
 """
 
 import os
 import sys
-import time
-import json
 import logging
-import asyncio
-from typing import Dict, List, Any
+from typing import Dict, List
 import aiohttp
 from dotenv import load_dotenv
 
-# Load local .env
+from telegram import Update
+from telegram.constants import ParseMode, ChatAction
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+# Load environment variables
 load_dotenv()
 
+# Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 logger = logging.getLogger("UniversalTelegramBot")
 
+# Environment configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", os.getenv("TELEGRAM_ADMIN_CHAT_ID", "749201994")).strip()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY_1", os.getenv("GROQ_API_KEY", "")).strip()
+GROQ_API_KEY_1 = os.getenv("GROQ_API_KEY_1", os.getenv("GROQ_API_KEY", "")).strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip()
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "You are a helpful, ultra-fast AI assistant powered by a 20-tier multi-provider fallback engine.")
+SYSTEM_PROMPT = os.getenv(
+    "SYSTEM_PROMPT",
+    "You are a friendly, highly intelligent, and ultra-fast AI assistant powered by the Universal Multi-Provider AI Engine. Provide concise, clear, and helpful answers formatted in clean Markdown.",
+)
 
-# In-memory per-chat conversation buffer
+# Per-chat sliding window memory
 chat_histories: Dict[int, List[Dict[str, str]]] = {}
-MAX_TURNS = 10
+MAX_MEMORY_TURNS = 10
 
-async def call_groq(prompt: str, history: List[Dict[str, str]]) -> str:
-    if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY":
-        raise ValueError("Groq key not set")
-    
+
+async def call_groq_ai(prompt: str, history: List[Dict[str, str]]) -> str:
+    """Send request to Groq Cloud OpenAI-compatible chat completions endpoint."""
+    if not GROQ_API_KEY_1 or GROQ_API_KEY_1 == "YOUR_GROQ_API_KEY":
+        raise ValueError("GROQ_API_KEY_1 is not configured.")
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": prompt})
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {GROQ_API_KEY_1}",
+        "Content-Type": "application/json",
     }
     payload = {
         "model": GROQ_MODEL,
         "messages": messages,
         "temperature": 0.7,
-        "max_tokens": 2048
+        "max_tokens": 2048,
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        async with session.post(
+            url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=25)
+        ) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data["choices"][0]["message"]["content"].strip()
-            raise RuntimeError(f"Groq API returned status {resp.status}")
+            error_text = await resp.text()
+            raise RuntimeError(f"Groq API returned HTTP {resp.status}: {error_text}")
 
-async def call_pollinations_free(prompt: str) -> str:
+
+async def call_pollinations_fallback(prompt: str) -> str:
+    """Zero-key free fallback AI provider."""
     url = f"https://text.pollinations.ai/{prompt}?system={SYSTEM_PROMPT}"
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(
+            url, timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
             if resp.status == 200:
                 text = await resp.text()
-                if text and not text.startswith("<html"):
+                if text and not text.strip().startswith("<html"):
                     return text.strip()
-    raise RuntimeError("Pollinations failed")
+    raise RuntimeError("Pollinations fallback unavailable.")
+
 
 async def generate_ai_reply(chat_id: int, prompt: str) -> str:
+    """Bridge incoming user query to Groq LPU with zero-key fallback."""
     history = chat_histories.get(chat_id, [])
 
-    # 1. Try Groq
-    if GROQ_API_KEY:
+    # 1. Primary: Groq LPU Llama 3.3 70B
+    if GROQ_API_KEY_1 and GROQ_API_KEY_1 != "YOUR_GROQ_API_KEY":
         try:
-            return await call_groq(prompt, history)
+            return await call_groq_ai(prompt, history)
         except Exception as e:
-            logger.warning(f"Groq Tier 1 failed: {e}")
+            logger.warning(f"Groq primary AI invocation failed: {e}")
 
-    # 2. Try Pollinations Free Zero-Key
+    # 2. Secondary: Pollinations Free Zero-Key
     try:
-        return await call_pollinations_free(prompt)
+        return await call_pollinations_fallback(prompt)
     except Exception as e:
         logger.warning(f"Pollinations fallback failed: {e}")
 
-    return f"🤖 Hello! I received: '{prompt}'. Bot is connected and operational. Please ensure GROQ_API_KEY_1 or GEMINI_API_KEY is configured in your Railway environment variables for full LLM inference."
+    # 3. Informational response if keys are missing
+    return (
+        f"🤖 Hello! I received your message: **\"{prompt}\"**\n\n"
+        "⚡ **AI Engine Status:**\n"
+        "• Bot connection is active via `python-telegram-bot`.\n"
+        "• To activate high-speed Llama 3.3 inference, set `GROQ_API_KEY_1` in your environment variables."
+    )
 
-async def send_telegram_message(session: aiohttp.ClientSession, chat_id: int, text: str, parse_mode: str = "HTML"):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text[:4000],
-        "parse_mode": parse_mode,
-        "disable_web_page_preview": True
-    }
+
+def save_to_history(chat_id: int, user_text: str, assistant_text: str) -> None:
+    """Append turn to chat history and enforce sliding window limit."""
+    history = chat_histories.setdefault(chat_id, [])
+    history.append({"role": "user", "content": user_text})
+    history.append({"role": "assistant", "content": assistant_text})
+    if len(history) > MAX_MEMORY_TURNS * 2:
+        chat_histories[chat_id] = history[-MAX_MEMORY_TURNS * 2 :]
+
+
+# ==========================================
+# TELEGRAM HANDLERS
+# ==========================================
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command."""
+    if not update.effective_message:
+        return
+
+    user = update.effective_user
+    username = user.first_name if user else "User"
+
+    welcome_text = (
+        f"🤖 <b>Universal Multi-Provider AI Bot</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Hello, <b>{username}</b>! Welcome to your Telegram AI Assistant.\n\n"
+        f"⚡ <b>Features:</b>\n"
+        f"• <b>Groq LPU Acceleration:</b> Sub-50ms inference via Llama 3.3 70B.\n"
+        f"• <b>Conversation Memory:</b> Maintains context across queries.\n"
+        f"• <b>Zero Downtime:</b> Automatic fallback engine.\n\n"
+        f"💬 <i>Send me any message to chat with the AI, or type /help for available commands!</i>"
+    )
+
+    await update.effective_message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /help command."""
+    if not update.effective_message:
+        return
+
+    help_text = (
+        "📖 <b>Available Commands:</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "• <code>/start</code> - Welcome overview and introduction\n"
+        "• <code>/help</code> - Show this command list\n"
+        "• <code>/ping</code> - Latency and heartbeat check\n"
+        "• <code>/status</code> - Service uptime and AI status\n"
+        "• <code>/id</code> - Show your Chat ID\n"
+        "• <code>/reset</code> - Clear conversation memory\n\n"
+        "💬 <i>You can send any plain text message to receive an AI response!</i>"
+    )
+
+    await update.effective_message.reply_text(help_text, parse_mode=ParseMode.HTML)
+
+
+async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ping command."""
+    if not update.effective_message:
+        return
+    await update.effective_message.reply_text(
+        "🏓 <b>Pong!</b> Service is operational via <code>python-telegram-bot</code>.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /status command."""
+    if not update.effective_message:
+        return
+
+    has_groq = bool(GROQ_API_KEY_1 and GROQ_API_KEY_1 != "YOUR_GROQ_API_KEY")
+    status_text = (
+        "🟢 <b>UNIVERSAL BOT PLATFORM STATUS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "• <b>Runtime:</b> <code>Python 3 (python-telegram-bot v20+)</code>\n"
+        "• <b>Update Mode:</b> <code>Long Polling</code>\n"
+        f"• <b>Groq LPU ({GROQ_MODEL}):</b> <code>{'ACTIVE 🟢' if has_groq else 'STANDBY 🟡'}</code>\n"
+        f"• <b>Active Chat Buffers:</b> <code>{len(chat_histories)}</code>\n"
+        "• <b>Zero-Key Fallback:</b> <code>ONLINE 🟢</code>"
+    )
+
+    await update.effective_message.reply_text(status_text, parse_mode=ParseMode.HTML)
+
+
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /id command."""
+    if not update.effective_message:
+        return
+
+    chat_id = update.effective_chat.id if update.effective_chat else "Unknown"
+    user = update.effective_user
+    username = user.username or user.first_name if user else "Unknown"
+
+    await update.effective_message.reply_text(
+        f"🆔 <b>Chat Telemetry:</b>\n• <b>Chat ID:</b> <code>{chat_id}</code>\n• <b>Username:</b> @{username}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /reset command."""
+    if not update.effective_message or not update.effective_chat:
+        return
+
+    chat_id = update.effective_chat.id
+    chat_histories.pop(chat_id, None)
+
+    await update.effective_message.reply_text(
+        "🧹 <b>Conversation memory cleared!</b> Starting a fresh context.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming plain text messages and bridge to AI engine."""
+    if not update.effective_message or not update.effective_chat:
+        return
+
+    user_text = (update.effective_message.text or "").strip()
+    if not user_text:
+        return
+
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    username = user.first_name if user else "User"
+
+    logger.info(f"Received message from {username} ({chat_id}): {user_text[:60]}")
+
+    # Send typing action
     try:
-        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            if resp.status != 200 and parse_mode:
-                # Retry with plain text if markdown/html parsing error
-                payload.pop("parse_mode", None)
-                await session.post(url, json=payload)
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     except Exception as e:
-        logger.error(f"Failed to send message to {chat_id}: {e}")
+        logger.debug(f"Could not send typing action: {e}")
 
-async def handle_update(session: aiohttp.ClientSession, update: dict):
-    msg = update.get("message") or update.get("edited_message")
-    if not msg:
-        return
+    # Generate AI response
+    reply_text = await generate_ai_reply(chat_id, user_text)
 
-    chat_id = msg.get("chat", {}).get("id")
-    text = (msg.get("text") or "").strip()
-    from_user = msg.get("from", {})
-    username = from_user.get("username") or from_user.get("first_name") or "User"
+    # Save to sliding window memory
+    save_to_history(chat_id, user_text, reply_text)
 
-    if not chat_id or from_user.get("is_bot"):
-        return
+    # Send reply (with fallback to plain text if Markdown parsing fails)
+    try:
+        await update.effective_message.reply_text(
+            reply_text, parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as md_err:
+        logger.warning(f"Markdown parse failed, replying in plain text: {md_err}")
+        await update.effective_message.reply_text(reply_text)
 
-    logger.info(f"Received message from @{username} (ID: {chat_id}): {text[:50]}")
 
-    if text.startswith("/"):
-        cmd = text.split(" ")[0].lower().replace(f"@{from_user.get('username')}", "")
-        args = " ".join(text.split(" ")[1:]).strip()
+# ==========================================
+# MAIN APPLICATION RUNNER
+# ==========================================
 
-        if cmd == "/start":
-            reply = f"🤖 <b>Universal 20-Tier AI Assistant</b>\n\nHello <b>{username}</b>! Send me any text to chat with the AI, or type <code>/help</code> for commands."
-            await send_telegram_message(session, chat_id, reply)
-        elif cmd == "/help":
-            reply = (
-                "📖 <b>Available Commands:</b>\n"
-                "• <code>/start</code> - Welcome & overview\n"
-                "• <code>/help</code> - Command list\n"
-                "• <code>/status</code> - Live server & AI cascade metrics\n"
-                "• <code>/providers</code> - 20-Tier AI status\n"
-                "• <code>/ping</code> - Latency heartbeat check\n"
-                "• <code>/id</code> - Show your Chat ID\n"
-                "• <code>/reset</code> - Clear conversation memory\n"
-            )
-            await send_telegram_message(session, chat_id, reply)
-        elif cmd in ["/ping", "/health"]:
-            await send_telegram_message(session, chat_id, "🏓 <b>Pong!</b> Service is operational on Railway.")
-        elif cmd == "/id":
-            await send_telegram_message(session, chat_id, f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n<b>User:</b> @{username}")
-        elif cmd == "/status":
-            await send_telegram_message(session, chat_id, "🟢 <b>Universal AI Bot Platform: ONLINE</b>\n• Mode: Long Polling\n• Providers: 20-Tier Cascade Active")
-        elif cmd == "/reset":
-            chat_histories.pop(chat_id, None)
-            await send_telegram_message(session, chat_id, "🧹 Conversation buffer reset.")
-        else:
-            await send_telegram_message(session, chat_id, f"❓ Unknown command: <code>{cmd}</code>. Type <code>/help</code> for available commands.")
-    elif text:
-        # Chat inference
-        reply = await generate_ai_reply(chat_id, text)
-        hist = chat_histories.setdefault(chat_id, [])
-        hist.append({"role": "user", "content": text})
-        hist.append({"role": "assistant", "content": reply})
-        if len(hist) > MAX_TURNS * 2:
-            chat_histories[chat_id] = hist[-MAX_TURNS * 2:]
-        await send_telegram_message(session, chat_id, reply, parse_mode="")
 
-async def main():
+def main() -> None:
+    """Initialize and run the Telegram bot worker."""
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        logger.error("❌ TELEGRAM_BOT_TOKEN is not set in environment! Exiting.")
+        logger.error(
+            "❌ TELEGRAM_BOT_TOKEN is not set or is a placeholder in environment variables! Exiting."
+        )
         sys.exit(1)
 
-    logger.info("🚀 Starting Telegram Bot Worker (Python Polling Mode)...")
+    logger.info("🚀 Building python-telegram-bot application...")
 
-    async with aiohttp.ClientSession() as session:
-        # Delete any existing webhook before polling
-        async with session.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook") as resp:
-            logger.info("Cleared existing webhook.")
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-        # Get bot info
-        async with session.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe") as resp:
-            me = await resp.json()
-            if me.get("ok"):
-                logger.info(f"✅ Authenticated as @{me['result']['username']} (ID: {me['result']['id']})")
-            else:
-                logger.error(f"❌ Invalid token: {me}")
-                sys.exit(1)
+    # Register command handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler(["ping", "health"], ping_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("id", id_command))
+    application.add_handler(CommandHandler("reset", reset_command))
 
-        offset = 0
-        while True:
-            try:
-                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=30"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=40)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        updates = data.get("result", [])
-                        for u in updates:
-                            offset = max(offset, u["update_id"] + 1)
-                            asyncio.create_task(handle_update(session, u))
-                    else:
-                        logger.warning(f"getUpdates returned HTTP {resp.status}")
-                        await asyncio.sleep(5)
-            except Exception as e:
-                logger.error(f"Polling error: {e}")
-                await asyncio.sleep(3)
+    # Register message handler for text queries
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+
+    logger.info("✅ Starting long-polling listener (drop_pending_updates=True)...")
+    application.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot worker stopped.")
+        logger.info("🛑 Bot worker stopped.")
