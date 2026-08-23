@@ -1,27 +1,36 @@
-FROM python:3.11-slim
+FROM node:20-slim
 
 WORKDIR /app
 
-# Prevent Python from writing .pyc files and enable unbuffered logging
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Set production environment variables
+ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install system dependencies
+# Install system dependencies (curl for healthchecks, python3 & pip for optional Python tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    python3 \
+    python3-pip \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Install node dependencies
+COPY package*.json ./
+RUN npm install
 
-# Copy application code
+# Install optional python dependencies
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages 2>/dev/null || true
+
+# Copy all source files
 COPY . .
 
-# Expose port (Railway overrides $PORT at runtime)
+# Build Vite frontend assets and bundle Express backend to dist/server.cjs
+RUN npm run build
+
+# Expose container ingress port (Railway overrides $PORT at runtime)
 EXPOSE 3000
 
-# Run Python Telegram bot & HTTP service
-CMD ["python", "bot.py"]
+# Start production server serving frontend UI, API routes, healthchecks, and Telegram worker
+CMD ["npm", "start"]
+

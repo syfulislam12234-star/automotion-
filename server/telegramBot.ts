@@ -53,7 +53,7 @@ class TelegramBotServiceImpl {
    * Initialize and start the Telegram Bot Service
    */
   public async init(): Promise<void> {
-    const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
+    const rawToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
     this.token = rawToken.trim();
     this.secretToken = (process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN || '').trim();
     this.adminId = (process.env.ADMIN_TELEGRAM_ID || process.env.TELEGRAM_ADMIN_CHAT_ID || '749201994').trim();
@@ -62,7 +62,7 @@ class TelegramBotServiceImpl {
     this.runMode = envMode === 'webhook' ? 'webhook' : 'polling';
 
     if (!this.token || this.token === 'YOUR_TELEGRAM_BOT_TOKEN' || this.token.length < 15 || !this.token.includes(':')) {
-      console.log('⚠️ [TelegramBot] TELEGRAM_BOT_TOKEN is not configured or is a placeholder. Real Telegram Bot worker will be in STANDBY mode.');
+      console.log('⚠️ [TelegramBot] TELEGRAM_BOT_TOKEN / BOT_TOKEN is not configured or is a placeholder. Real Telegram Bot worker will be in STANDBY mode.');
       this.runMode = 'disabled';
       this.isRunning = false;
       return;
@@ -581,78 +581,110 @@ class TelegramBotServiceImpl {
       process.env.SYSTEM_PROMPT ||
       'You are a friendly, highly intelligent, ultra-fast AI assistant powered by the Universal Multi-Provider AI Engine. Provide concise, clear, helpful Markdown responses.';
 
-    // Tier 1: Groq Cloud (LPU Llama 3.3 70B)
-    const groqKey = process.env.GROQ_API_KEY_1 || process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2;
-    if (groqKey && groqKey !== 'YOUR_GROQ_API_KEY') {
-      try {
-        const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
-        const messages = [
-          { role: 'system', content: systemPrompt },
-          ...history.map((h) => ({ role: h.role, content: h.content })),
-          { role: 'user', content: prompt },
-        ];
-
-        const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${groqKey.trim()}`,
-          },
-          body: JSON.stringify({
-            model: groqModel,
-            messages,
-            temperature: 0.7,
-            max_tokens: 2048,
-          }),
-        });
-
-        if (resp.ok) {
-          const data = await resp.json();
-          const reply = data.choices?.[0]?.message?.content;
-          if (reply && reply.trim()) {
-            return reply.trim();
-          }
-        } else {
-          console.warn(`[AI Cascade] Tier 1 Groq returned HTTP ${resp.status}, falling back to Tier 2...`);
-        }
-      } catch (err: any) {
-        console.warn('[AI Cascade] Tier 1 Groq error, falling back to Tier 2:', err?.message || err);
+    // Tier 1: Groq Cloud (LPU Llama 3.3 70B with multi-key cascade)
+    const groqKeys: string[] = [];
+    for (const k of ['GROQ_API_KEY', 'GROQ_API_KEY_1', 'GROQ_API_KEY_2', 'GROQ_API_KEY_3']) {
+      const v = process.env[k];
+      if (v && v.trim() && !v.startsWith('YOUR_') && !groqKeys.includes(v.trim())) {
+        groqKeys.push(v.trim());
       }
     }
 
-    // Tier 2: Google Gemini (3.7 Flash / 2.5 Flash)
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey) {
-      try {
-        if (!this.geminiClient) {
-          this.geminiClient = new GoogleGenAI({ apiKey: geminiKey });
+    if (groqKeys.length > 0) {
+      const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        ...history.map((h) => ({ role: h.role, content: h.content })),
+        { role: 'user', content: prompt },
+      ];
+
+      for (const key of groqKeys) {
+        try {
+          const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${key}`,
+            },
+            body: JSON.stringify({
+              model: groqModel,
+              messages,
+              temperature: 0.7,
+              max_tokens: 2048,
+            }),
+          });
+
+          if (resp.ok) {
+            const data = await resp.json();
+            const reply = data.choices?.[0]?.message?.content;
+            if (reply && reply.trim()) {
+              return reply.trim();
+            }
+          } else {
+            console.warn(`[AI Cascade] Tier 1 Groq key ${key.slice(0, 6)}... returned HTTP ${resp.status}`);
+          }
+        } catch (err: any) {
+          console.warn('[AI Cascade] Tier 1 Groq error with key:', err?.message || err);
         }
+      }
+    }
 
-        const validHistory = history.filter((item) => item && item.content);
-        const contentsPayload: any[] = validHistory.map((item) => ({
-          role: item.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: item.content }],
-        }));
-        contentsPayload.push({
-          role: 'user',
-          parts: [{ text: prompt }],
-        });
+    // Tier 2: Google Gemini (with multi-key and resilient multi-model cascade)
+    const geminiKeys: string[] = [];
+    for (const k of ['GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3']) {
+      const v = process.env[k];
+      if (v && v.trim() && !v.startsWith('YOUR_') && !geminiKeys.includes(v.trim())) {
+        geminiKeys.push(v.trim());
+      }
+    }
 
-        const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.7-flash';
-        const response = await this.geminiClient.models.generateContent({
-          model: geminiModel,
-          contents: contentsPayload,
-          config: {
-            systemInstruction: systemPrompt,
-            temperature: 0.7,
-          },
-        });
+    if (geminiKeys.length > 0) {
+      const validHistory = history.filter((item) => item && item.content);
+      const contentsPayload: any[] = validHistory.map((item) => ({
+        role: item.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: item.content }],
+      }));
+      contentsPayload.push({
+        role: 'user',
+        parts: [{ text: prompt }],
+      });
 
-        if (response && response.text && response.text.trim()) {
-          return response.text.trim();
+      const candidateModels = Array.from(
+        new Set([process.env.GEMINI_MODEL || 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'])
+      ).filter(Boolean) as string[];
+
+      for (const apiKey of geminiKeys) {
+        try {
+          const client = new GoogleGenAI({
+            apiKey,
+            httpOptions: {
+              headers: {
+                'User-Agent': 'aistudio-build',
+              },
+            },
+          });
+
+          for (const geminiModel of candidateModels) {
+            try {
+              const response = await client.models.generateContent({
+                model: geminiModel,
+                contents: contentsPayload,
+                config: {
+                  systemInstruction: systemPrompt,
+                  temperature: 0.7,
+                },
+              });
+
+              if (response && response.text && response.text.trim()) {
+                return response.text.trim();
+              }
+            } catch (modelErr: any) {
+              console.warn(`[AI Cascade] Telegram Bot Gemini model ${geminiModel} on key notice:`, modelErr?.message || modelErr);
+            }
+          }
+        } catch (err: any) {
+          console.warn('[AI Cascade] Tier 2 Gemini client error:', err?.message || err);
         }
-      } catch (err: any) {
-        console.warn('[AI Cascade] Tier 2 Gemini error, falling back to Tier 3:', err?.message || err);
       }
     }
 

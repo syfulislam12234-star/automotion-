@@ -38,16 +38,16 @@ logger = logging.getLogger("UniversalTelegramBot")
 # ==========================================
 # ENVIRONMENT & CONFIGURATION
 # ==========================================
-TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("BOT_TOKEN", "")).strip()
 RUN_MODE: str = os.getenv("RUN_MODE", "polling").strip().lower()
 PORT: int = int(os.getenv("PORT", "3000"))
 WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "")).strip()
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 # AI Provider Credentials
-GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", os.getenv("GROQ_API_KEY_1", "")).strip()
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", os.getenv("GROQ_API_KEY_1", os.getenv("GROQ_API_KEY_2", ""))).strip()
 GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY_1", os.getenv("GEMINI_API_KEY_2", ""))).strip()
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
 SYSTEM_PROMPT: str = os.getenv(
@@ -113,12 +113,10 @@ async def call_groq_ai(prompt: str, history: List[Dict[str, str]]) -> str:
 
 
 async def call_gemini_ai(prompt: str, history: List[Dict[str, str]]) -> str:
-    """Call Google Gemini REST generateContent API."""
+    """Call Google Gemini REST generateContent API with multi-model fallback."""
     if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("YOUR_"):
         raise ValueError("GEMINI_API_KEY not configured or is a placeholder.")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    
     contents = []
     for turn in history:
         role = "model" if turn.get("role") == "assistant" else "user"
@@ -131,21 +129,48 @@ async def call_gemini_ai(prompt: str, history: List[Dict[str, str]]) -> str:
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048},
     }
 
+    candidate_models = []
+    for m in [GEMINI_MODEL, "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.7-flash"]:
+        if m and m not in candidate_models:
+            candidate_models.append(m)
+
+    last_error = "Unknown error"
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+        for model_name in candidate_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts and "text" in parts[0]:
+                                return parts[0]["text"].strip()
+                    error_body = await resp.text()
+                    last_error = f"HTTP {resp.status}: {error_body[:200]}"
+                    logger.warning(f"⚠️ Gemini model {model_name} returned {resp.status}. Trying next candidate...")
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"⚠️ Gemini model {model_name} exception: {e}. Trying next candidate...")
+
+    raise RuntimeError(f"All Gemini models exhausted. Last error: {last_error}")
+
+
+async def call_pollinations_ai(prompt: str) -> str:
+    """Call Pollinations AI free zero-key text generation."""
+    url = f"https://text.pollinations.ai/{prompt}?system={SYSTEM_PROMPT}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
-                data = await resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts and "text" in parts[0]:
-                        return parts[0]["text"].strip()
-            error_body = await resp.text()
-            raise RuntimeError(f"Gemini API error HTTP {resp.status}: {error_body}")
+                text = await resp.text()
+                if text and text.strip() and not text.startswith("<!DOCTYPE") and "<html" not in text:
+                    return text.strip()
+            raise RuntimeError(f"Pollinations AI returned HTTP {resp.status}")
 
 
 async def generate_ai_reply(chat_id: int, prompt: str) -> str:
-    """Cascade query across Groq -> Gemini -> User Error Guidance."""
+    """Cascade query across Groq -> Gemini -> Pollinations AI -> Guidance."""
     history = chat_histories.get(chat_id, [])
 
     # Tier 1: Groq LPU (Primary)
@@ -160,9 +185,15 @@ async def generate_ai_reply(chat_id: int, prompt: str) -> str:
         try:
             return await call_gemini_ai(prompt, history)
         except Exception as e:
-            logger.warning(f"⚠️ Tier 2 (Gemini) failed: {e}.")
+            logger.warning(f"⚠️ Tier 2 (Gemini) failed: {e}. Attempting Tier 3 fallback...")
 
-    # Clear error message if no AI keys are configured or all tiers failed
+    # Tier 3: Pollinations AI (Zero-Key Dynamic Fallback)
+    try:
+        return await call_pollinations_ai(prompt)
+    except Exception as e:
+        logger.warning(f"⚠️ Tier 3 (Pollinations) notice: {e}.")
+
+    # Clear guidance if no AI keys are configured or all tiers failed
     if not GROQ_API_KEY and not GEMINI_API_KEY:
         return (
             "⚠️ <b>AI Provider Not Configured</b>\n\n"
