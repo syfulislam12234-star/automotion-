@@ -1,31 +1,27 @@
-# Multi-stage Dockerfile for Universal Telegram Bot & Dashboard
-FROM node:20-slim AS builder
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy dependency manifests
-COPY package*.json ./
-RUN npm ci
-
-# Copy source code and build
-COPY . .
-RUN npm run build
-
-# Production runtime stage
-FROM node:20-slim AS runner
-
-WORKDIR /app
-
-ENV NODE_ENV=production
+# Prevent Python from writing .pyc files and enable unbuffered logging
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 ENV PORT=3000
 
-COPY package*.json ./
-RUN npm ci --omit=dev
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy compiled backend and frontend assets
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/index.html ./index.html
+# Install python dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application code
+COPY . .
+
+# Expose port (Railway overrides $PORT at runtime)
 EXPOSE 3000
 
-CMD ["npm", "start"]
+# Run Python Telegram bot & HTTP service
+CMD ["python", "bot.py"]
