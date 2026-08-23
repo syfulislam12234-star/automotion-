@@ -13,6 +13,13 @@ export interface BotConfig {
   enableStatsCommand: boolean;
   enableCustomPromptCommand: boolean;
   
+  // Hybrid AI Ensemble & Super-Brain System
+  enableHybridEnsemble?: boolean;
+  ensembleStrategy?: 'super_brain_synthesis' | 'fastest_consensus' | 'expert_evaluator' | 'confidence_weighted';
+  ensemblePrimaryProviders?: string[];
+  ensembleTimeoutMs?: number;
+  enableEnsembleComparisonTelemetry?: boolean;
+
   // Multi-Provider & Key Rotation (20 AI Providers)
   enableMultiProviderFallback: boolean;
   groqKeysCount: number;
@@ -206,7 +213,7 @@ export interface BotConfig {
   useCentralizedAiEngine?: boolean;
   useCentralizedVpsCluster?: boolean;
   userProfileName?: string;
-  userPlanTier?: 'pro_managed' | 'free_custom' | 'enterprise';
+  userPlanTier?: 'pro_managed' | 'free_custom' | 'enterprise' | 'enterprise_cluster';
 
   // Code Studio Privacy & Admin Security Gate
   adminPin?: string;
@@ -287,8 +294,23 @@ export interface ChatMessage {
     | 'apprise';
   isCommand?: boolean;
   chunks?: string[];
+  provider?: string;
   providerUsed?: string;
+  fileName?: string;
+  imageUrl?: string;
   keyUsed?: string;
+  ensembleTelemetry?: {
+    modelsQueried: string[];
+    winnerModel?: string;
+    synthesisMode?: string;
+    individualResponses?: {
+      provider: string;
+      model: string;
+      latencyMs: number;
+      preview: string;
+      score?: number;
+    }[];
+  };
   alertType?: 'failover' | 'ratelimit' | 'startup' | 'shutdown' | 'error' | 'youtube_upload';
 }
 
@@ -345,12 +367,137 @@ export interface UserAccount {
   lastLoginAt: string;
   avatarUrl?: string;
   bio?: string;
+  planTier?: 'community_free' | 'starter_pro' | 'master_architect' | 'enterprise_ultra';
+  tokensUsed?: number;
+  monthlyQuota?: number;
+  stripeCustomerId?: string;
 }
 
 export interface AuthSession {
   token: string;
   user: UserAccount;
   expiresAt: number;
+}
+
+export interface AIModelEntry {
+  id: string;
+  name: string;
+  provider: 
+    | 'Google' 
+    | 'Groq' 
+    | 'OpenAI' 
+    | 'Anthropic' 
+    | 'DeepSeek' 
+    | 'Mistral' 
+    | 'Cerebras' 
+    | 'SambaNova' 
+    | 'Cohere' 
+    | 'Perplexity' 
+    | 'Together AI' 
+    | 'NVIDIA NIM' 
+    | 'Cloudflare' 
+    | 'Hugging Face' 
+    | 'DeepInfra' 
+    | 'Chutes AI' 
+    | 'Voyage AI' 
+    | 'Replicate' 
+    | 'Vercel AI' 
+    | 'Pollinations' 
+    | 'Ollama Local' 
+    | 'xAI Grok' 
+    | 'AI21 Labs' 
+    | 'Qwen' 
+    | 'Meta Llama';
+  category: 'ultra_fast' | 'reasoning' | 'frontier' | 'vision_multimodal' | 'open_source' | 'zero_key' | 'embeddings';
+  modelId: string;
+  contextWindow: number;
+  latencyMs: number;
+  priority: number;
+  status: 'active' | 'standby' | 'rate_limited' | 'disabled' | 'testing';
+  isProOnly: boolean;
+  costPerMillion: string;
+  description: string;
+  capabilities: ('chat' | 'code' | 'reasoning' | 'vision' | 'search' | 'tools')[];
+  endpoint?: string;
+}
+
+export interface UsageMetering {
+  tokensUsedThisMonth: number;
+  monthlyQuota: number;
+  requestsMade: number;
+  costEstimatedUsd: number;
+  planTier: 'community_free' | 'starter_pro' | 'master_architect' | 'enterprise_ultra';
+  resetDate: string;
+  dailyUsage: { date: string; tokens: number; requests: number }[];
+}
+
+export interface StripePaymentInfo {
+  planId: string;
+  planName: string;
+  amountUsd: number;
+  billingInterval: 'monthly' | 'yearly';
+  currency: string;
+  status: 'active' | 'processing' | 'cancelled' | 'pending';
+  cardLast4: string;
+  cardBrand: string;
+  invoiceId: string;
+  transactionDate: string;
+  receiptUrl?: string;
+}
+
+export interface SecurityAuditIssue {
+  id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  category: 'Authentication' | 'Network' | 'API Key Exposure' | 'Rate Limiting' | 'Dependency CVE' | 'C2PA Integrity';
+  title: string;
+  description: string;
+  remediation: string;
+  resolved: boolean;
+}
+
+export interface SecurityAuditLog {
+  id: string;
+  timestamp: string;
+  action: string;
+  ip: string;
+  userAgent?: string;
+  status: 'allowed' | 'blocked' | 'warning' | 'verified';
+  details: string;
+}
+
+export interface SecurityConfigState {
+  ipWhitelist: string[];
+  whitelistEnabled: boolean;
+  admin2FaEnabled: boolean;
+  totpSecret: string;
+  backupCodes: string[];
+  vaultLocked: boolean;
+  encryptionAlgorithm: string;
+  lastVulnerabilityScan: string;
+  vulnerabilityScore: number;
+  issues: SecurityAuditIssue[];
+  auditLogs: SecurityAuditLog[];
+}
+
+export interface YouTubeSeoResult {
+  titleSuggestions: { title: string; ctrScore: number; tone: string; angle: string }[];
+  description: string;
+  chapters: { timestamp: string; title: string }[];
+  tags: string[];
+  thumbnailPrompts: string[];
+  targetKeywords: { keyword: string; volume: string; competition: 'Low' | 'Medium' | 'High' }[];
+  seoScore: number;
+}
+
+export interface OmniGatewayTestResult {
+  platformId: string;
+  platformName: string;
+  status: 'connected' | 'error' | 'idle' | 'testing';
+  latencyMs: number;
+  lastTestedAt: string;
+  responsePayload: string;
+  endpointUrl: string;
+  activeRateLimit: string;
 }
 
 export interface MediaProvenanceScanResult {
@@ -383,3 +530,52 @@ export interface MediaProvenanceScanResult {
     details: string;
   }[];
 }
+
+export interface CronBroadcastTarget {
+  id: string;
+  label: string;
+  chatId: string;
+  type: 'admin_private' | 'group' | 'channel' | 'supergroup';
+  enabled: boolean;
+}
+
+export interface YouTubeFeedConfig {
+  id: string;
+  name: string;
+  channelId: string;
+  enabled: boolean;
+}
+
+export interface CronWorkerStatusData {
+  isRunning: boolean;
+  intervalHours: number;
+  intervalMs: number;
+  isCurrentlyProcessing: boolean;
+  lastRunTimestamp: string | null;
+  nextRunTimestamp: string | null;
+  timeRemainingSeconds: number;
+  totalConfiguredTargets: number;
+  activeTargetsCount: number;
+  totalBroadcastsCount: number;
+  targets: CronBroadcastTarget[];
+  youtubeChannels: YouTubeFeedConfig[];
+  latestBroadcast?: {
+    id: string;
+    timestamp: string;
+    triggerType: string;
+    totalTargets: number;
+    successfulSends: number;
+    failedSends: number;
+    earthquakesFound: number;
+    newsFound: number;
+    videosFound: number;
+    messagePreview: string;
+    recipientResults: Array<{
+      chatId: string;
+      label: string;
+      success: boolean;
+      error?: string;
+    }>;
+  };
+}
+

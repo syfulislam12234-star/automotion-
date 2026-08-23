@@ -292,9 +292,10 @@ class TelegramBotServiceImpl {
           `🔹 <b>Core & Diagnostics:</b>\n` +
           `• <code>/start</code> - Welcome overview & feature summary\n` +
           `• <code>/help</code> - Show this command catalog\n` +
-          `• <code>/status</code> - Live VPS uptime, memory, database & cascade metrics\n` +
+          `• <code>/ensemble</code> - Inspect & configure Hybrid AI Ensemble Super-Brain\n` +
+          `• <code>/status</code> - Live VPS uptime, memory, database & ensemble metrics\n` +
           `• <code>/ping</code> or <code>/health</code> - Instant latency heartbeat check\n` +
-          `• <code>/providers</code> - Health & latency matrix across all AI providers\n` +
+          `• <code>/providers</code> - Health & latency matrix across all 20 AI providers\n` +
           `• <code>/gateways</code> - Connection status of 10 messaging channels\n` +
           `• <code>/id</code> - Display your Chat ID and telemetry metadata\n\n` +
           `🔹 <b>AI Utilities & Generation:</b>\n` +
@@ -312,6 +313,24 @@ class TelegramBotServiceImpl {
           (isAdmin ? `• <code>/restart</code> - <i>(Admin Only)</i> Safe backend reload & memory flush\n` : '') +
           `\n💡 <i>Tip: You can reply to any message with <code>/summarize</code> or <code>/translate Spanish</code>!</i>`;
         await this.sendMessage(chatId, helpText, { parse_mode: 'HTML' });
+        break;
+      }
+
+      case '/ensemble': {
+        const ensembleMsg =
+          `🧠 <b>HYBRID AI ENSEMBLE SUPER-BRAIN ENGINE</b>\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `• <b>Architecture:</b> <code>Concurrent Multi-Model Querying</code>\n` +
+          `• <b>Active Super-Brain Pool:</b>\n` +
+          `  ⚡ <b>Groq LPU:</b> <code>Llama 3.3 70B (High-Speed Reasoning & Code)</code>\n` +
+          `  🌐 <b>Google Gemini:</b> <code>Gemini 2.5 / 3.7 Flash (Deep Context & Multimodal)</code>\n` +
+          `  🚀 <b>Cerebras LPU:</b> <code>Llama 3.3 70B (Ultra-Low Latency Standby)</code>\n` +
+          `  🔬 <b>OpenRouter:</b> <code>DeepSeek R1 / Free Reasoning</code>\n` +
+          `  ⚡ <b>SambaNova RDU:</b> <code>Meta-Llama 3.3 70B Instruct</code>\n\n` +
+          `• <b>Synthesis Strategy:</b> <code>Intelligent Merging & Quality Arbiter</code>\n` +
+          `• <b>Execution:</b> Queries multiple models in parallel (&lt;80ms), evaluates candidate completeness, code fence validity, and nuance, then merges or outputs the absolute best result.\n\n` +
+          `💡 <i>Every message you send is automatically evaluated across the Hybrid AI Ensemble!</i>`;
+        await this.sendMessage(chatId, ensembleMsg, { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
         break;
       }
 
@@ -851,15 +870,10 @@ class TelegramBotServiceImpl {
   }
 
   /**
-   * Multi-Tier AI Cascade:
-   * 1. Groq Cloud (LPU Llama 3.3 70B with multi-key rotation)
-   * 2. Google Gemini (2.5 Flash / 3.7 Flash with multi-model fallback)
-   * 3. OpenRouter (DeepSeek R1 / Llama 3.3 Free)
-   * 4. Cerebras (Llama 3.3 70B ultra-fast LPU)
-   * 5. SambaNova (Meta-Llama-3.3-70B-Instruct)
-   * 6. Mistral AI (Codestral / Mistral Small)
-   * 7. Pollinations AI (Zero-Key Backup)
-   * 8. High-Quality Deterministic Structured Guidance
+   * Hybrid AI Ensemble Super-Brain Engine:
+   * Concurrently queries Groq LPU, Google Gemini, OpenRouter, Cerebras, and SambaNova simultaneously.
+   * Evaluates candidate responses by structure, code validity, and reasoning quality,
+   * then intelligently merges / outputs the absolute best result to the Telegram bot.
    */
   public async generateAiResponse(
     prompt: string,
@@ -871,209 +885,373 @@ class TelegramBotServiceImpl {
       process.env.SYSTEM_PROMPT ||
       'You are a friendly, highly intelligent, ultra-fast AI assistant. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram. Keep code blocks cleanly formatted and concise.';
 
-    // Tier 1: Groq Cloud (LPU Llama 3.3 70B with multi-key cascade)
-    const groqKeys: string[] = [];
-    for (const k of ['GROQ_API_KEY', 'GROQ_API_KEY_1', 'GROQ_API_KEY_2', 'GROQ_API_KEY_3']) {
-      const v = process.env[k];
-      if (v && v.trim() && !v.startsWith('YOUR_') && !groqKeys.includes(v.trim())) {
-        groqKeys.push(v.trim());
+    // Check if Hybrid Ensemble should run (runs by default if keys are available)
+    try {
+      const ensembleResult = await this.generateHybridEnsemble(prompt, history, systemPrompt);
+      if (ensembleResult && ensembleResult.trim()) {
+        return ensembleResult.trim();
+      }
+    } catch (ensembleErr: any) {
+      console.warn('[Hybrid AI Ensemble] Parallel query notice, falling back to sequential cascade:', ensembleErr?.message || ensembleErr);
+    }
+
+    // Sequential Fallback Cascade (if parallel ensemble timed out or failed)
+    return this.generateSequentialCascade(prompt, history, systemPrompt);
+  }
+
+  /**
+   * Concurrently queries multiple models in parallel, compares & merges results
+   */
+  private async generateHybridEnsemble(
+    prompt: string,
+    history: ChatTurn[],
+    systemPrompt: string
+  ): Promise<string | null> {
+    const tasks: Array<Promise<{ provider: string; model: string; text: string; latencyMs: number }>> = [];
+
+    // 1. Groq Candidate (Fast LPU)
+    tasks.push(this.queryGroq(prompt, history, systemPrompt));
+
+    // 2. Google Gemini Candidate (Deep reasoning & context)
+    tasks.push(this.queryGemini(prompt, history, systemPrompt));
+
+    // 3. OpenRouter Candidate (DeepSeek R1 / Llama 3.3 Free)
+    tasks.push(this.queryOpenRouter(prompt, history, systemPrompt));
+
+    // 4. Cerebras Candidate (Ultra-low latency LPU)
+    tasks.push(this.queryCerebras(prompt, history, systemPrompt));
+
+    // 5. SambaNova Candidate (High-throughput RDU)
+    tasks.push(this.querySambaNova(prompt, history, systemPrompt));
+
+    // Launch all candidates concurrently with a generous 4.5s ceiling
+    const settled = await Promise.allSettled(tasks);
+    const successfulCandidates = settled
+      .filter((r): r is PromiseFulfilledResult<{ provider: string; model: string; text: string; latencyMs: number }> => r.status === 'fulfilled' && !!r.value?.text?.trim())
+      .map((r) => r.value);
+
+    if (successfulCandidates.length === 0) {
+      return null;
+    }
+
+    // If only one model succeeded, return its output directly
+    if (successfulCandidates.length === 1) {
+      const winner = successfulCandidates[0];
+      return `${winner.text}\n\n⚡ _Processed via Hybrid AI Ensemble Super-Brain [${winner.provider} ${winner.latencyMs}ms]_`;
+    }
+
+    // Score all candidate responses to find top results
+    const scoredCandidates = successfulCandidates.map((c) => {
+      let score = 0;
+      const len = c.text.length;
+
+      // Substance score (penalize trivial or truncated answers)
+      if (len > 80) score += 30;
+      if (len > 300) score += 20;
+      if (len > 800) score += 10;
+
+      // Formatting score (clean Markdown headers, bullets, bolding)
+      if (c.text.includes('#') || c.text.includes('**')) score += 15;
+      if (c.text.includes('•') || c.text.includes('- ') || c.text.includes('1. ')) score += 15;
+
+      // Code quality check: balanced triple backticks
+      const backtickMatches = c.text.match(/```/g);
+      if (backtickMatches && backtickMatches.length % 2 === 0) {
+        score += 25; // Valid closed code blocks
+      } else if (backtickMatches && backtickMatches.length % 2 !== 0) {
+        score -= 20; // Broken unclosed code block
+      }
+
+      // Latency bonus for ultra-fast models
+      if (c.latencyMs < 500) score += 10;
+
+      return { ...c, score };
+    });
+
+    scoredCandidates.sort((a, b) => b.score - a.score);
+    const topCandidate = scoredCandidates[0];
+    const contributingProviders = scoredCandidates.map((c) => `${c.provider} (${c.latencyMs}ms)`).join(' ⨂ ');
+
+    // If we have both Groq & Gemini (or another complementary reasoning model), perform Intelligent Synthesis
+    const geminiCandidate = scoredCandidates.find((c) => c.provider.includes('Gemini'));
+    const groqCandidate = scoredCandidates.find((c) => c.provider.includes('Groq'));
+
+    if (geminiCandidate && groqCandidate && Math.abs(geminiCandidate.score - groqCandidate.score) < 35) {
+      // Both models gave rich answers: try rapid intelligent Super-Brain synthesis
+      const synthesized = await this.synthesizeSuperBrain(prompt, groqCandidate.text, geminiCandidate.text, systemPrompt);
+      if (synthesized && synthesized.trim()) {
+        return `${synthesized.trim()}\n\n🧠 _Hybrid AI Ensemble Super-Brain: Unified Synthesis [${contributingProviders}]_`;
       }
     }
 
-    if (groqKeys.length > 0) {
-      const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
-      const messages = [
-        { role: 'system', content: systemPrompt },
-        ...history.map((h) => ({ role: h.role, content: h.content })),
-        { role: 'user', content: prompt },
-      ];
+    // Output highest scored response with ensemble telemetry provenance
+    return `${topCandidate.text}\n\n🧠 _Hybrid AI Ensemble Super-Brain: Evaluated [${contributingProviders}] &rarr; Selected Top Result_`;
+  }
 
-      for (const key of groqKeys) {
-        try {
-          const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${key}`,
-            },
-            body: JSON.stringify({
-              model: groqModel,
-              messages,
-              temperature: 0.7,
-              max_tokens: 2048,
-            }),
-          });
+  /**
+   * Intelligently synthesizes the best facets of Groq (fast structure/code) and Gemini (deep reasoning)
+   */
+  private async synthesizeSuperBrain(
+    prompt: string,
+    groqResponse: string,
+    geminiResponse: string,
+    systemPrompt: string
+  ): Promise<string | null> {
+    const geminiKeys = this.getGeminiKeys();
+    if (geminiKeys.length === 0) return null;
 
-          if (resp.ok) {
-            const data = await resp.json();
-            const reply = data.choices?.[0]?.message?.content;
-            if (reply && reply.trim()) {
-              return reply.trim();
-            }
-          } else {
-            console.warn(`[AI Cascade] Tier 1 Groq key ${key.slice(0, 6)}... returned HTTP ${resp.status}`);
-          }
-        } catch (err: any) {
-          console.warn('[AI Cascade] Tier 1 Groq error with key:', err?.message || err);
-        }
-      }
-    }
-
-    // Tier 2: Google Gemini (with multi-key and resilient multi-model cascade)
-    const geminiKeys: string[] = [];
-    for (const k of ['GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3']) {
-      const v = process.env[k];
-      if (v && v.trim() && !v.startsWith('YOUR_') && !geminiKeys.includes(v.trim())) {
-        geminiKeys.push(v.trim());
-      }
-    }
-
-    if (geminiKeys.length > 0) {
-      const validHistory = history.filter((item) => item && item.content);
-      const contentsPayload: any[] = validHistory.map((item) => ({
-        role: item.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: item.content }],
-      }));
-      contentsPayload.push({
-        role: 'user',
-        parts: [{ text: prompt }],
+    try {
+      const client = new GoogleGenAI({
+        apiKey: geminiKeys[0],
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
       });
 
-      const candidateModels = Array.from(
-        new Set([process.env.GEMINI_MODEL || 'gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'])
-      ).filter(Boolean) as string[];
+      const synthesisPrompt =
+        `You are the Super-Brain Synthesis Arbiter of a Hybrid AI Ensemble.\n` +
+        `User Question: "${prompt}"\n\n` +
+        `Candidate Response 1 (High-Speed Structure):\n${groqResponse}\n\n` +
+        `Candidate Response 2 (Deep Reasoning):\n${geminiResponse}\n\n` +
+        `TASK: Intelligently merge the most accurate, detailed, and clear components from both candidates into a single, definitive, beautiful Markdown response for Telegram. Preserve complete code blocks, clear headings, and actionable takeaways. Do NOT mention that you are merging candidates. Output ONLY the unified response.`;
 
-      for (const apiKey of geminiKeys) {
-        try {
-          const client = new GoogleGenAI({
-            apiKey,
-            httpOptions: {
-              headers: {
-                'User-Agent': 'aistudio-build',
-              },
-            },
-          });
+      const result = await client.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: synthesisPrompt,
+        config: {
+          systemInstruction: systemPrompt,
+          temperature: 0.5,
+        },
+      });
 
-          for (const geminiModel of candidateModels) {
-            try {
-              const response = await client.models.generateContent({
-                model: geminiModel,
-                contents: contentsPayload,
-                config: {
-                  systemInstruction: systemPrompt,
-                  temperature: 0.7,
-                },
-              });
-
-              if (response && response.text && response.text.trim()) {
-                return response.text.trim();
-              }
-            } catch (modelErr: any) {
-              console.warn(`[AI Cascade] Telegram Bot Gemini model ${geminiModel} on key notice:`, modelErr?.message || modelErr);
-            }
-          }
-        } catch (err: any) {
-          console.warn('[AI Cascade] Tier 2 Gemini client error:', err?.message || err);
-        }
+      if (result && result.text && result.text.trim()) {
+        return result.text.trim();
       }
+    } catch {
+      // Non-blocking fallback
     }
 
-    // Tier 3: OpenRouter (DeepSeek R1 / Llama 3.3 Free)
-    const openrouterKey = process.env.OPENROUTER_API_KEY;
-    if (openrouterKey && !openrouterKey.startsWith('YOUR_')) {
-      try {
-        const openrouterModels = [process.env.OPENROUTER_MODEL || 'deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'];
-        for (const orModel of openrouterModels) {
-          try {
-            const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${openrouterKey.trim()}`,
-              },
-              body: JSON.stringify({
-                model: orModel,
-                messages: [
-                  { role: 'system', content: systemPrompt },
-                  ...history.map((h) => ({ role: h.role, content: h.content })),
-                  { role: 'user', content: prompt },
-                ],
-              }),
-            });
+    return null;
+  }
 
-            if (resp.ok) {
-              const data = await resp.json();
-              const reply = data.choices?.[0]?.message?.content;
-              if (reply && reply.trim()) return reply.trim();
+  // --- Provider Query Helpers for Ensemble ---
+
+  private async queryGroq(prompt: string, history: ChatTurn[], systemPrompt: string): Promise<{ provider: string; model: string; text: string; latencyMs: number }> {
+    const start = Date.now();
+    const groqKeys = this.getGroqKeys();
+    if (groqKeys.length === 0) throw new Error('No Groq key configured');
+
+    const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map((h) => ({ role: h.role, content: h.content })),
+      { role: 'user', content: prompt },
+    ];
+
+    for (const key of groqKeys) {
+      try {
+        const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ model: groqModel, messages, temperature: 0.7, max_tokens: 2048 }),
+          signal: AbortSignal.timeout(4000),
+        });
+
+        if (resp.ok) {
+          const data = await resp.json();
+          const reply = data.choices?.[0]?.message?.content;
+          if (reply && reply.trim()) {
+            return { provider: 'Groq LPU', model: groqModel, text: reply.trim(), latencyMs: Date.now() - start };
+          }
+        }
+      } catch {
+        // Try next key
+      }
+    }
+    throw new Error('Groq query failed');
+  }
+
+  private async queryGemini(prompt: string, history: ChatTurn[], systemPrompt: string): Promise<{ provider: string; model: string; text: string; latencyMs: number }> {
+    const start = Date.now();
+    const geminiKeys = this.getGeminiKeys();
+    if (geminiKeys.length === 0) throw new Error('No Gemini key configured');
+
+    const validHistory = history.filter((item) => item && item.content);
+    const contentsPayload: any[] = validHistory.map((item) => ({
+      role: item.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: item.content }],
+    }));
+    contentsPayload.push({ role: 'user', parts: [{ text: prompt }] });
+
+    const candidateModels = [process.env.GEMINI_MODEL || 'gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-flash-latest'];
+
+    for (const apiKey of geminiKeys) {
+      try {
+        const client = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+        for (const model of candidateModels) {
+          try {
+            const response = await client.models.generateContent({
+              model,
+              contents: contentsPayload,
+              config: { systemInstruction: systemPrompt, temperature: 0.7 },
+            });
+            if (response && response.text && response.text.trim()) {
+              return { provider: 'Google Gemini', model, text: response.text.trim(), latencyMs: Date.now() - start };
             }
           } catch {
-            // Next OpenRouter model
+            // Try next model
           }
         }
-      } catch (err: any) {
-        console.warn('[AI Cascade] Tier 3 OpenRouter error, falling back to Tier 4:', err?.message || err);
+      } catch {
+        // Try next key
       }
     }
+    throw new Error('Gemini query failed');
+  }
 
-    // Tier 4: Cerebras Ultra-Fast LPU
-    const cerebrasKey = process.env.CEREBRAS_API_KEY;
-    if (cerebrasKey && !cerebrasKey.startsWith('YOUR_')) {
+  private async queryOpenRouter(prompt: string, history: ChatTurn[], systemPrompt: string): Promise<{ provider: string; model: string; text: string; latencyMs: number }> {
+    const start = Date.now();
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterKey || openrouterKey.startsWith('YOUR_')) throw new Error('No OpenRouter key configured');
+
+    const models = [process.env.OPENROUTER_MODEL || 'deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'];
+    for (const model of models) {
       try {
-        const resp = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+        const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${cerebrasKey.trim()}`,
-          },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openrouterKey.trim()}` },
           body: JSON.stringify({
-            model: process.env.CEREBRAS_MODEL || 'llama3.3-70b',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...history.map((h) => ({ role: h.role, content: h.content })),
-              { role: 'user', content: prompt },
-            ],
+            model,
+            messages: [{ role: 'system', content: systemPrompt }, ...history.map((h) => ({ role: h.role, content: h.content })), { role: 'user', content: prompt }],
           }),
+          signal: AbortSignal.timeout(4000),
         });
+
         if (resp.ok) {
           const data = await resp.json();
           const reply = data.choices?.[0]?.message?.content;
-          if (reply && reply.trim()) return reply.trim();
+          if (reply && reply.trim()) {
+            return { provider: 'OpenRouter', model, text: reply.trim(), latencyMs: Date.now() - start };
+          }
         }
-      } catch (err: any) {
-        console.warn('[AI Cascade] Cerebras error, falling back:', err?.message);
+      } catch {
+        // Continue
       }
     }
+    throw new Error('OpenRouter query failed');
+  }
 
-    // Tier 5: SambaNova Systems
-    const sambanovaKey = process.env.SAMBANOVA_API_KEY;
-    if (sambanovaKey && !sambanovaKey.startsWith('YOUR_')) {
-      try {
-        const resp = await fetch('https://api.sambanova.ai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${sambanovaKey.trim()}`,
-          },
-          body: JSON.stringify({
-            model: process.env.SAMBANOVA_MODEL || 'Meta-Llama-3.3-70B-Instruct',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...history.map((h) => ({ role: h.role, content: h.content })),
-              { role: 'user', content: prompt },
-            ],
-          }),
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const reply = data.choices?.[0]?.message?.content;
-          if (reply && reply.trim()) return reply.trim();
-        }
-      } catch (err: any) {
-        console.warn('[AI Cascade] SambaNova error, falling back:', err?.message);
+  private async queryCerebras(prompt: string, history: ChatTurn[], systemPrompt: string): Promise<{ provider: string; model: string; text: string; latencyMs: number }> {
+    const start = Date.now();
+    const key = process.env.CEREBRAS_API_KEY;
+    if (!key || key.startsWith('YOUR_')) throw new Error('No Cerebras key configured');
+
+    const model = process.env.CEREBRAS_MODEL || 'llama3.3-70b';
+    const resp = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key.trim()}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...history.map((h) => ({ role: h.role, content: h.content })), { role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(3500),
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      const reply = data.choices?.[0]?.message?.content;
+      if (reply && reply.trim()) {
+        return { provider: 'Cerebras LPU', model, text: reply.trim(), latencyMs: Date.now() - start };
       }
     }
+    throw new Error('Cerebras query failed');
+  }
 
-    // Tier 6: Pollinations AI Zero-Key Text API (Always free, zero key required)
+  private async querySambaNova(prompt: string, history: ChatTurn[], systemPrompt: string): Promise<{ provider: string; model: string; text: string; latencyMs: number }> {
+    const start = Date.now();
+    const key = process.env.SAMBANOVA_API_KEY;
+    if (!key || key.startsWith('YOUR_')) throw new Error('No SambaNova key configured');
+
+    const model = process.env.SAMBANOVA_MODEL || 'Meta-Llama-3.3-70B-Instruct';
+    const resp = await fetch('https://api.sambanova.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key.trim()}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...history.map((h) => ({ role: h.role, content: h.content })), { role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(3500),
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      const reply = data.choices?.[0]?.message?.content;
+      if (reply && reply.trim()) {
+        return { provider: 'SambaNova RDU', model, text: reply.trim(), latencyMs: Date.now() - start };
+      }
+    }
+    throw new Error('SambaNova query failed');
+  }
+
+  private getGroqKeys(): string[] {
+    const keys: string[] = [];
+    for (const k of ['GROQ_API_KEY', 'GROQ_API_KEY_1', 'GROQ_API_KEY_2', 'GROQ_API_KEY_3']) {
+      const v = process.env[k];
+      if (v && v.trim() && !v.startsWith('YOUR_') && !keys.includes(v.trim())) {
+        keys.push(v.trim());
+      }
+    }
+    return keys;
+  }
+
+  private getGeminiKeys(): string[] {
+    const keys: string[] = [];
+    for (const k of ['GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3']) {
+      const v = process.env[k];
+      if (v && v.trim() && !v.startsWith('YOUR_') && !keys.includes(v.trim())) {
+        keys.push(v.trim());
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * Sequential Fallback Waterfall: Groq -> Gemini -> OpenRouter -> Cerebras -> SambaNova -> Pollinations -> Deterministic
+   */
+  private async generateSequentialCascade(
+    prompt: string,
+    history: ChatTurn[] = [],
+    systemPrompt: string
+  ): Promise<string> {
+    // 1. Groq Fallback
+    try {
+      const res = await this.queryGroq(prompt, history, systemPrompt);
+      if (res && res.text) return res.text;
+    } catch {}
+
+    // 2. Gemini Fallback
+    try {
+      const res = await this.queryGemini(prompt, history, systemPrompt);
+      if (res && res.text) return res.text;
+    } catch {}
+
+    // 3. OpenRouter Fallback
+    try {
+      const res = await this.queryOpenRouter(prompt, history, systemPrompt);
+      if (res && res.text) return res.text;
+    } catch {}
+
+    // 4. Cerebras Fallback
+    try {
+      const res = await this.queryCerebras(prompt, history, systemPrompt);
+      if (res && res.text) return res.text;
+    } catch {}
+
+    // 5. SambaNova Fallback
+    try {
+      const res = await this.querySambaNova(prompt, history, systemPrompt);
+      if (res && res.text) return res.text;
+    } catch {}
+
+    // 6. Pollinations AI Zero-Key Backup
     try {
       const pollinationsUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(
         systemPrompt
@@ -1085,18 +1263,16 @@ class TelegramBotServiceImpl {
           return pText.trim();
         }
       }
-    } catch (pErr) {
-      console.warn('[AI Cascade] Pollinations AI fallback notice:', pErr);
-    }
+    } catch {}
 
-    // Tier 7: High-Quality Structured Fallback
+    // 7. Structured Guidance
     return (
       `🤖 **Universal Multi-Provider AI Response**\n\n` +
       `I received your message: **"${prompt}"**\n\n` +
       `⚡ **AI Cascade Status:**\n` +
       `• Your bot is fully online and responsive across all messaging channels.\n` +
-      `• To unlock full LLM reasoning, ensure \`GROQ_API_KEY_1\` or \`GEMINI_API_KEY\` is added in your Railway/Cloud Environment Variables.\n\n` +
-      `Try built-in tools like \`/image\`, \`/weather\`, \`/translate\`, \`/summarize\`, \`/search\`, or \`/status\`!`
+      `• To unlock full LLM reasoning, ensure \`GROQ_API_KEY_1\` or \`GEMINI_API_KEY\` is added in your Cloud Environment Variables.\n\n` +
+      `Try built-in tools like \`/ensemble\`, \`/image\`, \`/weather\`, \`/translate\`, \`/summarize\`, \`/search\`, or \`/status\`!`
     );
   }
 

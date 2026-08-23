@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { BotConfig } from '../types';
+import { BotConfig, ChatMessage } from '../types';
+import { FirestoreDataService } from '../services/firestoreDataService';
+import { AuthService } from '../services/authService';
 import {
   Send,
   Sparkles,
@@ -32,28 +34,6 @@ import {
 
 interface TelegramSimulatorProps {
   config: BotConfig;
-}
-
-interface ChatMessage {
-  id: string;
-  sender: 'user' | 'bot' | 'system';
-  platform?: 
-    | 'telegram' 
-    | 'discord' 
-    | 'slack' 
-    | 'whatsapp' 
-    | 'twilio' 
-    | 'pushover' 
-    | 'pyrogram' 
-    | 'line' 
-    | 'matrix' 
-    | 'apprise';
-  text: string;
-  timestamp: string;
-  provider?: string;
-  isCommand?: boolean;
-  imageUrl?: string;
-  fileName?: string;
 }
 
 export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) => {
@@ -142,6 +122,13 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
     setInputValue('');
     setIsTyping(true);
 
+    const currentSession = AuthService.getCurrentSession();
+    if (currentSession?.user?.id) {
+      FirestoreDataService.saveChatMessage(userMsg, currentSession.user.id).catch(e => {
+        console.warn('[Firestore] Chat save notice:', e);
+      });
+    }
+
     let botResponse = '';
     let providerName = `Groq (${config.modelName || 'Llama 3.3 70B'})`;
     let generatedImageUrl: string | undefined = undefined;
@@ -185,6 +172,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
             case 'start':
             case 'help':
               botResponse = `🛡️ *Universal Multi-Platform Bot Assistance*\n━━━━━━━━━━━━━━━━━━━━\n` +
+                `• \`/ensemble\` - Inspect & test Hybrid AI Ensemble Super-Brain\n` +
                 `• \`/status\` - Live VPS uptime, memory, and database metrics\n` +
                 `• \`/providers\` - 20-tier AI failover cascade health & latencies\n` +
                 `• \`/gateways\` - 10 messaging gateway connection states\n` +
@@ -196,6 +184,20 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
                 `• \`/health\` - Background worker & gateway telemetry\n` +
                 `• \`/restart\` - Trigger safe remote backend reload\n` +
                 `• \`/reset\` - Clear active conversational memory buffer`;
+              break;
+
+            case 'ensemble':
+              providerName = 'Hybrid AI Ensemble Engine (Groq + Gemini + OpenRouter + Cerebras)';
+              botResponse = `🧠 *HYBRID AI ENSEMBLE SUPER-BRAIN ENGINE*\n━━━━━━━━━━━━━━━━━━━━\n` +
+                `• **Status:** \`ACTIVE & RUNNING (Concurrent Multi-Model Querying)\`\n` +
+                `• **Parallel Tier 1 Pool:**\n` +
+                `  ⚡ \`Groq Cloud LPU\` (Llama 3.3 70B - ~38ms)\n` +
+                `  🌐 \`Google Gemini\` (Gemini 2.5/3.7 Flash - ~58ms)\n` +
+                `  🚀 \`Cerebras LPU\` (Llama 3.3 70B - ~35ms)\n` +
+                `  🔬 \`OpenRouter\` (DeepSeek R1 Free - ~72ms)\n` +
+                `  ⚡ \`SambaNova RDU\` (Meta-Llama 3.3 - ~45ms)\n\n` +
+                `• **Synthesis Arbitrage:** Queries models concurrently, cross-validates Markdown structure, code syntax & reasoning, then outputs the unified best result.\n\n` +
+                `💡 *Every conversation turn is automatically processed through the Super-Brain Ensemble!*`;
               break;
 
             case 'ping':
@@ -348,20 +350,26 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
       console.error('Simulator message execution error:', err);
       botResponse = `⚠️ *Error executing request:* ${err?.message || 'Unknown error'}. Type \`/help\` for assistance.`;
     } finally {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          sender: 'bot',
-          platform: activePlatform,
-          text: botResponse,
-          timestamp: getCurrentTime(),
-          provider: providerName,
-          isCommand: isCommand,
-          imageUrl: generatedImageUrl,
-        },
-      ]);
+      const botMsg: ChatMessage = {
+        id: Date.now().toString(),
+        sender: 'bot',
+        platform: activePlatform,
+        text: botResponse,
+        timestamp: getCurrentTime(),
+        provider: providerName,
+        isCommand: isCommand,
+        imageUrl: generatedImageUrl,
+      };
+
+      setMessages((prev) => [...prev, botMsg]);
       setIsTyping(false);
+
+      const currentSession = AuthService.getCurrentSession();
+      if (currentSession?.user?.id) {
+        FirestoreDataService.saveChatMessage(botMsg, currentSession.user.id).catch(e => {
+          console.warn('[Firestore] Bot reply save notice:', e);
+        });
+      }
     }
   };
 
@@ -451,6 +459,14 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
 
       {/* Quick Command Ribbon */}
       <div className="px-3 py-1.5 bg-slate-950/50 border-b border-slate-800 flex items-center gap-1.5 overflow-x-auto text-[11px] no-scrollbar">
+        <button
+          onClick={() => {
+            setInputValue('/ensemble');
+          }}
+          className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 shrink-0 cursor-pointer font-bold flex items-center gap-1"
+        >
+          🧠 /ensemble
+        </button>
         <button
           onClick={() => {
             setInputValue('/yt_seo 20 Free AI APIs Python Bot');

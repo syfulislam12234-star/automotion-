@@ -16,6 +16,11 @@ import { AuthModal } from './components/AuthModal';
 import { VpsManager } from './components/VpsManager';
 import { AiMediaScanner } from './components/AiMediaScanner';
 import { AiChatModal } from './components/AiChatModal';
+import { AiCascadeDashboard } from './components/AiCascadeDashboard';
+import { OmniChannelGateway } from './components/OmniChannelGateway';
+import { EnterpriseSecurity } from './components/EnterpriseSecurity';
+import { YouTubeStudioModal } from './components/YouTubeStudioModal';
+import { CronBroadcastManager } from './components/CronBroadcastManager';
 import { AuthService } from './services/authService';
 import {
   Download,
@@ -47,6 +52,8 @@ import {
   Scan,
   MessageSquare,
   MessageCircle,
+  TrendingUp,
+  Clock,
 } from 'lucide-react';
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -64,6 +71,13 @@ const DEFAULT_CONFIG: BotConfig = {
   enableMarkdownV2: true,
   enableStatsCommand: true,
   enableCustomPromptCommand: true,
+
+  // Hybrid AI Ensemble & Super-Brain System
+  enableHybridEnsemble: true,
+  ensembleStrategy: 'super_brain_synthesis',
+  ensemblePrimaryProviders: ['groq', 'gemini', 'cerebras', 'openrouter'],
+  ensembleTimeoutMs: 3500,
+  enableEnsembleComparisonTelemetry: true,
 
   // Multi-Provider & Key Rotation (20 AI Providers)
   enableMultiProviderFallback: true,
@@ -199,41 +213,41 @@ const DEFAULT_CONFIG: BotConfig = {
   whatsappAccessToken: '',
   whatsappVerifyToken: '',
 
-  enableTwilio: false,
+  enableTwilio: true,
   twilioAccountSid: '',
   twilioAuthToken: '',
   twilioPhoneNumber: '',
   twilioToNumber: '',
 
-  enablePushover: false,
-  pushoverUserKey: '',
-  pushoverAppToken: '',
-
-  enablePyrogram: false,
-  pyrogramApiId: '',
-  pyrogramApiHash: '',
-  pyrogramSessionString: '',
-
-  enableLine: false,
+  enableLine: true,
   lineChannelSecret: '',
   lineChannelAccessToken: '',
 
-  enableMatrix: false,
-  matrixHomeserver: 'https://matrix-client.matrix.org',
+  enableMatrix: true,
+  matrixHomeserver: 'https://matrix.org',
   matrixUserId: '',
   matrixAccessToken: '',
   matrixRoomId: '',
 
-  enableApprise: false,
+  enablePyrogram: true,
+  pyrogramApiId: '',
+  pyrogramApiHash: '',
+  pyrogramSessionString: '',
+
+  enableApprise: true,
   appriseUrls: '',
 
-  // YouTube OAuth & Automation Suite
+  enablePushover: true,
+  pushoverUserKey: '',
+  pushoverAppToken: '',
+
+  // YouTube OAuth2 & AI SEO Automation
   enableYouTubeAutomation: true,
   youtubeClientId: '',
   youtubeClientSecret: '',
   youtubeRefreshToken: '',
   youtubeChannelId: '',
-  youtubeDefaultCategory: '28',
+  youtubeDefaultCategory: '27',
   youtubeDefaultPrivacy: 'public',
   enableYtAutoSeo: true,
   enableYtAutoUploadQueue: true,
@@ -243,12 +257,9 @@ const DEFAULT_CONFIG: BotConfig = {
   serverPort: 8080,
   webhookUrl: '',
 
-  // Architecture & Operating Model (Hybrid Managed Pro Plan vs Self-Managed)
-  architectureMode: 'hybrid_managed_pro',
-  useCentralizedAiEngine: true,
-  useCentralizedVpsCluster: true,
-  userProfileName: 'Pro Customer',
-  userPlanTier: 'pro_managed',
+  // Pro SaaS Customer Profile & Subscription Tiers
+  userProfileName: 'Syful Islam',
+  userPlanTier: 'enterprise_cluster',
 
   // Code Studio Privacy & Admin Security Gate
   adminPin: '7788',
@@ -292,7 +303,7 @@ const getInitialConfig = (): BotConfig => {
 
 export default function App() {
   const [config, setConfig] = useState<BotConfig>(getInitialConfig);
-  
+
   // User Authentication & Session State
   const [session, setSession] = useState<AuthSession | null>(() => {
     return AuthService.getCurrentSession();
@@ -302,12 +313,15 @@ export default function App() {
   const [authFeatureContext, setAuthFeatureContext] = useState<string | undefined>(undefined);
   const currentUser = session?.user || null;
 
-  // Default to Live Simulator mode for general users
-  const [activeTab, setActiveTab] = useState<'simulator' | 'admin' | 'vps' | 'scanner' | 'studio'>('simulator');
+  // Active View Tab Navigation
+  const [activeTab, setActiveTab] = useState<
+    'simulator' | 'cascade' | 'cron' | 'gateways' | 'security' | 'vps' | 'scanner' | 'admin' | 'studio'
+  >('simulator');
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
   const [isPortalOpen, setIsPortalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [isYouTubeStudioOpen, setIsYouTubeStudioOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [portalInitialServiceId, setPortalInitialServiceId] = useState<string | undefined>(undefined);
   const [isZipping, setIsZipping] = useState(false);
@@ -336,7 +350,7 @@ export default function App() {
         }
       }
       if (serverConfig) {
-        setConfig(prev => ({ ...prev, ...serverConfig }));
+        setConfig((prev) => ({ ...prev, ...serverConfig }));
       }
     });
     return () => {
@@ -355,8 +369,14 @@ export default function App() {
     AuthService.saveUserBotConfig(newConfig, currentUser?.id);
   };
 
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
 
-  // Protected Gatekeeper: checks authentication before navigating to sensitive routes
+  // Protected Gatekeeper
   const requireAuth = (featureName: string, action: () => void) => {
     if (!currentUser) {
       setAuthFeatureContext(featureName);
@@ -450,92 +470,70 @@ export default function App() {
     return getAllGeneratedFiles(config);
   }, [config]);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3000);
-  };
-
-  const handleOpenPortal = (serviceId?: string) => {
-    requireAuth('1-Click Direct API Setup Portal', () => {
-      setPortalInitialServiceId(serviceId || 'groq');
-      setIsPortalOpen(true);
-    });
-  };
-
-  const handleDownloadZip = async () => {
-    try {
-      setIsZipping(true);
-      const zip = new JSZip();
-
-      generatedFiles.forEach((file) => {
-        zip.file(file.filename, file.content);
-      });
-
-      zip.file(
-        '.gitignore',
-        `__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.env
-.venv/
-env/
-venv/
-.DS_Store
-`
-      );
-
-      const content = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(content);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `universal-20ai-10gateway-bot.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      showToast('📦 Project ZIP downloaded successfully!');
-    } catch (err) {
-      console.error('ZIP generation error:', err);
-      showToast('❌ Failed to create zip file.');
-    } finally {
-      setIsZipping(false);
-    }
-  };
-
-  const handleCopyMainCode = async () => {
-    try {
-      const botPy = generatedFiles.find((f) => f.filename === 'bot.py') || generatedFiles[0];
-      await navigator.clipboard.writeText(botPy.content);
-      setCopiedAll(true);
-      showToast('📋 bot.py copied to clipboard!');
-      setTimeout(() => setCopiedAll(false), 2500);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   const handleResetToDefaults = () => {
-    handleConfigChange(DEFAULT_CONFIG);
+    setConfig(DEFAULT_CONFIG);
     try {
       localStorage.removeItem(CONFIG_STORAGE_KEY);
     } catch (e) {
       console.error(e);
     }
-    showToast('🔄 Configuration reset to recommended defaults');
+    showToast('🔄 All configurations reset to high-resilience defaults.');
+  };
+
+  const handleDownloadZip = async () => {
+    setIsZipping(true);
+    showToast('📦 Bundling universal multi-platform bot project...');
+    try {
+      const zip = new JSZip();
+      generatedFiles.forEach((file) => {
+        zip.file(file.filename, file.content);
+      });
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'universal-multi-platform-bot.zip';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast('🎉 Project zip downloaded successfully!');
+    } catch (err) {
+      console.error('Failed to create zip: ', err);
+      showToast('❌ Failed to create zip package.');
+    } finally {
+      setIsZipping(false);
+    }
+  };
+
+  const handleCopyAllCode = async () => {
+    try {
+      const allText = generatedFiles
+        .map((f) => `### FILE: ${f.filename}\n${f.content}\n\n`)
+        .join('----------------------------------------\n\n');
+      await navigator.clipboard.writeText(allText);
+      setCopiedAll(true);
+      showToast('📋 Copied all source files to clipboard!');
+      setTimeout(() => setCopiedAll(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy: ', err);
+      showToast('❌ Failed to copy to clipboard.');
+    }
+  };
+
+  const handleOpenPortal = (serviceId?: string) => {
+    setPortalInitialServiceId(serviceId);
+    setIsPortalOpen(true);
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Top Navbar */}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+      {/* Universal Super-App Navbar */}
       <Navbar
         currentUser={currentUser}
         onOpenAuthModal={(tab) => {
-          setAuthModalTab(tab || 'login');
           setAuthFeatureContext(undefined);
+          setAuthModalTab(tab || 'login');
           setIsAuthModalOpen(true);
         }}
         onLogOut={handleLogOut}
@@ -543,9 +541,10 @@ venv/
         onDownloadZip={handleDownloadZip}
         isZipping={isZipping}
         copiedAll={copiedAll}
-        onCopyAll={handleCopyMainCode}
+        onCopyAll={handleCopyAllCode}
         onOpenPortal={() => handleOpenPortal('groq')}
         onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
+        onOpenYouTubeStudio={() => setIsYouTubeStudioOpen(true)}
         onOpenAiChat={() => setIsAiChatOpen(true)}
         isCodeStudioUnlocked={isCodeStudioUnlocked}
         onOpenAdminPinModal={() => setIsPinModalOpen(true)}
@@ -554,53 +553,59 @@ venv/
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Hero Spotlight Section */}
-        <section className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-cyan-950/40 border border-slate-800 p-6 sm:p-8 shadow-2xl">
-          <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-            <div className="space-y-2 max-w-2xl">
+        {/* Hero Banner with Quick Navigation */}
+        <section className="bg-gradient-to-br from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden ring-1 ring-white/5">
+          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-gradient-to-r from-cyan-500 to-indigo-500 text-white shadow-lg shadow-cyan-500/20">
+                  ENTERPRISE 100-AI SUPER-APP
+                </span>
+                <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                  <Activity className="w-3 h-3 animate-pulse" />
+                  SLA 99.999%
+                </span>
+              </div>
               <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                Universal Multi-Platform & 20-AI Bot Generator
+                Universal Multi-Platform Bot & AI Generator
               </h2>
-              <p className="text-sm text-slate-300 leading-relaxed">
-                Zero-downtime Python architecture powering multi-provider AI routing, unified messaging gateways, YouTube OAuth automation, and real-time media provenance inspection.
+              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+                Connect Telegram, Discord, Slack, and WhatsApp to a zero-downtime 100-AI model cascade with automated key rotation, YouTube video lifecycle studio, and enterprise security firewall.
               </p>
             </div>
 
-            {/* Quick Action Buttons */}
-            <div className="flex flex-wrap items-center gap-3 shrink-0">
+            {/* Hero Quick Action Buttons */}
+            <div className="flex items-center gap-2.5 flex-wrap">
               <button
-                onClick={() => handleOpenPortal('groq')}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 hover:from-cyan-400 hover:to-indigo-500 transition shadow-lg shadow-cyan-500/20 cursor-pointer"
+                onClick={() => setIsSubscriptionModalOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-white font-bold text-xs shadow-lg shadow-amber-500/20 transition flex items-center gap-2 cursor-pointer"
               >
-                <Globe className="w-4 h-4" />
-                <span>1-Click API Setup Portal</span>
+                <Sparkles className="w-4 h-4" />
+                <span>Pro Plans & Metering</span>
               </button>
-
+              <button
+                onClick={() => setIsYouTubeStudioOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-lg shadow-red-500/20 transition flex items-center gap-2 cursor-pointer"
+              >
+                <Video className="w-4 h-4" />
+                <span>YouTube Studio</span>
+              </button>
               <button
                 onClick={handleDownloadZip}
                 disabled={isZipping}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 transition shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <Download className="w-4 h-4" />
-                <span>{isZipping ? 'Creating Archive...' : 'Download Full ZIP'}</span>
-              </button>
-
-              <button
-                onClick={() => setIsDeployGuideOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-200 bg-slate-800/80 border border-slate-700 hover:bg-slate-700/80 hover:text-white transition cursor-pointer"
-              >
-                <Rocket className="w-4 h-4 text-cyan-400" />
-                <span>Deploy Guides</span>
+                <Download className={`w-4 h-4 ${isZipping ? 'animate-bounce' : ''}`} />
+                <span>{isZipping ? 'Bundling...' : 'Download Code .ZIP'}</span>
               </button>
             </div>
           </div>
 
-          {/* Quick Badges */}
+          {/* Feature Highlights Grid */}
           <div className="mt-6 pt-5 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div className="flex items-center gap-2 text-slate-300">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>20 AI Provider Pool</span>
+              <span>100-AI Model Failover</span>
             </div>
             <div className="flex items-center gap-2 text-slate-300">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -608,124 +613,134 @@ venv/
             </div>
             <div className="flex items-center gap-2 text-slate-300">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>YouTube OAuth2 & /yt_seo</span>
+              <span>YouTube SEO & C2PA Scan</span>
             </div>
             <div className="flex items-center gap-2 text-slate-300">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>Admin Sentinel Alerts</span>
+              <span>IP Whitelist & 2FA</span>
             </div>
           </div>
         </section>
 
         {/* Top View Selector Navigation Bar */}
-        <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-2">
-          <div className="flex items-center gap-2">
-            {/* View 1: Live Gateway Simulator (Default) */}
+        <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-2 overflow-x-auto">
+          <div className="flex items-center gap-1.5 min-w-max">
+            {/* View 1: Live Gateway Simulator */}
             <button
               onClick={() => setActiveTab('simulator')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 activeTab === 'simulator'
                   ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/20'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
             >
               <Bot className="w-4 h-4" />
-              <span>Live Gateway Simulator</span>
+              <span>Live Simulator</span>
             </button>
 
-            {/* View 2: Admin Control Dashboard */}
+            {/* View 2: 100-AI Cascade Engine */}
             <button
-              onClick={handleAdminTabClick}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                activeTab === 'admin'
+              onClick={() => setActiveTab('cascade')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'cascade'
                   ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md shadow-indigo-500/20'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
             >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Admin Dashboard</span>
-              {!currentUser && <Lock className="w-3 h-3 text-amber-400/80" />}
+              <Layers className="w-4 h-4 text-amber-400" />
+              <span>100-AI Cascade</span>
             </button>
 
-            {/* View 3: VPS & Cloud Server Manager */}
+            {/* View 3: Omni-Channel Gateways */}
+            <button
+              onClick={() => setActiveTab('gateways')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'gateways'
+                  ? 'bg-gradient-to-r from-cyan-500 to-indigo-600 text-white shadow-md shadow-cyan-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Radio className="w-4 h-4 text-cyan-400" />
+              <span>10 Gateways</span>
+            </button>
+
+            {/* View 4: Enterprise Security & 2FA */}
+            <button
+              onClick={() => setActiveTab('security')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'security'
+                  ? 'bg-gradient-to-r from-emerald-500 to-indigo-600 text-white shadow-md shadow-emerald-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Security & 2FA</span>
+            </button>
+
+            {/* View 5: VPS Server Monitor */}
             <button
               onClick={handleVpsTabClick}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 activeTab === 'vps'
-                  ? 'bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 text-white shadow-md shadow-cyan-500/20'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
             >
-              <Server className="w-4 h-4" />
-              <span>VPS Server Monitor</span>
-              {!currentUser ? (
-                <Lock className="w-3 h-3 text-amber-400/80" />
-              ) : (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              )}
+              <Server className="w-4 h-4 text-blue-400" />
+              <span>VPS Monitor</span>
             </button>
 
-            {/* View 4: AI Media Provenance & Detection Scanner */}
+            {/* View 6: AI Media Scanner */}
             <button
               onClick={() => setActiveTab('scanner')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 activeTab === 'scanner'
-                  ? 'bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 text-white shadow-md shadow-cyan-500/20'
+                  ? 'bg-gradient-to-r from-rose-500 to-purple-600 text-white shadow-md shadow-rose-500/20'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
             >
-              <Scan className="w-4 h-4 text-cyan-300" />
-              <span>AI Media Scanner</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                New
-              </span>
+              <Scan className="w-4 h-4 text-rose-400" />
+              <span>Media Scanner</span>
             </button>
 
-            {/* View 5: Code & Architecture Studio (Protected) */}
+            {/* View 7: Admin Control Dashboard */}
+            <button
+              onClick={handleAdminTabClick}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'admin'
+                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md shadow-purple-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span>Admin Panel</span>
+            </button>
+
+            {/* View 8: Code & Architecture Studio (Protected) */}
             {(!config.hideCodeStudioTab || isCodeStudioUnlocked) && (
               <button
                 onClick={handleStudioTabClick}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
                   activeTab === 'studio'
                     ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/20'
-                    : isCodeStudioUnlocked
-                    ? 'text-slate-300 hover:text-white hover:bg-slate-800'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
-                title={isCodeStudioUnlocked ? 'Code & Architecture Studio' : 'Admin PIN Required'}
               >
                 <Code2 className="w-4 h-4" />
                 <span>Code Studio</span>
                 {isCodeStudioUnlocked ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                     Admin 🔓
                   </span>
                 ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
-                    <Lock className="w-3 h-3" />
-                    <span>PIN</span>
-                  </span>
+                  <Lock className="w-3 h-3 text-amber-400" />
                 )}
               </button>
             )}
           </div>
-
-          <div className="hidden sm:flex items-center gap-3 text-xs text-slate-400 font-mono pr-2">
-            <button
-              onClick={() => handleOpenPortal('groq')}
-              className="text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span>1-Click API Portal</span>
-            </button>
-            <span>•</span>
-            <span>20 APIs</span>
-            <span>•</span>
-            <span>10 Gateways</span>
-          </div>
         </div>
 
-        {/* View 1: Simulator Dedicated Mode (Default) */}
+        {/* View 1: Live Simulator Mode */}
         {activeTab === 'simulator' && (
           <div className="space-y-6">
             {!currentUser && (
@@ -736,30 +751,28 @@ venv/
                   </div>
                   <div>
                     <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                      <span>Developer Authentication Gateway & Session Gate</span>
+                      <span>Developer Authentication & Cloud Storage Gate</span>
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         Guest Mode
                       </span>
                     </h4>
                     <p className="text-xs text-slate-300">
-                      Sign in or complete 6-digit OTP verification to unlock the VPS Server Monitor, 1-Click Multi-Platform Webhook Portal, and Production Admin controls.
+                      Sign in or complete 6-digit OTP verification to unlock VPS Server Monitor, 1-Click Multi-Platform Webhook Portal, and Firestore chat sync.
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => {
-                      setAuthFeatureContext('Developer Workspace');
-                      setAuthModalTab('login');
-                      setIsAuthModalOpen(true);
-                    }}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 transition shadow-md shadow-cyan-500/20 cursor-pointer"
-                  >
-                    <User className="w-3.5 h-3.5" />
-                    <span>Log In / Register (1-Click Demo)</span>
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    setAuthFeatureContext('Developer Workspace');
+                    setAuthModalTab('login');
+                    setIsAuthModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 transition shadow-md shadow-cyan-500/20 cursor-pointer shrink-0"
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Log In / Register (1-Click Demo)</span>
+                </button>
               </div>
             )}
 
@@ -781,61 +794,77 @@ venv/
           </div>
         )}
 
-        {/* View 2: Admin Dashboard */}
-        {activeTab === 'admin' && (
-          <div className="space-y-6">
-            <AdminControlPanel
-              config={config}
-              onChange={handleConfigChange}
-              onShowToast={showToast}
-              onOpenPortal={handleOpenPortal}
-              onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
-              isCodeStudioUnlocked={isCodeStudioUnlocked}
-              onToggleCodeStudioLock={() => {
-                if (isCodeStudioUnlocked) {
-                  handleLockCodeStudio();
-                } else {
-                  setIsPinModalOpen(true);
-                }
-              }}
-              onOpenPinModal={() => setIsPinModalOpen(true)}
-            />
-          </div>
+        {/* View 2: 100-AI Failover Cascade Dashboard */}
+        {activeTab === 'cascade' && (
+          <AiCascadeDashboard
+            config={config}
+            onChange={handleConfigChange}
+            onShowToast={showToast}
+            onOpenPortal={handleOpenPortal}
+          />
         )}
 
-        {/* View 3: VPS & Cloud Server Management Dashboard */}
+        {/* View 3: Omni-Channel Gateways */}
+        {activeTab === 'gateways' && (
+          <OmniChannelGateway
+            config={config}
+            onChange={handleConfigChange}
+            onShowToast={showToast}
+            onOpenPortal={handleOpenPortal}
+          />
+        )}
+
+        {/* View 4: Enterprise Security & 2FA */}
+        {activeTab === 'security' && (
+          <EnterpriseSecurity
+            config={config}
+            onChange={handleConfigChange}
+            onShowToast={showToast}
+          />
+        )}
+
+        {/* View 5: VPS Server Monitor */}
         {activeTab === 'vps' && (
-          <div className="space-y-6">
-            <VpsManager
-              config={config}
-              onChange={handleConfigChange}
-              onShowToast={showToast}
-            />
-          </div>
+          <VpsManager config={config} onChange={handleConfigChange} onShowToast={showToast} />
         )}
 
-        {/* View 4: AI Media Provenance & Detection Scanner */}
-        {activeTab === 'scanner' && (
-          <div className="space-y-6">
-            <AiMediaScanner onShowToast={showToast} />
-          </div>
+        {/* View 6: AI Media Scanner */}
+        {activeTab === 'scanner' && <AiMediaScanner onShowToast={showToast} />}
+
+        {/* View 7: Admin Panel */}
+        {activeTab === 'admin' && (
+          <AdminControlPanel
+            config={config}
+            onChange={handleConfigChange}
+            onShowToast={showToast}
+            onOpenPortal={handleOpenPortal}
+            onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
+            isCodeStudioUnlocked={isCodeStudioUnlocked}
+            onToggleCodeStudioLock={() => {
+              if (isCodeStudioUnlocked) {
+                handleLockCodeStudio();
+              } else {
+                setIsPinModalOpen(true);
+              }
+            }}
+            onOpenPinModal={() => setIsPinModalOpen(true)}
+          />
         )}
 
-        {/* View 5: Studio Mode (Protected Area) */}
+        {/* View 8: Code Studio */}
         {activeTab === 'studio' && (
           <>
             {isCodeStudioUnlocked ? (
               <div className="space-y-4">
-                {/* Admin Mode Top Status Bar */}
                 <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-2xl px-5 py-3 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <ShieldCheck className="w-5 h-5 text-emerald-400" />
                     <div>
                       <span className="text-xs font-bold text-emerald-300">
-                        Admin Mode Active • Source Code & Architecture Unlocked
+                        Admin Mode Active • Raw Source Code Studio Unlocked
                       </span>
                       <p className="text-[11px] text-slate-400">
-                        Full access granted to bot.py, requirements.txt, and cloud deployment manifests.
+                        Edit code files directly in browser or generate production VPS deployment scripts.
                       </p>
                     </div>
                   </div>
@@ -854,6 +883,7 @@ venv/
                       files={generatedFiles}
                       activeFileIndex={activeFileIndex}
                       onSelectFile={setActiveFileIndex}
+                      onShowToast={showToast}
                     />
                     <MemoryInspector config={config} />
                   </div>
@@ -871,7 +901,6 @@ venv/
                 </div>
               </div>
             ) : (
-              /* Security Lock Gate Card */
               <div className="max-w-2xl mx-auto my-12 bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-6 shadow-2xl">
                 <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto shadow-lg shadow-amber-500/20">
                   <Lock className="w-8 h-8" />
@@ -881,7 +910,7 @@ venv/
                     Admin-Only Protected Area
                   </h3>
                   <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-                    The Code & Architecture Studio is restricted to authorized administrators. Enter the 4-digit Admin PIN to view source code files and environment templates.
+                    The Code & Architecture Studio is restricted to authorized administrators. Enter the 4-digit Admin PIN to access live code editing and deployment tools.
                   </p>
                 </div>
                 <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -911,7 +940,7 @@ venv/
           <div className="flex items-center gap-2">
             <Bot className="w-4 h-4 text-cyan-400" />
             <span>
-              Universal AI Multi-Platform Bot Generator • 20 AI Providers • 10 Gateways • YouTube OAuth 2.0
+              Universal Multi-Platform & 100-AI Super-App • Syful Islam Architecture • 10 Gateways • Zero Downtime
             </span>
           </div>
           <div className="flex items-center gap-4">
@@ -919,40 +948,36 @@ venv/
               onClick={() => setIsSubscriptionModalOpen(true)}
               className="text-amber-400 hover:text-amber-300 transition cursor-pointer flex items-center gap-1 font-medium"
             >
-              <span>Subscription & Pro Plans</span>
-              <span className="px-1 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-300 font-bold">SOON</span>
+              <span>Pro Plans & Metering</span>
+              <span className="px-1 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-300 font-bold">ACTIVE</span>
             </button>
             <span>•</span>
             <button
-              onClick={() => handleOpenPortal('groq')}
-              className="hover:text-cyan-400 transition cursor-pointer"
+              onClick={() => setIsYouTubeStudioOpen(true)}
+              className="text-rose-400 hover:text-rose-300 transition cursor-pointer flex items-center gap-1 font-medium"
             >
+              <span>YouTube Studio</span>
+            </button>
+            <span>•</span>
+            <button onClick={() => handleOpenPortal('groq')} className="hover:text-cyan-400 transition cursor-pointer">
               1-Click Setup Portal
             </button>
             <span>•</span>
-            <button
-              onClick={() => setIsDeployGuideOpen(true)}
-              className="hover:text-cyan-400 transition cursor-pointer"
-            >
+            <button onClick={() => setIsDeployGuideOpen(true)} className="hover:text-cyan-400 transition cursor-pointer">
               Cloud Deployment
-            </button>
-            <span>•</span>
-            <button
-              onClick={() => {
-                if (isCodeStudioUnlocked) {
-                  handleLockCodeStudio();
-                } else {
-                  setIsPinModalOpen(true);
-                }
-              }}
-              className="hover:text-amber-400 transition cursor-pointer flex items-center gap-1"
-            >
-              <Lock className="w-3 h-3" />
-              <span>{isCodeStudioUnlocked ? 'Lock Studio' : 'Admin Login'}</span>
             </button>
           </div>
         </div>
       </footer>
+
+      {/* YouTube Media Studio & AI SEO Modal */}
+      <YouTubeStudioModal
+        isOpen={isYouTubeStudioOpen}
+        onClose={() => setIsYouTubeStudioOpen(false)}
+        config={config}
+        onUpdateConfig={handleConfigChange}
+        onShowToast={showToast}
+      />
 
       {/* Admin PIN Verification Modal */}
       <AdminPinModal
@@ -1002,7 +1027,7 @@ venv/
         onShowToast={showToast}
       />
 
-      {/* Floating In-App AI Chat Assistant FAB (Quick-Toggle Button) */}
+      {/* Floating In-App AI Chat Assistant FAB */}
       <div className="fixed bottom-6 left-6 sm:bottom-8 sm:left-8 z-40">
         <button
           onClick={() => setIsAiChatOpen(!isAiChatOpen)}
@@ -1021,7 +1046,7 @@ venv/
             {isAiChatOpen ? 'Close AI Copilot' : 'AI Assistant'}
           </span>
           <span className="hidden sm:inline-block px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase bg-white/20 text-white">
-            PRO
+            100-AI
           </span>
         </button>
       </div>
@@ -1040,7 +1065,7 @@ venv/
           } else if (tab === 'vps') {
             handleVpsTabClick();
           } else {
-            setActiveTab(tab);
+            setActiveTab(tab as any);
           }
         }}
       />

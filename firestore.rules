@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is signed in
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Helper function to check if user is owner of the document
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) || (request.auth != null && request.auth.token.role == 'admin');
+    }
+
+    // Bot Configurations Collection
+    match /bot_configs/{configId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Chat Simulator Messages Collection
+    match /chat_messages/{messageId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn();
+    }
+
+    // Media Provenance Scans Collection
+    match /media_scans/{scanId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // VPS Metrics & Diagnostics Logs Collection
+    match /vps_logs/{logId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Default catch-all rule
+    match /{document=**} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

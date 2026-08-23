@@ -1,4 +1,5 @@
 import { UserAccount, AuthSession, BotConfig } from '../types';
+import { FirestoreDataService } from './firestoreDataService';
 
 const USERS_STORAGE_KEY = 'groq_bot_users_db_v1';
 const SESSION_STORAGE_KEY = 'groq_bot_auth_session_v1';
@@ -161,6 +162,11 @@ export class AuthService {
           this.saveUsers(users);
         }
         this.savePassword(cleanEmail, params.password);
+        if (data.user) {
+          FirestoreDataService.saveUserProfile(data.user).catch(e => {
+            console.warn('[Firestore] Profile backup notice:', e);
+          });
+        }
         return data;
       } else if (!resp.ok) {
         return { success: false, message: data.message || 'Registration failed.' };
@@ -195,6 +201,10 @@ export class AuthService {
     users.push(newUser);
     this.saveUsers(users);
     this.savePassword(cleanEmail, params.password);
+
+    FirestoreDataService.saveUserProfile(newUser).catch(e => {
+      console.warn('[Firestore] Profile backup notice:', e);
+    });
 
     const session: AuthSession = {
       token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
@@ -439,9 +449,16 @@ export class AuthService {
     return session;
   }
 
-  // Permanently save user's bot configuration to server database
+  // Permanently save user's bot configuration to server database and Firestore cloud
   public static async saveUserBotConfig(config: BotConfig, userId?: string): Promise<boolean> {
     const session = this.getCurrentSession();
+    const effectiveUserId = userId || session?.user.id || 'global_default_user';
+
+    // 1. Save to Firestore Cloud Database
+    FirestoreDataService.saveBotConfig(effectiveUserId, config).catch(e => {
+      console.warn('[Firestore] Background config save notice:', e);
+    });
+
     try {
       const resp = await fetch('/api/user/config', {
         method: 'POST',
@@ -451,7 +468,7 @@ export class AuthService {
         },
         body: JSON.stringify({
           config,
-          userId: userId || session?.user.id,
+          userId: effectiveUserId,
         }),
       });
       // Also trigger real-time key sync
@@ -503,22 +520,33 @@ export class AuthService {
     return null;
   }
 
-  // Load user's saved bot configuration from server database
+  // Load user's saved bot configuration from server database or Firestore cloud
   public static async loadUserBotConfig(userId?: string): Promise<BotConfig | null> {
     const session = this.getCurrentSession();
+    const effectiveUserId = userId || session?.user.id || 'global_default_user';
+
     try {
-      const resp = await fetch(`/api/user/config?userId=${encodeURIComponent(userId || session?.user.id || '')}`, {
+      const resp = await fetch(`/api/user/config?userId=${encodeURIComponent(effectiveUserId)}`, {
         headers: {
           ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
         },
       });
       if (resp.ok) {
         const data = await resp.json();
-        return data.config || null;
+        if (data.config) return data.config;
       }
     } catch (e) {
-      console.warn('Failed to load bot config from server DB:', e);
+      console.warn('Failed to load bot config from server DB, trying Firestore:', e);
     }
+
+    // Firestore fallback
+    try {
+      const firestoreConfig = await FirestoreDataService.loadBotConfig(effectiveUserId);
+      if (firestoreConfig) return firestoreConfig;
+    } catch (err) {
+      console.warn('[Firestore] Config fetch notice:', err);
+    }
+
     return null;
   }
 

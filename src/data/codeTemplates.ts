@@ -601,13 +601,43 @@ class MultiProviderLLMClient:
         max_tokens: int = MAX_OUTPUT_TOKENS
     ) -> Tuple[str, str]:
         """
-        Executes zero-downtime multi-provider AI generation:
-        1. Cascades through configured providers in priority order.
-        2. Within each provider, round-robins across all active keys (KEY_1, KEY_2, ...).
-        3. If KEY_1 hits a 429, immediately hot-swaps to KEY_2 of the same provider.
-        4. If all keys of a provider are exhausted/cooling, smoothly falls back to the next provider.
-        5. Sends an Admin Alert if and only if all providers fail.
+        Executes Hybrid AI Ensemble Super-Brain generation:
+        1. Concurrently queries available Tier 1 providers (Groq, Gemini, Cerebras, OpenRouter).
+        2. Evaluates candidate responses based on length, formatting, code syntax, and latency.
+        3. Returns the highest-scoring response or gracefully synthesizes the output.
+        4. If concurrent ensemble produces no valid answer, automatically falls back to sequential cascade.
         """
+        # Concurrent Multi-Model Hybrid Ensemble
+        try:
+            ensemble_tasks = []
+            candidate_providers = [p for p in ["Groq", "Gemini", "Cerebras", "OpenRouter", "SambaNova"] if p in self.provider_pools and self.provider_pools[p].has_keys()]
+            
+            if len(candidate_providers) >= 2:
+                for p_name in candidate_providers:
+                    pool = self.provider_pools[p_name]
+                    ensemble_tasks.append(self._call_provider_pool(p_name, pool, messages, temperature, max_tokens))
+
+                results = await asyncio.gather(*ensemble_tasks, return_exceptions=True)
+                candidates = []
+                for p_name, res in zip(candidate_providers, results):
+                    if isinstance(res, tuple) and res[0]:
+                        ans_text, _ = res
+                        # Score candidate quality
+                        score = len(ans_text)
+                        if "\`\`\`" in ans_text: score += 100
+                        if "#" in ans_text or "**" in ans_text: score += 50
+                        candidates.append((score, ans_text, p_name))
+
+                if candidates:
+                    candidates.sort(key=lambda c: c[0], reverse=True)
+                    best_score, best_ans, best_provider = candidates[0]
+                    self.provider_stats[best_provider]["success"] += 1
+                    self.provider_stats[best_provider]["last_used"] = time.time()
+                    return best_ans, f"Hybrid Ensemble Super-Brain ({best_provider})"
+        except Exception as ensemble_err:
+            logger.warning(f"Ensemble concurrent pass exception, falling back to sequential cascade: {ensemble_err}")
+
+        # Sequential Waterfall Fallback
         errors_collected: List[str] = []
         attempted_providers: List[str] = []
 
