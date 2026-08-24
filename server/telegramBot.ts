@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { ServerDatabase } from './db';
 import { CronWorkerService } from './cronWorker';
+import { TelemetryService } from './telemetryService';
 
 interface ChatTurn {
   role: 'user' | 'assistant';
@@ -967,7 +968,23 @@ class TelegramBotServiceImpl {
     }
 
     // Generate response via Multi-Tier AI Cascade
+    const t0 = Date.now();
     const aiReply = await this.generateAiResponse(text, historyToSend);
+    const latency = Date.now() - t0;
+
+    // Record real-time telemetry from Telegram interaction
+    try {
+      TelemetryService.recordInteraction({
+        providerName: 'Hybrid Super-Brain AI',
+        modelUsed: 'Ensemble Auto-Routed',
+        latencyMs: latency,
+        success: Boolean(aiReply && aiReply.trim()),
+        chatId: rawMsg.chat.id,
+        sender: rawMsg.from?.username ? `@${rawMsg.from.username}` : (rawMsg.from?.first_name || 'Telegram User'),
+        querySnippet: text,
+        isTelegram: true,
+      });
+    } catch {}
 
     // Save to isolated history
     session.turns.push({ role: 'user', content: text, timestamp: Date.now() });
@@ -1137,7 +1154,7 @@ class TelegramBotServiceImpl {
         `TASK: Intelligently merge the most accurate, detailed, and clear components from both candidates into a single, definitive, beautiful Markdown response for Telegram. Preserve complete code blocks, clear headings, and actionable takeaways. Do NOT mention that you are merging candidates. Output ONLY the unified response.`;
 
       const result = await client.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.7-flash',
         contents: synthesisPrompt,
         config: {
           systemInstruction: systemPrompt,

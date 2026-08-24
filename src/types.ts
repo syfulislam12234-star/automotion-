@@ -579,3 +579,58 @@ export interface CronWorkerStatusData {
   };
 }
 
+export interface ProviderPerformanceMetric {
+  providerId: string;
+  providerName: string;
+  category: string;
+  activeModel: string;
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  successRate: number; // e.g. 99.8
+  avgLatencyMs: number;
+  minLatencyMs: number;
+  maxLatencyMs: number;
+  p95LatencyMs: number;
+  latencyHistory: number[];
+  throughputTokensSec: number;
+  telegramMessagesHandled: number;
+  failoverCount: number;
+  costPerMillion: string;
+  lastUsed: string;
+  status: 'optimal' | 'degraded' | 'recovering' | 'standby';
+}
+
+export interface TelegramInteractionEvent {
+  id: string;
+  timestamp: string;
+  chatId: string;
+  sender: string;
+  messageSnippet: string;
+  winnerProvider: string;
+  winnerModel: string;
+  latencyMs: number;
+  status: 'success' | 'failover_recovered' | 'error';
+  ensembleCandidates?: Array<{
+    provider: string;
+    latencyMs: number;
+    score: number;
+    status: 'winner' | 'runner_up' | 'timed_out' | 'failed';
+  }>;
+}
+
+export interface PerformanceDashboardData {
+  totalTelegramQueries: number;
+  overallSuccessRate: number;
+  averageGlobalLatencyMs: number;
+  topSpeedProvider: string;
+  topSpeedLatencyMs: number;
+  topReliabilityProvider: string;
+  topReliabilityRate: number;
+  activeProvidersCount: number;
+  totalModelsMonitored: number;
+  lastUpdated: string;
+  providers: ProviderPerformanceMetric[];
+  recentEvents: TelegramInteractionEvent[];
+}
+

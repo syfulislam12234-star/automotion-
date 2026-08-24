@@ -7,6 +7,7 @@ import { ServerDatabase } from './server/db';
 import { TelegramAdminService } from './server/telegramAdmin';
 import { TelegramBotService } from './server/telegramBot';
 import { CronWorkerService } from './server/cronWorker';
+import { TelemetryService } from './server/telemetryService';
 
 dotenv.config();
 
@@ -751,6 +752,96 @@ async function startServer() {
       latencyMs: latency,
       centralVpsNode: CENTRAL_PLATFORM_STATUS.vpsNode,
     });
+  });
+
+  // ==========================================
+  // REAL-TIME 100-AI TELEMETRY & PERFORMANCE
+  // ==========================================
+
+  // Get full performance metrics, provider rankings, and Telegram event logs
+  app.get('/api/telemetry/performance', (req, res) => {
+    try {
+      const data = TelemetryService.getDashboardData();
+      return res.json({ success: true, data });
+    } catch (err: any) {
+      console.error('Error fetching telemetry performance data:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Telemetry fetch error' });
+    }
+  });
+
+  // Run on-demand multi-provider live benchmark test
+  app.post('/api/telemetry/benchmark', async (req, res) => {
+    try {
+      const { prompt } = req.body;
+      const benchmarkData = await TelemetryService.runLiveBenchmark(prompt);
+      return res.json({ success: true, benchmark: benchmarkData });
+    } catch (err: any) {
+      console.error('Error running telemetry benchmark:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Benchmark error' });
+    }
+  });
+
+  // Simulate real-time Telegram traffic across 100 AI providers for testing
+  app.post('/api/telemetry/simulate', (req, res) => {
+    try {
+      const sampleQueries = [
+        'Analyze real-time crypto signals & volume',
+        'Summarize breaking seismic alerts in South Asia',
+        'Generate optimized SQL index schema',
+        'Explain quantum entanglement in 2 sentences',
+        'Translate English to Bengali with polite honorifics',
+        'Review security firewall policy rules',
+      ];
+      const providers = [
+        { id: 'groq-llama-3-3-70b', name: 'Groq Cloud LPU', model: 'llama-3.3-70b-versatile', baseLat: 68 },
+        { id: 'cerebras-llama-3-3-70b', name: 'Cerebras LPU Wafer', model: 'llama3.3-70b', baseLat: 48 },
+        { id: 'google-gemini-3-7-flash', name: 'Google Gemini 3.7 Flash', model: 'gemini-3.7-flash', baseLat: 165 },
+        { id: 'sambanova-llama-3-3-70b', name: 'SambaNova SN40L', model: 'Meta-Llama-3.3-70B', baseLat: 95 },
+        { id: 'openrouter-deepseek-r1', name: 'OpenRouter (DeepSeek R1)', model: 'deepseek/deepseek-r1:free', baseLat: 220 },
+        { id: 'pollinations-openai', name: 'Pollinations AI (Zero-Key)', model: 'openai', baseLat: 240 },
+        { id: 'mistral-small-latest', name: 'Mistral Small', model: 'mistral-small-latest', baseLat: 190 },
+      ];
+
+      const simulatedEventsCount = Math.floor(Math.random() * 4) + 3;
+      for (let i = 0; i < simulatedEventsCount; i++) {
+        const p = providers[Math.floor(Math.random() * providers.length)];
+        const query = sampleQueries[Math.floor(Math.random() * sampleQueries.length)];
+        const lat = Math.round(p.baseLat + (Math.random() * 35 - 15));
+        const chatId = Math.floor(100000000 + Math.random() * 900000000);
+
+        TelemetryService.recordInteraction({
+          providerId: p.id,
+          providerName: p.name,
+          modelUsed: p.model,
+          latencyMs: lat,
+          success: Math.random() > 0.02,
+          chatId,
+          sender: `@user_${String(chatId).slice(-4)}`,
+          querySnippet: query,
+          isTelegram: true,
+        });
+      }
+
+      const updated = TelemetryService.getDashboardData();
+      return res.json({
+        success: true,
+        message: `Simulated ${simulatedEventsCount} real-time Telegram AI queries.`,
+        data: updated,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Reset telemetry statistics
+  app.post('/api/telemetry/reset', (req, res) => {
+    try {
+      TelemetryService.resetMetrics();
+      const freshData = TelemetryService.getDashboardData();
+      return res.json({ success: true, message: 'Telemetry statistics recalibrated to baseline.', data: freshData });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   // ==========================================

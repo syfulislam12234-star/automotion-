@@ -17,6 +17,7 @@ import { VpsManager } from './components/VpsManager';
 import { AiMediaScanner } from './components/AiMediaScanner';
 import { AiChatModal } from './components/AiChatModal';
 import { AiCascadeDashboard } from './components/AiCascadeDashboard';
+import { PerformanceDashboard } from './components/PerformanceDashboard';
 import { OmniChannelGateway } from './components/OmniChannelGateway';
 import { EnterpriseSecurity } from './components/EnterpriseSecurity';
 import { YouTubeStudioModal } from './components/YouTubeStudioModal';
@@ -315,7 +316,7 @@ export default function App() {
 
   // Active View Tab Navigation
   const [activeTab, setActiveTab] = useState<
-    'simulator' | 'cascade' | 'cron' | 'gateways' | 'security' | 'vps' | 'scanner' | 'admin' | 'studio'
+    'simulator' | 'performance' | 'cascade' | 'cron' | 'gateways' | 'security' | 'vps' | 'scanner' | 'admin' | 'studio'
   >('simulator');
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
@@ -638,7 +639,23 @@ export default function App() {
               <span>Live Simulator</span>
             </button>
 
-            {/* View 2: 100-AI Cascade Engine */}
+            {/* View 2: Performance Dashboard (Real-Time 100-AI Telemetry) */}
+            <button
+              onClick={() => setActiveTab('performance')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'performance'
+                  ? 'bg-gradient-to-r from-cyan-500 via-teal-500 to-emerald-600 text-white shadow-md shadow-cyan-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Activity className="w-4 h-4 text-cyan-400 animate-pulse" />
+              <span>Performance Dashboard</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-cyan-400/20 text-cyan-300 border border-cyan-400/30">
+                100-AI
+              </span>
+            </button>
+
+            {/* View 3: 100-AI Cascade Engine */}
             <button
               onClick={() => setActiveTab('cascade')}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
@@ -810,7 +827,15 @@ export default function App() {
           </div>
         )}
 
-        {/* View 2: 100-AI Failover Cascade Dashboard */}
+        {/* View 2: Performance Dashboard (Real-Time 100-AI Telemetry) */}
+        {activeTab === 'performance' && (
+          <PerformanceDashboard
+            onShowToast={showToast}
+            onOpenAiChat={() => setIsAiChatOpen(true)}
+          />
+        )}
+
+        {/* View 3: 100-AI Failover Cascade Dashboard */}
         {activeTab === 'cascade' && (
           <AiCascadeDashboard
             config={config}
