@@ -49,15 +49,18 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
   const fetchStatus = async () => {
     try {
       const resp = await fetch('/api/cron/status');
-      if (resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
         const data = await resp.json();
-        setStatus(data);
-        setCountdownSeconds(data.timeRemainingSeconds || 0);
-        if (data.targets) setTargets(data.targets);
-        if (data.youtubeChannels) setYoutubeFeeds(data.youtubeChannels);
+        if (data && data.success !== false) {
+          setStatus(data);
+          setCountdownSeconds(data.timeRemainingSeconds || 0);
+          if (data.targets) setTargets(data.targets);
+          if (data.youtubeChannels) setYoutubeFeeds(data.youtubeChannels);
+        }
       }
     } catch (err) {
-      console.error('Error fetching cron status:', err);
+      console.warn('Notice fetching cron status:', err);
     } finally {
       setLoading(false);
     }
@@ -67,12 +70,15 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
   const fetchHistory = async () => {
     try {
       const resp = await fetch('/api/cron/history');
-      if (resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
         const data = await resp.json();
-        setHistory(data.history || []);
+        if (data && Array.isArray(data.history)) {
+          setHistory(data.history);
+        }
       }
     } catch (err) {
-      console.error('Error fetching cron history:', err);
+      console.warn('Notice fetching cron history:', err);
     }
   };
 
@@ -110,13 +116,18 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
-      const data = await resp.json();
-      if (resp.ok && data.success) {
-        onShowToast(`🚀 Broadcast dispatched to ${data.result.totalTargets} Telegram chats!`);
-        fetchStatus();
-        fetchHistory();
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
+        const data = await resp.json();
+        if (data.success) {
+          onShowToast(`🚀 Broadcast dispatched to ${data.result?.totalTargets || 10} Telegram chats!`);
+          fetchStatus();
+          fetchHistory();
+        } else {
+          onShowToast(`❌ Broadcast failed: ${data.message || 'Error'}`);
+        }
       } else {
-        onShowToast(`❌ Broadcast failed: ${data.message || 'Error'}`);
+        onShowToast('❌ Server returned non-JSON response');
       }
     } catch (err: any) {
       onShowToast(`❌ Network error: ${err.message}`);
@@ -131,12 +142,13 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
     setIsPreviewOpen(true);
     try {
       const resp = await fetch('/api/cron/preview');
-      if (resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
         const data = await resp.json();
         setPreviewData(data);
       }
     } catch (err) {
-      console.error('Preview error:', err);
+      console.warn('Preview error:', err);
     } finally {
       setIsLoadingPreview(false);
     }
@@ -154,12 +166,15 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
           youtubeChannels: youtubeFeeds,
         }),
       });
-      const data = await resp.json();
-      if (resp.ok && data.success) {
-        onShowToast('✅ 10 Telegram Targets & YouTube Channels saved permanently!');
-        fetchStatus();
-      } else {
-        onShowToast(`❌ Save failed: ${data.message}`);
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
+        const data = await resp.json();
+        if (data.success) {
+          onShowToast('✅ 10 Telegram Targets & YouTube Channels saved permanently!');
+          fetchStatus();
+        } else {
+          onShowToast(`❌ Save failed: ${data.message}`);
+        }
       }
     } catch (err: any) {
       onShowToast(`❌ Failed to save config: ${err.message}`);

@@ -1244,6 +1244,11 @@ async function startServer() {
   });
 
 
+  // API 404 Guard: Ensure that any unhandled /api/* or /webhook routes NEVER fall through to HTML SPA
+  app.all(['/api/*', '/webhook', '/health'], (req, res) => {
+    return res.status(404).json({ success: false, error: 'API endpoint not found', path: req.path });
+  });
+
   // Vite middleware for development vs static production SPA serving
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

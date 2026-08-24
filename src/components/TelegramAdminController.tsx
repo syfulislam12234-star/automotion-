@@ -95,17 +95,20 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
     setIsLoadingLogs(true);
     try {
       const res = await fetch('/api/telegram-admin/config');
-      const data = await res.json();
-      if (data.success) {
-        if (data.config) {
-          if (data.config.adminChatId) setAdminChatId(data.config.adminChatId);
-          if (data.config.adminBotToken) setAdminBotToken(data.config.adminBotToken);
-          setIsEnabled(data.config.isEnabled !== false);
-          setStrictWhitelist(data.config.strictWhitelist !== false);
-          setAllowRestart(data.config.allowRestart !== false);
-        }
-        if (Array.isArray(data.logs)) {
-          setLogs(data.logs);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data && data.success) {
+          if (data.config) {
+            if (data.config.adminChatId) setAdminChatId(data.config.adminChatId);
+            if (data.config.adminBotToken) setAdminBotToken(data.config.adminBotToken);
+            setIsEnabled(data.config.isEnabled !== false);
+            setStrictWhitelist(data.config.strictWhitelist !== false);
+            setAllowRestart(data.config.allowRestart !== false);
+          }
+          if (Array.isArray(data.logs)) {
+            setLogs(data.logs);
+          }
         }
       }
     } catch (e) {
@@ -132,21 +135,24 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-      if (data.success) {
-        onChange({
-          ...config,
-          telegramAdminBotToken: adminBotToken.trim(),
-          telegramAdminChatId: adminChatId.trim(),
-          adminTelegramId: adminChatId.trim(),
-          enableTelegramAdminController: isEnabled,
-          telegramAdminStrictWhitelist: strictWhitelist,
-          telegramAdminAllowRestart: allowRestart,
-        });
-        onShowToast('🔒 Telegram Admin Controller settings saved & synced to server backend!');
-        fetchBackendConfig();
-      } else {
-        onShowToast(`❌ Error: ${data.message || 'Save failed'}`);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.success) {
+          onChange({
+            ...config,
+            telegramAdminBotToken: adminBotToken.trim(),
+            telegramAdminChatId: adminChatId.trim(),
+            adminTelegramId: adminChatId.trim(),
+            enableTelegramAdminController: isEnabled,
+            telegramAdminStrictWhitelist: strictWhitelist,
+            telegramAdminAllowRestart: allowRestart,
+          });
+          onShowToast('🔒 Telegram Admin Controller settings saved & synced to server backend!');
+          fetchBackendConfig();
+        } else {
+          onShowToast(`❌ Error: ${data.message || 'Save failed'}`);
+        }
       }
     } catch (err: any) {
       onShowToast(`❌ Failed to save config: ${err.message}`);

@@ -920,11 +920,8 @@ class TelegramBotServiceImpl {
       }
 
       default: {
-        await this.sendMessage(
-          chatId,
-          `❓ <b>Unrecognized Command:</b> <code>${this.escapeHtml(cmd)}</code>\n\nType <code>/help</code> to inspect all available commands, or send any normal message to chat with the AI!`,
-          { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id }
-        );
+        // Automatically route any unrecognized slash input to the multi-model AI cascade
+        await this.handlePlainText(chatId, fullText.startsWith('/') ? fullText.slice(1).trim() : fullText, username, rawMsg);
         break;
       }
     }
@@ -1311,7 +1308,7 @@ class TelegramBotServiceImpl {
   }
 
   /**
-   * Resilient Zero-Key Pollinations AI Query Helper
+   * Resilient Zero-Key Pollinations AI Query Helper (Multi-Model Pool)
    */
   private async queryPollinations(
     prompt: string,
@@ -1325,80 +1322,54 @@ class TelegramBotServiceImpl {
       { role: 'user', content: prompt },
     ];
 
-    // Method 1: Pollinations OpenAI POST
-    try {
-      const resp = await fetch('https://text.pollinations.ai/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          model: 'openai',
-          seed: Math.floor(Math.random() * 100000),
-          jsonMode: false,
-        }),
-        signal: AbortSignal.timeout(6000),
-      });
+    const modelsToTry = ['openai', 'mistral', 'llama', 'deepseek', 'searchgpt'];
 
-      if (resp.ok) {
-        const text = await resp.text();
-        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-          let clean = text.trim();
-          try {
-            const parsed = JSON.parse(text);
-            if (parsed.choices?.[0]?.message?.content) {
-              clean = parsed.choices[0].message.content.trim();
+    for (const model of modelsToTry) {
+      // POST Attempt
+      try {
+        const resp = await fetch('https://text.pollinations.ai/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages,
+            model,
+            seed: Math.floor(Math.random() * 100000),
+            jsonMode: false,
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (resp.ok) {
+          const text = await resp.text();
+          if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+            let clean = text.trim();
+            try {
+              const parsed = JSON.parse(text);
+              if (parsed.choices?.[0]?.message?.content) {
+                clean = parsed.choices[0].message.content.trim();
+              }
+            } catch {}
+            if (clean && clean.length > 0) {
+              return { provider: 'Pollinations AI', model, text: clean, latencyMs: Date.now() - start };
             }
-          } catch {}
-          if (clean) {
-            return { provider: 'Pollinations AI', model: 'openai', text: clean, latencyMs: Date.now() - start };
           }
         }
-      }
-    } catch {}
+      } catch {}
 
-    // Method 2: Pollinations Mistral POST
-    try {
-      const resp = await fetch('https://text.pollinations.ai/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          model: 'mistral',
-          seed: Math.floor(Math.random() * 100000),
-        }),
-        signal: AbortSignal.timeout(5000),
-      });
-
-      if (resp.ok) {
-        const text = await resp.text();
-        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-          let clean = text.trim();
-          try {
-            const parsed = JSON.parse(text);
-            if (parsed.choices?.[0]?.message?.content) {
-              clean = parsed.choices[0].message.content.trim();
-            }
-          } catch {}
-          if (clean) {
-            return { provider: 'Pollinations AI', model: 'mistral', text: clean, latencyMs: Date.now() - start };
+      // GET Attempt with system prompt & model
+      try {
+        const getUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=${model}&system=${encodeURIComponent(systemPrompt)}&seed=${Math.floor(Math.random() * 10000)}`;
+        const resp = await fetch(getUrl, { signal: AbortSignal.timeout(4500) });
+        if (resp.ok) {
+          const text = await resp.text();
+          if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+            return { provider: 'Pollinations AI', model, text: text.trim(), latencyMs: Date.now() - start };
           }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
-    // Method 3: Pollinations GET URL with system prompt
-    try {
-      const getUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(systemPrompt)}&seed=${Math.floor(Math.random() * 10000)}`;
-      const resp = await fetch(getUrl, { signal: AbortSignal.timeout(5000) });
-      if (resp.ok) {
-        const text = await resp.text();
-        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-          return { provider: 'Pollinations AI', model: 'text', text: text.trim(), latencyMs: Date.now() - start };
-        }
-      }
-    } catch {}
-
-    // Method 4: Direct prompt GET fallback
+    // Direct fallback GET
     try {
       const getUrl2 = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
       const resp = await fetch(getUrl2, { signal: AbortSignal.timeout(4000) });
