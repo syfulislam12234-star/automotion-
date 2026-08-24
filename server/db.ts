@@ -1,3 +1,6 @@
+/// <reference path="../ambient-modules.d.ts" />
+declare const process: any;
+
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';

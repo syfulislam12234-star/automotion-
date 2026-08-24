@@ -1,3 +1,6 @@
+/// <reference path="../ambient-modules.d.ts" />
+declare const process: any;
+
 import { GoogleGenAI } from '@google/genai';
 import { ServerDatabase } from './db';
 import { CronWorkerService } from './cronWorker';
