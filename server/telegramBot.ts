@@ -345,14 +345,21 @@ class TelegramBotServiceImpl {
         const uptimeSec = Math.floor(process.uptime());
         const mins = Math.floor(uptimeSec / 60);
         const secs = uptimeSec % 60;
+        const mem = process.memoryUsage();
+        const rssMb = (mem.rss / 1024 / 1024).toFixed(1);
+        const dbStats = ServerDatabase.getStats();
+        const cronStatus = CronWorkerService.getStatus();
+
         await this.sendMessage(
           chatId,
-          `🏓 <b>Pong! System Operational</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `• <b>Service Status:</b> <code>ONLINE (Ready)</code>\n` +
+          `🏓 <b>HEALTH & SYSTEM METRICS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `• <b>Server Status:</b> <code>ONLINE 🟢 (Port 3000)</code>\n` +
             `• <b>Uptime:</b> <code>${mins}m ${secs}s</code>\n` +
+            `• <b>RAM Usage:</b> <code>${rssMb}MB RSS</code>\n` +
+            `• <b>Database:</b> <code>${dbStats.savedBotConfigsCount} Configs | ${dbStats.usersCount} Users</code>\n` +
+            `• <b>Cron Worker:</b> <code>${cronStatus.isRunning ? 'ACTIVE 🟢 (3-Hour Loop)' : 'PAUSED ⏸️'}</code>\n` +
             `• <b>Active Chat Buffers:</b> <code>${this.chatMemories.size}</code>\n` +
-            `• <b>Update Mode:</b> <code>${this.runMode.toUpperCase()}</code>\n` +
-            `• <b>AI Cascade Tiers:</b> <code>Groq &rarr; Gemini &rarr; OpenRouter &rarr; Cerebras &rarr; Pollinations</code>`,
+            `• <b>AI Cascade Super-Brain:</b> <code>Groq (LPU) ⚡ | Gemini 🌐 | Cerebras 🚀 | OpenRouter 🔬 | SambaNova ⚡ | Pollinations 🆓</code>`,
           { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id }
         );
         break;
