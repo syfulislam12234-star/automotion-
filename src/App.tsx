@@ -86,7 +86,7 @@ const DEFAULT_CONFIG: BotConfig = {
 
   // 1. Google AI Studio
   enableGeminiFallback: true,
-  geminiModel: 'gemini-2.5-flash',
+  geminiModel: 'gemini-3.7-flash',
   geminiApiKey: '',
 
   // 2. Groq

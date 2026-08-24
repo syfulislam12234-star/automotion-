@@ -382,7 +382,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               value={config.geminiModel}
               onChange={(e) => updateField('geminiModel', e.target.value)}
               className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono"
-              placeholder="gemini-2.5-flash"
+              placeholder="gemini-3.7-flash"
             />
 
             <div className="flex items-center gap-1.5">

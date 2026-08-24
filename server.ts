@@ -34,8 +34,19 @@ async function generateWithGemini(
   const geminiKeys = getProviderApiKeys(['GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3']);
   if (geminiKeys.length === 0) return null;
 
+  // Filter out deprecated models (2.5, 2.0, 1.5) that return 404
+  const cleanPreferred = preferredModel && !preferredModel.includes('2.5') && !preferredModel.includes('2.0') && !preferredModel.includes('1.5')
+    ? preferredModel
+    : undefined;
+
   const candidateModels = Array.from(
-    new Set([preferredModel || 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'])
+    new Set([
+      cleanPreferred || 'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-flash-latest',
+      'gemini-3.1-pro-preview',
+    ])
   ).filter(Boolean) as string[];
 
   for (const apiKey of geminiKeys) {
@@ -65,7 +76,9 @@ async function generateWithGemini(
             return { text: generatedText.trim(), modelUsed: modelName };
           }
         } catch (err: any) {
-          console.warn(`[Gemini Cascade] Model ${modelName} on key ${apiKey.slice(0, 6)}... failed: ${err?.message || err}. Trying next...`);
+          const errMsg = err?.message || String(err);
+          // If 503 high demand spike or 404 model not found, smoothly try next candidate model
+          console.warn(`[Gemini Cascade] Model ${modelName} on key ${apiKey.slice(0, 6)}... (${errMsg.slice(0, 80)}). Trying next candidate...`);
         }
       }
     } catch (clientErr: any) {

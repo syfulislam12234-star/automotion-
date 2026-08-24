@@ -1204,7 +1204,20 @@ class TelegramBotServiceImpl {
     }));
     contentsPayload.push({ role: 'user', parts: [{ text: prompt }] });
 
-    const candidateModels = [process.env.GEMINI_MODEL || 'gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-flash-latest'];
+    const envModel = process.env.GEMINI_MODEL;
+    const cleanEnvModel = envModel && !envModel.includes('2.5') && !envModel.includes('2.0') && !envModel.includes('1.5')
+      ? envModel
+      : undefined;
+
+    const candidateModels = Array.from(
+      new Set([
+        cleanEnvModel || 'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.1-flash-lite',
+        'gemini-flash-latest',
+        'gemini-3.1-pro-preview',
+      ])
+    ).filter(Boolean) as string[];
 
     for (const apiKey of geminiKeys) {
       try {
