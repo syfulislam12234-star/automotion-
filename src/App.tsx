@@ -651,7 +651,23 @@ export default function App() {
               <span>100-AI Cascade</span>
             </button>
 
-            {/* View 3: Omni-Channel Gateways */}
+            {/* View 3: 3-Hour Automated Cron Broadcast Worker */}
+            <button
+              onClick={() => setActiveTab('cron')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'cron'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Clock className="w-4 h-4 text-amber-400" />
+              <span>3H Cron Broadcast</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                10 Chats
+              </span>
+            </button>
+
+            {/* View 4: Omni-Channel Gateways */}
             <button
               onClick={() => setActiveTab('gateways')}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
@@ -804,7 +820,12 @@ export default function App() {
           />
         )}
 
-        {/* View 3: Omni-Channel Gateways */}
+        {/* View 3: 3-Hour Automated Cron Broadcast Worker */}
+        {activeTab === 'cron' && (
+          <CronBroadcastManager onShowToast={showToast} />
+        )}
+
+        {/* View 4: Omni-Channel Gateways */}
         {activeTab === 'gateways' && (
           <OmniChannelGateway
             config={config}
