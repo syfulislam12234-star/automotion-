@@ -1041,6 +1041,9 @@ class TelegramBotServiceImpl {
     // 5. SambaNova Candidate (High-throughput RDU)
     tasks.push(this.querySambaNova(prompt, history, systemPrompt));
 
+    // 6. Zero-Key Pollinations AI Candidate (Universal Free Fallback)
+    tasks.push(this.queryPollinations(prompt, history, systemPrompt));
+
     // Launch all candidates concurrently with a generous 4.5s ceiling
     const settled = await Promise.allSettled(tasks);
     const successfulCandidates = settled
@@ -1054,7 +1057,7 @@ class TelegramBotServiceImpl {
     // If only one model succeeded, return its output directly
     if (successfulCandidates.length === 1) {
       const winner = successfulCandidates[0];
-      return `${winner.text}\n\n⚡ _Processed via Hybrid AI Ensemble Super-Brain [${winner.provider} ${winner.latencyMs}ms]_`;
+      return winner.text.trim();
     }
 
     // Score all candidate responses to find top results
@@ -1087,7 +1090,6 @@ class TelegramBotServiceImpl {
 
     scoredCandidates.sort((a, b) => b.score - a.score);
     const topCandidate = scoredCandidates[0];
-    const contributingProviders = scoredCandidates.map((c) => `${c.provider} (${c.latencyMs}ms)`).join(' ⨂ ');
 
     // If we have both Groq & Gemini (or another complementary reasoning model), perform Intelligent Synthesis
     const geminiCandidate = scoredCandidates.find((c) => c.provider.includes('Gemini'));
@@ -1097,12 +1099,12 @@ class TelegramBotServiceImpl {
       // Both models gave rich answers: try rapid intelligent Super-Brain synthesis
       const synthesized = await this.synthesizeSuperBrain(prompt, groqCandidate.text, geminiCandidate.text, systemPrompt);
       if (synthesized && synthesized.trim()) {
-        return `${synthesized.trim()}\n\n🧠 _Hybrid AI Ensemble Super-Brain: Unified Synthesis [${contributingProviders}]_`;
+        return synthesized.trim();
       }
     }
 
-    // Output highest scored response with ensemble telemetry provenance
-    return `${topCandidate.text}\n\n🧠 _Hybrid AI Ensemble Super-Brain: Evaluated [${contributingProviders}] &rarr; Selected Top Result_`;
+    // Output highest scored response directly
+    return topCandidate.text.trim();
   }
 
   /**
@@ -1308,6 +1310,109 @@ class TelegramBotServiceImpl {
     throw new Error('SambaNova query failed');
   }
 
+  /**
+   * Resilient Zero-Key Pollinations AI Query Helper
+   */
+  private async queryPollinations(
+    prompt: string,
+    history: ChatTurn[],
+    systemPrompt: string
+  ): Promise<{ provider: string; model: string; text: string; latencyMs: number }> {
+    const start = Date.now();
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map((h) => ({ role: h.role, content: h.content })),
+      { role: 'user', content: prompt },
+    ];
+
+    // Method 1: Pollinations OpenAI POST
+    try {
+      const resp = await fetch('https://text.pollinations.ai/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages,
+          model: 'openai',
+          seed: Math.floor(Math.random() * 100000),
+          jsonMode: false,
+        }),
+        signal: AbortSignal.timeout(6000),
+      });
+
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+          let clean = text.trim();
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed.choices?.[0]?.message?.content) {
+              clean = parsed.choices[0].message.content.trim();
+            }
+          } catch {}
+          if (clean) {
+            return { provider: 'Pollinations AI', model: 'openai', text: clean, latencyMs: Date.now() - start };
+          }
+        }
+      }
+    } catch {}
+
+    // Method 2: Pollinations Mistral POST
+    try {
+      const resp = await fetch('https://text.pollinations.ai/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages,
+          model: 'mistral',
+          seed: Math.floor(Math.random() * 100000),
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+          let clean = text.trim();
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed.choices?.[0]?.message?.content) {
+              clean = parsed.choices[0].message.content.trim();
+            }
+          } catch {}
+          if (clean) {
+            return { provider: 'Pollinations AI', model: 'mistral', text: clean, latencyMs: Date.now() - start };
+          }
+        }
+      }
+    } catch {}
+
+    // Method 3: Pollinations GET URL with system prompt
+    try {
+      const getUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(systemPrompt)}&seed=${Math.floor(Math.random() * 10000)}`;
+      const resp = await fetch(getUrl, { signal: AbortSignal.timeout(5000) });
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+          return { provider: 'Pollinations AI', model: 'text', text: text.trim(), latencyMs: Date.now() - start };
+        }
+      }
+    } catch {}
+
+    // Method 4: Direct prompt GET fallback
+    try {
+      const getUrl2 = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
+      const resp = await fetch(getUrl2, { signal: AbortSignal.timeout(4000) });
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+          return { provider: 'Pollinations AI', model: 'fallback', text: text.trim(), latencyMs: Date.now() - start };
+        }
+      }
+    } catch {}
+
+    throw new Error('Pollinations query failed');
+  }
+
   private getGroqKeys(): string[] {
     const keys: string[] = [];
     for (const k of ['GROQ_API_KEY', 'GROQ_API_KEY_1', 'GROQ_API_KEY_2', 'GROQ_API_KEY_3']) {
@@ -1331,7 +1436,7 @@ class TelegramBotServiceImpl {
   }
 
   /**
-   * Sequential Fallback Waterfall: Groq -> Gemini -> OpenRouter -> Cerebras -> SambaNova -> Pollinations -> Deterministic
+   * Sequential Fallback Waterfall: Groq -> Gemini -> OpenRouter -> Cerebras -> SambaNova -> Pollinations
    */
   private async generateSequentialCascade(
     prompt: string,
@@ -1341,69 +1446,40 @@ class TelegramBotServiceImpl {
     // 1. Groq Fallback
     try {
       const res = await this.queryGroq(prompt, history, systemPrompt);
-      if (res && res.text) return res.text;
+      if (res && res.text && res.text.trim()) return res.text.trim();
     } catch {}
 
     // 2. Gemini Fallback
     try {
       const res = await this.queryGemini(prompt, history, systemPrompt);
-      if (res && res.text) return res.text;
+      if (res && res.text && res.text.trim()) return res.text.trim();
     } catch {}
 
     // 3. OpenRouter Fallback
     try {
       const res = await this.queryOpenRouter(prompt, history, systemPrompt);
-      if (res && res.text) return res.text;
+      if (res && res.text && res.text.trim()) return res.text.trim();
     } catch {}
 
     // 4. Cerebras Fallback
     try {
       const res = await this.queryCerebras(prompt, history, systemPrompt);
-      if (res && res.text) return res.text;
+      if (res && res.text && res.text.trim()) return res.text.trim();
     } catch {}
 
     // 5. SambaNova Fallback
     try {
       const res = await this.querySambaNova(prompt, history, systemPrompt);
-      if (res && res.text) return res.text;
+      if (res && res.text && res.text.trim()) return res.text.trim();
     } catch {}
 
-    // 6. Pollinations AI Zero-Key Backup (OpenAI Compatible POST API)
+    // 6. Pollinations AI Zero-Key Multi-Endpoint Fallback
     try {
-      const messages = [
-        { role: 'system', content: systemPrompt },
-        ...history.map((h) => ({ role: h.role, content: h.content })),
-        { role: 'user', content: prompt },
-      ];
-
-      const pResp = await fetch('https://text.pollinations.ai/openai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          model: 'openai',
-          seed: Math.floor(Math.random() * 10000),
-          jsonMode: false,
-        }),
-        signal: AbortSignal.timeout(7000),
-      });
-
-      if (pResp.ok) {
-        const pText = await pResp.text();
-        if (pText && pText.trim() && !pText.startsWith('<!DOCTYPE') && !pText.includes('<html>')) {
-          // If returned JSON with choices, parse it; otherwise return raw text
-          try {
-            const parsed = JSON.parse(pText);
-            const content = parsed.choices?.[0]?.message?.content;
-            if (content && content.trim()) return content.trim();
-          } catch {
-            return pText.trim();
-          }
-        }
-      }
+      const res = await this.queryPollinations(prompt, history, systemPrompt);
+      if (res && res.text && res.text.trim()) return res.text.trim();
     } catch {}
 
-    // 7. Pollinations AI Zero-Key GET Endpoint Fallback
+    // 7. Direct Pollinations GET Fallback
     try {
       const pollinationsUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(
         systemPrompt
@@ -1417,7 +1493,7 @@ class TelegramBotServiceImpl {
       }
     } catch {}
 
-    // 8. Cloudflare Workers AI / Zero-Key Public Mirror Fallback
+    // 8. Public Zero-Key Endpoint Fallback
     try {
       const cfResp = await fetch('https://chutes-deepseek-ai-deepseek-v3.chutes.ai/v1/chat/completions', {
         method: 'POST',
@@ -1440,40 +1516,38 @@ class TelegramBotServiceImpl {
       }
     } catch {}
 
-    // 9. Built-in Contextual Knowledge & Intelligent Conversational Synthesizer
-    return this.generateDeterministicIntelligence(prompt, history);
+    // 9. Pure Conversational Synthesis (Clean, non-diagnostic response)
+    return this.generateDirectConversationalReply(prompt);
   }
 
   /**
-   * High-accuracy conversational generator for offline/unreachable LLM scenarios
+   * Direct conversational handler for network failure scenarios without diagnostic jargon
    */
-  private generateDeterministicIntelligence(prompt: string, history: ChatTurn[]): string {
+  private generateDirectConversationalReply(prompt: string): string {
     const p = prompt.toLowerCase().trim();
 
     if (p.includes('hello') || p.includes('hi') || p.includes('hey') || p === 'salam' || p === 'assalamu alaikum') {
       return (
         `👋 **Hello!**\n\n` +
-        `I am your **Universal Multi-Provider AI Assistant**. I'm here 24/7 to answer questions, analyze code, translate languages, and monitor live alerts.\n\n` +
-        `💡 *How can I help you today? Feel free to ask any question or try commands like \`/status\`, \`/cron\`, or \`/image\`!*`
+        `How can I help you today? Feel free to ask any question or let me know what you'd like to work on!`
       );
     }
 
     if (p.includes('who are you') || p.includes('what can you do')) {
       return (
-        `🤖 **Universal Multi-Provider AI Assistant**\n\n` +
-        `• **Architecture:** 20-tier multi-model waterfall (Groq, Gemini, OpenRouter, Cerebras, Pollinations Zero-Key)\n` +
-        `• **Key Features:** Real-time conversational AI, automated 3-hour Bangladesh breaking news & seismic alerts, YouTube broadcast dispatcher, live weather, code generation, and multi-language translation.\n` +
-        `• **Telegram Controls:** Use \`/status\` to check server metrics, \`/cron\` to inspect broadcast schedules, or \`/help\` for the full catalog!`
+        `🤖 **AI Assistant**\n\n` +
+        `I can help you with answering questions, writing code, translating languages, analyzing text, and providing real-time alerts.\n\n` +
+        `Feel free to ask me anything directly or use commands like \`/translate\`, \`/summarize\`, \`/code\`, or \`/image\`!`
       );
     }
 
-    // Default intelligent markdown synthesis
+    if (p.includes('thank') || p.includes('thanks')) {
+      return `You're very welcome! Let me know if there's anything else you need.`;
+    }
+
     return (
-      `🧠 **AI Assistant Synthesis**\n\n` +
-      `Here is the breakdown regarding **"${this.escapeHtml(prompt.length > 80 ? prompt.slice(0, 80) + '...' : prompt)}"**:\n\n` +
-      `• 📌 **Core Analysis:** Your query was processed through our active AI gateway engine with continuous sliding-window context retention.\n` +
-      `• ⚡ **Multi-Tier Cascade:** The system guarantees uninterrupted zero-downtime operation across all Telegram chat groups.\n` +
-      `• 💡 **Next Steps:** You can refine your question, request code generation via \`/code\`, or inspect backend telemetry via \`/status\`!`
+      `I have received your message regarding **"${prompt.length > 60 ? prompt.slice(0, 60) + '...' : prompt}"**.\n\n` +
+      `Could you please provide more details or specify what you would like to explore next?`
     );
   }
 
