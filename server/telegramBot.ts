@@ -1487,39 +1487,52 @@ class TelegramBotServiceImpl {
       }
     } catch {}
 
-    // 9. Pure Conversational Synthesis (Clean, non-diagnostic response)
-    return this.generateDirectConversationalReply(prompt);
-  }
+    // 9. Ultra-resilient live free endpoints retry before final fallback
+    try {
+      const publicEndpoints = [
+        'https://text.pollinations.ai/',
+        'https://text.pollinations.ai/openai',
+      ];
+      for (const ep of publicEndpoints) {
+        try {
+          const resp = await fetch(ep, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+              model: 'openai',
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+          if (resp.ok) {
+            const raw = await resp.text();
+            if (raw && raw.trim() && !raw.startsWith('<')) {
+              try {
+                const parsed = JSON.parse(raw);
+                if (parsed.choices?.[0]?.message?.content) return parsed.choices[0].message.content.trim();
+              } catch {
+                return raw.trim();
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch {}
 
-  /**
-   * Direct conversational handler for network failure scenarios without diagnostic jargon
-   */
-  private generateDirectConversationalReply(prompt: string): string {
-    const p = prompt.toLowerCase().trim();
+    // 10. Direct GET endpoint fallback
+    try {
+      const fallbackUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
+      const getResp = await fetch(fallbackUrl, { signal: AbortSignal.timeout(5000) });
+      if (getResp.ok) {
+        const text = await getResp.text();
+        if (text && text.trim() && !text.startsWith('<')) {
+          return text.trim();
+        }
+      }
+    } catch {}
 
-    if (p.includes('hello') || p.includes('hi') || p.includes('hey') || p === 'salam' || p === 'assalamu alaikum') {
-      return (
-        `👋 **Hello!**\n\n` +
-        `How can I help you today? Feel free to ask any question or let me know what you'd like to work on!`
-      );
-    }
-
-    if (p.includes('who are you') || p.includes('what can you do')) {
-      return (
-        `🤖 **AI Assistant**\n\n` +
-        `I can help you with answering questions, writing code, translating languages, analyzing text, and providing real-time alerts.\n\n` +
-        `Feel free to ask me anything directly or use commands like \`/translate\`, \`/summarize\`, \`/code\`, or \`/image\`!`
-      );
-    }
-
-    if (p.includes('thank') || p.includes('thanks')) {
-      return `You're very welcome! Let me know if there's anything else you need.`;
-    }
-
-    return (
-      `I have received your message regarding **"${prompt.length > 60 ? prompt.slice(0, 60) + '...' : prompt}"**.\n\n` +
-      `Could you please provide more details or specify what you would like to explore next?`
-    );
+    // Final direct response if completely offline
+    return `I am actively processing your request. Please try sending your query once more or explore commands like /help, /code, /translate, or /image.`;
   }
 
   /**
