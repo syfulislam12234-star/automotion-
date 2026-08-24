@@ -53,6 +53,7 @@ class TelegramBotServiceImpl {
 
   // Contextual Memory & Sliding Window Buffer per Chat ID
   private chatMemories: Map<string, ChatMemorySession> = new Map();
+  private chatModes: Map<string, 'ai' | 'youtube'> = new Map();
 
   // Sliding Window Memory Bounds
   private readonly MAX_MEMORY_TURNS = 16;
@@ -435,44 +436,55 @@ class TelegramBotServiceImpl {
       tags = ['youtube automation', 'telegram bot', 'ai engineering', 'groq lpu', 'deepseek r1'];
     }
 
-    // Generate YouTube Video ID & URLs
-    const videoIdChars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz0123456789-_';
-    let generatedVideoId = '';
-    for (let i = 0; i < 11; i++) {
-      generatedVideoId += videoIdChars.charAt(Math.floor(Math.random() * videoIdChars.length));
-    }
+    let uploadedVideoId = '';
+    try {
+      const savedConfig = Object.values(ServerDatabase.getAllBotConfigs())
+        .map((entry: any) => entry?.config)
+        .find((entry: any) => entry?.telegramBotToken === this.token && entry?.youtubeRefreshToken && entry?.youtubeClientId && entry?.youtubeClientSecret);
+      const clientId = savedConfig?.youtubeClientId || process.env.YOUTUBE_CLIENT_ID;
+      const clientSecret = savedConfig?.youtubeClientSecret || process.env.YOUTUBE_CLIENT_SECRET;
+      const refreshToken = savedConfig?.youtubeRefreshToken || process.env.YOUTUBE_REFRESH_TOKEN;
+      const apiKey = savedConfig?.youtubeApiKey || process.env.YOUTUBE_API_KEY;
 
-    const youtubeWatchUrl = `https://youtu.be/${generatedVideoId}`;
-    const studioEditUrl = `https://studio.youtube.com/video/${generatedVideoId}/edit`;
-
-    // Check for Google OAuth Token in environment
-    const googleToken = process.env.YOUTUBE_OAUTH_TOKEN || process.env.GOOGLE_ACCESS_TOKEN;
-    if (googleToken && fileId && this.token) {
-      try {
-        await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${googleToken}`,
-            'Content-Type': 'application/json; charset=UTF-8',
-            'X-Upload-Content-Type': videoObj.mime_type || 'video/mp4',
-          },
-          body: JSON.stringify({
-            snippet: {
-              title: videoTitle,
-              description: videoDescription,
-              tags,
-              categoryId: '28',
-            },
-            status: {
-              privacyStatus: 'public',
-              selfDeclaredMadeForKids: false,
-            },
-          }),
-        });
-      } catch (ytErr) {
-        console.warn('[TelegramBot] YouTube API direct dispatch notice:', ytErr);
+      if (!fileId || !clientId || !clientSecret || !refreshToken) {
+        throw new Error('YouTube OAuth credentials are not configured for this Telegram bot.');
       }
+
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }),
+      });
+      const tokenData = await tokenResponse.json();
+      if (!tokenResponse.ok || !tokenData.access_token) throw new Error(tokenData.error_description || 'Unable to refresh YouTube OAuth token.');
+
+      const fileInfo = await this.callApi<{ file_path?: string }>('getFile', { file_id: fileId });
+      if (!fileInfo.file_path) throw new Error('Telegram did not return a downloadable video path.');
+      const sourceResponse = await fetch(`https://api.telegram.org/file/bot${this.token}/${fileInfo.file_path}`, { signal: AbortSignal.timeout(30000) });
+      if (!sourceResponse.ok) throw new Error(`Telegram video download failed (${sourceResponse.status}).`);
+      const videoData = await sourceResponse.arrayBuffer();
+      const mimeType = videoObj.mime_type || 'video/mp4';
+
+      const initResponse = await fetch(`https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenData.access_token}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': mimeType, 'X-Upload-Content-Length': String(videoData.byteLength) },
+        body: JSON.stringify({ snippet: { title: videoTitle, description: videoDescription, tags, categoryId: savedConfig?.youtubeDefaultCategory || '22' }, status: { privacyStatus: savedConfig?.youtubeDefaultPrivacy || 'public', selfDeclaredMadeForKids: false } }),
+      });
+      const uploadUrl = initResponse.headers.get('location');
+      if (!initResponse.ok || !uploadUrl) throw new Error('YouTube did not provide an upload URL.');
+
+      const uploadResponse = await fetch(uploadUrl, { method: 'PUT', headers: { Authorization: `Bearer ${tokenData.access_token}`, 'Content-Type': mimeType, 'Content-Length': String(videoData.byteLength) }, body: videoData });
+      const uploadData = await uploadResponse.json().catch(() => ({}));
+      if (!uploadResponse.ok || !uploadData.id) throw new Error(uploadData.error?.message || `YouTube upload failed (${uploadResponse.status}).`);
+      uploadedVideoId = uploadData.id;
+    } catch (ytErr: any) {
+      console.error('[TelegramBot] YouTube upload failed:', ytErr?.message || ytErr);
+      await this.sendMessage(chatId, `⚠️ <b>YouTube upload failed:</b> ${this.escapeHtml(ytErr?.message || 'Unknown upload error')}`, { parse_mode: 'HTML', reply_to_message_id: msg.message_id });
+      return;
     }
+
+    const youtubeWatchUrl = `https://youtu.be/${uploadedVideoId}`;
+    const studioEditUrl = `https://studio.youtube.com/video/${uploadedVideoId}/edit`;
 
     // Record Telemetry
     TelemetryService.recordInteraction({
@@ -554,6 +566,54 @@ class TelegramBotServiceImpl {
     const isAdmin = this.checkIsAdmin(chatId);
 
     switch (cmd) {
+      case '/control': {
+        if (!this.isControlAdmin(chatId)) {
+          await this.sendMessage(chatId, '⛔ <b>ACCESS DENIED:</b> The <code>/control</code> command is restricted to the configured administrator.', { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+          return;
+        }
+
+        const controlCommand = (args || '').toLowerCase().trim();
+        if (controlCommand === 'cron on' || controlCommand === 'cron enable') {
+          CronWorkerService.updateConfig({ enabled: true });
+          await this.sendMessage(chatId, '✅ <b>3-hour news broadcast enabled.</b>', { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+          return;
+        }
+        if (controlCommand === 'cron off' || controlCommand === 'cron disable') {
+          CronWorkerService.updateConfig({ enabled: false });
+          await this.sendMessage(chatId, '⏸️ <b>3-hour news broadcast paused.</b>', { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+          return;
+        }
+        if (controlCommand === 'cron run' || controlCommand === 'broadcast') {
+          try {
+            const result = await CronWorkerService.triggerNow();
+            await this.sendMessage(chatId, `📢 <b>Broadcast diagnostic complete:</b> <code>${result.successfulSends}/${result.totalTargets} delivered</code>, <code>${result.failedSends} failed</code>.`, { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+          } catch (error: any) {
+            await this.sendMessage(chatId, `❌ <b>Broadcast diagnostic failed:</b> ${this.escapeHtml(error?.message || 'Unknown error')}`, { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+          }
+          return;
+        }
+
+        try {
+          const report = await this.controlReport(controlCommand);
+          await this.sendMessage(chatId, report, { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+        } catch (error: any) {
+          await this.sendMessage(chatId, `❌ <b>Control diagnostic failed:</b> ${this.escapeHtml(error?.message || 'Unknown error')}`, { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+        }
+        return;
+      }
+
+      case '/yt': {
+        this.chatModes.set(String(chatId), 'youtube');
+        await this.sendMessage(chatId, '🎬 <b>YouTube Mode enabled.</b> Send a video or ask for SEO, titles, descriptions, tags, and channel strategy. Use <code>/ai</code> to return to standard chat.', { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+        break;
+      }
+
+      case '/ai': {
+        this.chatModes.set(String(chatId), 'ai');
+        await this.sendMessage(chatId, '🤖 <b>AI Chat mode enabled.</b> Your messages now use standard conversational AI.', { parse_mode: 'HTML', reply_to_message_id: rawMsg.message_id });
+        break;
+      }
+
       case '/start': {
         const welcome =
           `🤖 <b>UNIVERSAL MULTI-PROVIDER AI & YOUTUBE MEDIA STUDIO</b>\n` +
@@ -612,6 +672,7 @@ class TelegramBotServiceImpl {
           (isAdmin ? `• <code>/targets</code> - List all 10 predefined recipient groups\n` : '') +
           (isAdmin ? `• <code>/deploy</code> - Inspect Cloud Run production deployment state\n` : '') +
           (isAdmin ? `• <code>/restart</code> - Safe backend reload & memory flush\n` : '') +
+          (isAdmin ? `• <code>/control [status|verify|diagnose]</code> - Admin health checks and cron controls\n` : '') +
           `\n💡 <i>Tip: Send any video file into this chat to upload directly to your YouTube channel!</i>`;
         await this.sendMessage(chatId, helpText, { parse_mode: 'HTML' });
         break;
@@ -1347,9 +1408,13 @@ class TelegramBotServiceImpl {
       });
     }
 
+    const effectiveText = this.chatModes.get(chatIdStr) === 'youtube'
+      ? `You are helping a YouTube creator. Give practical YouTube strategy and SEO guidance, including optimized titles, descriptions, tags, hooks, and audience growth advice when relevant. User request: ${text}`
+      : text;
+
     // Generate response via Multi-Tier AI Cascade
     const t0 = Date.now();
-    const aiReply = await this.generateAiResponse(text, historyToSend);
+    const aiReply = await this.generateAiResponse(effectiveText, historyToSend);
     const latency = Date.now() - t0;
 
     // Record real-time telemetry from Telegram interaction
@@ -2101,6 +2166,94 @@ class TelegramBotServiceImpl {
 
     const allowed = this.adminId.split(',').map((s) => s.trim().replace(/^@/, ''));
     return allowed.includes(idStr);
+  }
+
+  private isControlAdmin(chatId: number | string): boolean {
+    if (this.checkIsAdmin(chatId)) return true;
+    const id = String(chatId).trim();
+    return Object.values(ServerDatabase.getAllBotConfigs()).some((entry: any) => {
+      const config = entry?.config || {};
+      return [config.adminTelegramId, config.telegramAdminChatId]
+        .flatMap((value) => String(value || '').split(','))
+        .map((value) => value.trim().replace(/^@/, ''))
+        .filter(Boolean)
+        .includes(id);
+    });
+  }
+
+  private async runControlCheck(label: string, check: () => Promise<void>): Promise<string> {
+    try {
+      await check();
+      return `✅ <b>${label}:</b> <code>VALID</code>`;
+    } catch (error: any) {
+      return `❌ <b>${label}:</b> <code>${this.escapeHtml(error?.message || 'Check failed')}</code>`;
+    }
+  }
+
+  private async controlReport(subCommand: string): Promise<string> {
+    const configs = Object.values(ServerDatabase.getAllBotConfigs())
+      .map((entry: any) => entry?.config)
+      .filter(Boolean);
+    const cronStatus = CronWorkerService.getStatus();
+    const checks: Promise<string>[] = [];
+
+    const telegramTokens = [...new Set(configs.map((config: any) => config.telegramBotToken).filter(Boolean))];
+    for (const token of telegramTokens) {
+      checks.push(this.runControlCheck('Telegram token', async () => {
+        const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(8000) });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.description || `HTTP ${response.status}`);
+      }));
+    }
+
+    const geminiKeys = [...new Set(configs.flatMap((config: any) => [config.geminiApiKey, ...(config.geminiApiKeys || [])]).filter(Boolean))];
+    for (const key of geminiKeys) {
+      checks.push(this.runControlCheck('Gemini API key', async () => {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, { signal: AbortSignal.timeout(8000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      }));
+    }
+
+    for (const config of configs) {
+      if (config.enableWhatsApp && config.whatsappAccessToken && config.whatsappPhoneNumberId) {
+        checks.push(this.runControlCheck('WhatsApp credentials', async () => {
+          const response = await fetch(`https://graph.facebook.com/v20.0/${encodeURIComponent(config.whatsappPhoneNumberId)}`, { headers: { Authorization: `Bearer ${config.whatsappAccessToken}` }, signal: AbortSignal.timeout(8000) });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        }));
+      }
+      if (config.enableLine && config.lineChannelAccessToken) {
+        checks.push(this.runControlCheck('LINE access token', async () => {
+          const response = await fetch('https://api.line.me/v2/bot/info', { headers: { Authorization: `Bearer ${config.lineChannelAccessToken}` }, signal: AbortSignal.timeout(8000) });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        }));
+      }
+      if (config.youtubeClientId && config.youtubeClientSecret && config.youtubeRefreshToken) {
+        checks.push(this.runControlCheck('YouTube OAuth credentials', async () => {
+          const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: config.youtubeClientId, client_secret: config.youtubeClientSecret, refresh_token: config.youtubeRefreshToken, grant_type: 'refresh_token' }), signal: AbortSignal.timeout(8000) });
+          const data = await response.json();
+          if (!response.ok || !data.access_token) throw new Error(data.error_description || `HTTP ${response.status}`);
+        }));
+      }
+      if (config.youtubeApiKey) {
+        checks.push(this.runControlCheck('YouTube API key', async () => {
+          const response = await fetch(`https://www.googleapis.com/youtube/v3/i18nLanguages?part=snippet&key=${encodeURIComponent(config.youtubeApiKey)}`, { signal: AbortSignal.timeout(8000) });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        }));
+      }
+    }
+
+    if (subCommand === 'verify' || subCommand === 'diagnose' || subCommand === 'status' || !subCommand) {
+      const results = await Promise.all(checks);
+      const activeChannelSessions = ServerDatabase.getAllChannels().filter((channel) => channel.enabled && channel.status === 'running').length;
+      return `🛡️ <b>ADMIN CONTROL STATUS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `• <b>Registered Users:</b> <code>${ServerDatabase.getStats().usersCount}</code>\n` +
+        `• <b>Saved Configs:</b> <code>${configs.length}</code>\n` +
+        `• <b>Active Bot Sessions:</b> <code>${activeChannelSessions + (this.isRunning ? 1 : 0)}</code>\n` +
+        `• <b>Cron News Broadcast:</b> <code>${cronStatus.isRunning ? 'ACTIVE' : 'PAUSED'}</code>\n` +
+        `• <b>Configured Channels:</b> <code>${ServerDatabase.getAllChannels().filter((channel) => channel.enabled).length}</code>\n\n` +
+        `<b>Credential Checks:</b>\n${results.length ? results.join('\n') : 'ℹ️ No saved credentials found.'}`;
+    }
+    return '❓ Usage: <code>/control</code>, <code>/control status</code>, <code>/control verify</code>, <code>/control diagnose</code>, <code>/control cron on|off|run</code>';
   }
 
   /**

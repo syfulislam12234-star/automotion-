@@ -8,6 +8,8 @@ import { TelegramAdminService } from './server/telegramAdmin';
 import { TelegramBotService } from './server/telegramBot';
 import { CronWorkerService } from './server/cronWorker';
 import { TelemetryService } from './server/telemetryService';
+import { MultiChannelGateway } from './server/multiChannelGateway';
+import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 
 dotenv.config();
 
@@ -330,7 +332,22 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buffer) => {
+      (req as express.Request & { rawBody?: string }).rawBody = buffer.toString('utf8');
+    },
+  }));
+
+  const multiChannelGateway = new MultiChannelGateway(async ({ prompt, model, systemPrompt, history }) => {
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/ai/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Channel-Request': 'true' },
+      body: JSON.stringify({ prompt, model, systemPrompt, history, enableEnsemble: false, platform: 'managed-channel' }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success || !data.text) throw new Error(data.error || 'AI generation failed.');
+    return data.text;
+  });
 
   // Initialize Real Production Telegram Bot Engine (Polling or Webhook mode)
   try {
@@ -413,6 +430,68 @@ async function startServer() {
   app.post('/api/webhook', webhookHandler);
   app.post('/api/telegram-admin/webhook', webhookHandler);
 
+  app.get('/api/webhook/whatsapp/:channelId', (req, res) => {
+    try {
+      const challenge = multiChannelGateway.verifyWhatsApp(
+        req.params.channelId,
+        String(req.query['hub.mode'] || ''),
+        String(req.query['hub.verify_token'] || ''),
+        String(req.query['hub.challenge'] || '')
+      );
+      return res.status(200).send(challenge);
+    } catch (error: any) {
+      return res.status(403).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post('/api/webhook/:channelId', async (req, res) => {
+    try {
+      const signature = String(req.headers['x-line-signature'] || req.headers['x-telegram-bot-api-secret-token'] || '');
+      await multiChannelGateway.handleWebhook(req.params.channelId, req.body, signature, (req as express.Request & { rawBody?: string }).rawBody);
+      return res.status(200).json({ ok: true });
+    } catch (error: any) {
+      console.error(`❌ [Channel Webhook ${req.params.channelId}]`, error);
+      return res.status(200).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get('/api/channels', (req, res) => {
+    const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+    if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+    return res.json({ success: true, channels: multiChannelGateway.listForUser(user.id) });
+  });
+
+  app.post('/api/channels', async (req, res) => {
+    const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+    if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+    try {
+      const input = req.body || {};
+      const channel = await multiChannelGateway.configure({
+        id: String(input.id || `${user.id}:${input.platform}`),
+        userId: user.id,
+        platform: String(input.platform || ''),
+        enabled: input.enabled !== false,
+        mode: input.mode === 'polling' ? 'polling' : 'webhook',
+        credentials: input.credentials || {},
+        modelId: input.modelId || input.modelName,
+        systemPrompt: input.systemPrompt,
+        status: 'configured',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      return res.status(200).json({ success: true, channel });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  });
+
+  app.delete('/api/channels/:channelId', async (req, res) => {
+    const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+    if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+    const removed = await multiChannelGateway.remove(req.params.channelId, user.id);
+    return res.json({ success: removed, removed });
+  });
+
   // Centralized Infrastructure Status Endpoint for Pro Users
   app.get('/api/infrastructure/status', (req, res) => {
     res.json({
@@ -428,6 +507,9 @@ async function startServer() {
   app.post('/api/ai/generate', async (req, res) => {
     try {
       const { prompt, systemPrompt, model, platform, history, isChatAssistant, enableEnsemble = true } = req.body;
+      const selectedCatalogModel = GLOBAL_100_AI_MODELS.find(entry => entry.id === model || entry.modelId === model);
+      const selectedProvider = selectedCatalogModel?.provider.toLowerCase() || '';
+      const selectedProviderModel = selectedCatalogModel?.modelId || model;
 
       if (!prompt && (!history || history.length === 0)) {
         return res.status(400).json({ error: 'Missing prompt or history in request body' });
@@ -577,7 +659,9 @@ async function startServer() {
 
       // Sequential Waterfall Fallback (if ensemble is disabled or returned zero responses)
       // Tier 1: Groq Cloud LPU
-      const groqResult = await generateWithGroq(groqMessages, model && model.includes('llama') ? model : undefined);
+      const groqResult = selectedProvider && selectedProvider !== 'groq'
+        ? null
+        : await generateWithGroq(groqMessages, selectedProviderModel && selectedProviderModel.includes('llama') ? selectedProviderModel : undefined);
       if (groqResult && groqResult.text) {
         return res.json({
           success: true,
@@ -589,7 +673,9 @@ async function startServer() {
       }
 
       // Tier 2: Google Gemini
-      const geminiResult = await generateWithGemini(contentsPayload, effectiveSysInstruction, model);
+      const geminiResult = selectedProvider && selectedProvider !== 'google'
+        ? null
+        : await generateWithGemini(contentsPayload, effectiveSysInstruction, selectedProviderModel);
       if (geminiResult && geminiResult.text) {
         return res.json({
           success: true,
@@ -601,7 +687,9 @@ async function startServer() {
       }
 
       // Tier 3: OpenRouter
-      const openRouterResult = await generateWithOpenRouter(groqMessages, model && model.includes('deepseek') ? model : undefined);
+      const openRouterResult = selectedProvider && selectedProvider !== 'deepseek' && selectedProvider !== 'openrouter'
+        ? null
+        : await generateWithOpenRouter(groqMessages, selectedProviderModel && selectedProviderModel.includes('deepseek') ? selectedProviderModel : undefined);
       if (openRouterResult && openRouterResult.text) {
         return res.json({
           success: true,
@@ -613,7 +701,9 @@ async function startServer() {
       }
 
       // Tier 4: Cerebras
-      const cerebrasResult = await generateWithCerebras(groqMessages);
+      const cerebrasResult = selectedProvider && selectedProvider !== 'cerebras'
+        ? null
+        : await generateWithCerebras(groqMessages);
       if (cerebrasResult && cerebrasResult.text) {
         return res.json({
           success: true,
@@ -625,7 +715,9 @@ async function startServer() {
       }
 
       // Tier 5: SambaNova
-      const sambaNovaResult = await generateWithSambaNova(groqMessages);
+      const sambaNovaResult = selectedProvider && selectedProvider !== 'sambanova'
+        ? null
+        : await generateWithSambaNova(groqMessages);
       if (sambaNovaResult && sambaNovaResult.text) {
         return res.json({
           success: true,
@@ -638,7 +730,9 @@ async function startServer() {
 
       // Tier 6: Zero-Key Pollinations AI Dynamic Generation
       const userQuery = String(prompt || (Array.isArray(history) && history.length > 0 ? history[history.length - 1].content : 'Hello')).trim();
-      const pollinationsResult = await generateWithPollinations(groqMessages, effectiveSysInstruction, userQuery);
+      const pollinationsResult = selectedProvider && selectedProvider !== 'pollinations'
+        ? null
+        : await generateWithPollinations(groqMessages, effectiveSysInstruction, userQuery);
       if (pollinationsResult && pollinationsResult.text) {
         return res.json({
           success: true,
@@ -1008,6 +1102,9 @@ async function startServer() {
       }
 
       const result = ServerDatabase.saveBotConfig(targetId, config);
+      void multiChannelGateway.syncFromBotConfig(targetId, config).catch((syncError: any) => {
+        console.error(`❌ [Channel Sync ${targetId}]`, syncError);
+      });
       return res.json({
         success: true,
         message: 'Bot configuration permanently saved to server database.',
@@ -1072,6 +1169,9 @@ async function startServer() {
 
       // 1. Save permanently to database
       ServerDatabase.saveBotConfig(targetId, config);
+      void multiChannelGateway.syncFromBotConfig(targetId, config).catch((syncError: any) => {
+        console.error(`❌ [Channel Sync ${targetId}]`, syncError);
+      });
 
       // 2. Synchronize Telegram Admin Service credentials
       const adminChatId = config.telegramAdminChatId || config.adminTelegramId;
@@ -1382,10 +1482,14 @@ async function startServer() {
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Universal Bot Server running on http://0.0.0.0:${PORT}`);
+    void multiChannelGateway.startAll().catch((error: any) => {
+      console.error('❌ [MultiChannelGateway] Startup exception:', error);
+    });
   });
 
   const shutdown = async (signal: string) => {
     console.log(`\n🛑 [Server] Received ${signal}. Initiating graceful shutdown...`);
+    await multiChannelGateway.stopAll();
     await TelegramBotService.stop();
     server.close(() => {
       console.log('✅ [Server] HTTP server closed. Process exiting.');

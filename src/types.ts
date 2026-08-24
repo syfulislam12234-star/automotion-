@@ -194,6 +194,7 @@ export interface BotConfig {
 
   // YouTube OAuth & Automation Suite
   enableYouTubeAutomation: boolean;
+  youtubeApiKey: string;
   youtubeClientId: string;
   youtubeClientSecret: string;
   youtubeRefreshToken: string;

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AuthService } from '../services/authService';
 import { BotConfig } from '../types';
 import {
   Sliders,
@@ -65,15 +66,105 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model'>('providers');
   const [testResults, setTestResults] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid' | 'idle'; latency?: number }>>({});
+  const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
+  const channelSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const toggleReveal = (field: string) => {
     setRevealedFields((prev) => ({ ...prev, [field]: !prev[field] }));
   };
 
   const updateField = <K extends keyof BotConfig>(key: K, value: BotConfig[K]) => {
-    onChange({ ...config, [key]: value });
+    const nextConfig = { ...config, [key]: value };
+    onChange(nextConfig);
+    const channelByField: Partial<Record<keyof BotConfig, string>> = {
+      enableTelegram: 'telegram',
+      telegramBotToken: 'telegram',
+      enableWhatsApp: 'whatsapp',
+      whatsappPhoneNumberId: 'whatsapp',
+      whatsappAccessToken: 'whatsapp',
+      whatsappVerifyToken: 'whatsapp',
+      enableLine: 'line',
+      lineChannelSecret: 'line',
+      lineChannelAccessToken: 'line',
+    };
+    const platform = channelByField[key];
+    if (!platform) return;
+    if (channelSyncTimers.current[platform]) clearTimeout(channelSyncTimers.current[platform]);
+    channelSyncTimers.current[platform] = setTimeout(() => {
+      void syncChannel(platform, nextConfig);
+    }, 500);
   };
+
+  const syncChannel = async (platform: string, nextConfig: BotConfig) => {
+    const enabled = platform === 'telegram' ? nextConfig.enableTelegram : platform === 'whatsapp' ? nextConfig.enableWhatsApp : nextConfig.enableLine;
+    const credentials = platform === 'telegram'
+      ? { token: nextConfig.telegramBotToken || '' }
+      : platform === 'whatsapp'
+        ? { phoneNumberId: nextConfig.whatsappPhoneNumberId || '', accessToken: nextConfig.whatsappAccessToken || '', verifyToken: nextConfig.whatsappVerifyToken || '' }
+        : { channelSecret: nextConfig.lineChannelSecret || '', channelAccessToken: nextConfig.lineChannelAccessToken || '' };
+
+    if (enabled && platform === 'telegram' && !credentials.token) return;
+    if (enabled && platform === 'whatsapp' && (!credentials.phoneNumberId || !credentials.accessToken)) return;
+    if (enabled && platform === 'line' && !credentials.channelAccessToken) return;
+
+    setChannelStatuses((prev) => ({ ...prev, [platform]: { status: 'connecting' } }));
+    const session = AuthService.getCurrentSession();
+    try {
+      const response = await fetch('/api/channels', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+        },
+        body: JSON.stringify({
+          id: `${session?.user.id || 'global_default_user'}:${platform}`,
+          platform,
+          enabled,
+          mode: platform === 'telegram' ? 'polling' : 'webhook',
+          credentials,
+          modelId: nextConfig.modelName,
+          systemPrompt: nextConfig.systemPrompt,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || data.error || 'Channel connection failed.');
+      setChannelStatuses((prev) => ({ ...prev, [platform]: { status: enabled ? 'connected' : 'stopped' } }));
+      onShowToast(`✅ ${platform.toUpperCase()} ${enabled ? 'connected' : 'stopped'} successfully.`);
+    } catch (error: any) {
+      setChannelStatuses((prev) => ({ ...prev, [platform]: { status: 'error', error: error?.message || 'Connection failed.' } }));
+      onShowToast(`⚠️ ${platform.toUpperCase()}: ${error?.message || 'Connection failed.'}`);
+    }
+  };
+
+  const channelStatus = (platform: string) => channelStatuses[platform];
+
+  useEffect(() => {
+    let mounted = true;
+    const refreshChannelStatuses = async () => {
+      const session = AuthService.getCurrentSession();
+      if (!session?.token) return;
+      try {
+        const response = await fetch('/api/channels', { headers: { Authorization: `Bearer ${session.token}` } });
+        const data = await response.json().catch(() => ({}));
+        if (!mounted || !response.ok || !Array.isArray(data.channels)) return;
+        const nextStatuses: Record<string, { status: string; error?: string }> = {};
+        data.channels.forEach((channel: { platform: string; status: string; lastError?: string }) => {
+          nextStatuses[channel.platform] = { status: channel.status, error: channel.lastError };
+        });
+        setChannelStatuses(nextStatuses);
+      } catch {
+        // The local configuration remains usable when the backend is offline.
+      }
+    };
+    void refreshChannelStatuses();
+    const refreshTimer = setInterval(refreshChannelStatuses, 5000);
+    return () => {
+      mounted = false;
+      clearInterval(refreshTimer);
+      Object.values(channelSyncTimers.current).forEach(clearTimeout);
+    };
+  }, []);
 
   const handlePasteKey = async (field: keyof BotConfig, serviceName: string) => {
     try {
@@ -794,6 +885,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   className="w-4 h-4 rounded text-indigo-500 cursor-pointer"
                 />
               </div>
+              {channelStatus('telegram') && (
+                <span className={`text-[10px] font-semibold ${channelStatus('telegram')?.status === 'connected' ? 'text-emerald-400' : channelStatus('telegram')?.status === 'error' ? 'text-rose-400' : 'text-amber-300'}`}>
+                  {channelStatus('telegram')?.status === 'error' ? channelStatus('telegram')?.error : channelStatus('telegram')?.status}
+                </span>
+              )}
               <a
                 href="https://t.me/BotFather"
                 target="_blank"
@@ -959,6 +1055,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   className="w-4 h-4 rounded text-indigo-500 cursor-pointer"
                 />
               </div>
+              {channelStatus('whatsapp') && (
+                <span className={`text-[10px] font-semibold ${channelStatus('whatsapp')?.status === 'connected' ? 'text-emerald-400' : channelStatus('whatsapp')?.status === 'error' ? 'text-rose-400' : 'text-amber-300'}`}>
+                  {channelStatus('whatsapp')?.status === 'error' ? channelStatus('whatsapp')?.error : channelStatus('whatsapp')?.status}
+                </span>
+              )}
               <a
                 href="https://developers.facebook.com/apps/"
                 target="_blank"
@@ -1001,7 +1102,29 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
             </div>
           </div>
 
-          {/* 5-10 summary with 1-click modal */}
+          {/* 5. LINE */}
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span>💚</span>
+                <span className="font-bold text-slate-200">5. LINE Messaging API</span>
+                <input type="checkbox" checked={config.enableLine} onChange={(e) => updateField('enableLine', e.target.checked)} className="w-4 h-4 rounded text-indigo-500 cursor-pointer" />
+              </div>
+              {channelStatus('line') && (
+                <span className={`text-[10px] font-semibold ${channelStatus('line')?.status === 'connected' ? 'text-emerald-400' : channelStatus('line')?.status === 'error' ? 'text-rose-400' : 'text-amber-300'}`}>
+                  {channelStatus('line')?.status === 'error' ? channelStatus('line')?.error : channelStatus('line')?.status}
+                </span>
+              )}
+            </div>
+            <input type={revealedFields['line'] ? 'text' : 'password'} placeholder="LINE Channel Access Token" value={config.lineChannelAccessToken || ''} onChange={(e) => updateField('lineChannelAccessToken', e.target.value)} className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600" />
+            <input type={revealedFields['line-secret'] ? 'text' : 'password'} placeholder="LINE Channel Secret" value={config.lineChannelSecret || ''} onChange={(e) => updateField('lineChannelSecret', e.target.value)} className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600" />
+            <div className="flex justify-end gap-1.5">
+              <button type="button" onClick={() => toggleReveal('line')} className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer">Show token</button>
+              <button type="button" onClick={() => syncChannel('line', config)} className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer">Connect</button>
+            </div>
+          </div>
+
+          {/* 6-10 summary with 1-click modal */}
           <div className="p-3 bg-gradient-to-r from-slate-950 to-indigo-950/30 rounded-xl border border-indigo-500/30 flex items-center justify-between text-xs">
             <div>
               <span className="font-bold text-white block">Twilio, Pushover, Line, Matrix, Pyrogram, Apprise:</span>
@@ -1129,6 +1252,28 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 onChange={(e) => updateField('enableYtAutoSeo', e.target.checked)}
                 className="w-4 h-4 rounded text-rose-500 cursor-pointer"
               />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400">YouTube Data API v3 Key:</label>
+              <div className="flex items-center gap-1.5 mt-1">
+                <input type={revealedFields['youtubeApiKey'] ? 'text' : 'password'} value={config.youtubeApiKey || ''} onChange={(e) => updateField('youtubeApiKey', e.target.value)} placeholder="AIza..." className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono" />
+                <button type="button" onClick={() => toggleReveal('youtubeApiKey')} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 cursor-pointer" title="Reveal API key">
+                  {revealedFields['youtubeApiKey'] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+                <button type="button" onClick={() => handlePasteKey('youtubeApiKey', 'YouTube API key')} className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer">Paste</button>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400">OAuth 2.0 Refresh Token:</label>
+              <div className="flex items-center gap-1.5 mt-1">
+                <input type={revealedFields['youtubeRefreshToken'] ? 'text' : 'password'} value={config.youtubeRefreshToken || ''} onChange={(e) => updateField('youtubeRefreshToken', e.target.value)} placeholder="1//..." className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono" />
+                <button type="button" onClick={() => toggleReveal('youtubeRefreshToken')} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 cursor-pointer" title="Reveal refresh token">
+                  {revealedFields['youtubeRefreshToken'] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+                <button type="button" onClick={() => handlePasteKey('youtubeRefreshToken', 'YouTube refresh token')} className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer">Paste</button>
+              </div>
             </div>
           </div>
         </div>

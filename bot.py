@@ -82,6 +82,8 @@ class ChatMemory:
         self.last_active: float = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0.0
 
 chat_memories: Dict[int, ChatMemory] = {}
+telegram_sessions: Dict[str, "Application"] = {}
+telegram_session_lock = asyncio.Lock()
 MAX_MEMORY_TURNS: int = 16
 MAX_CHAR_BUDGET: int = 12000
 start_time: float = 0.0
@@ -863,7 +865,58 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 # AIOHTTP HTTP SERVER & WEBHOOK DISPATCHER
 # ==========================================
 
-def create_web_application(tg_app: Optional[Application]) -> web.Application:
+def _is_valid_bot_token(token: str) -> bool:
+    """Return whether a supplied value looks like a real BotFather token."""
+    return bool(token and not token.startswith("YOUR_") and ":" in token and len(token) >= 15)
+
+
+async def start_telegram_session(token: str) -> Application:
+    """Initialize and start an isolated polling session for one bot token."""
+    normalized_token = token.strip()
+    if not _is_valid_bot_token(normalized_token):
+        raise ValueError("A valid Telegram bot token is required.")
+
+    async with telegram_session_lock:
+        existing = telegram_sessions.get(normalized_token)
+        if existing:
+            return existing
+
+        app = build_telegram_application(normalized_token)
+        try:
+            await app.initialize()
+            await app.start()
+            if not app.updater:
+                raise RuntimeError("Telegram updater is unavailable.")
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            await app.updater.start_polling(drop_pending_updates=True)
+        except Exception:
+            if app.updater and app.updater.running:
+                await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+            raise
+
+        telegram_sessions[normalized_token] = app
+        logger.info("Telegram polling session started for token ending in ...%s", normalized_token[-6:])
+        return app
+
+
+async def stop_telegram_session(token: str) -> bool:
+    """Stop and remove one token-scoped Telegram session."""
+    normalized_token = token.strip()
+    async with telegram_session_lock:
+        app = telegram_sessions.pop(normalized_token, None)
+        if not app:
+            return False
+        if app.updater and app.updater.running:
+            await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        logger.info("Telegram polling session stopped for token ending in ...%s", normalized_token[-6:])
+        return True
+
+
+def create_web_application(tg_app: Optional[Application] = None) -> web.Application:
     """Create aiohttp application with health and webhook routes."""
     web_app = web.Application()
 
@@ -875,9 +928,10 @@ def create_web_application(tg_app: Optional[Application]) -> web.Application:
             "mode": RUN_MODE,
             "uptimeSeconds": uptime,
             "telegram": {
-                "tokenConfigured": bool(TELEGRAM_BOT_TOKEN and ":" in TELEGRAM_BOT_TOKEN),
+                "tokenConfigured": bool(_is_valid_bot_token(TELEGRAM_BOT_TOKEN) or telegram_sessions),
                 "mode": RUN_MODE,
                 "activeChatBuffers": len(chat_memories),
+                "activeSessions": len(telegram_sessions),
             },
             "aiProviders": {
                 "groq": bool(GROQ_API_KEYS),
@@ -888,6 +942,46 @@ def create_web_application(tg_app: Optional[Application]) -> web.Application:
             },
         }
         return web.json_response(status_data, status=200)
+
+    async def connect_handler(request: web.Request) -> web.Response:
+        """Start polling for a user-provided token without restarting the worker."""
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return web.json_response({"ok": False, "error": "Request body must be JSON."}, status=400)
+
+        token = str(
+            body.get("token") or body.get("telegramBotToken") or body.get("botToken") or ""
+        ).strip() if isinstance(body, dict) else ""
+        if not token:
+            return web.json_response({"ok": False, "error": "Missing Telegram bot token."}, status=400)
+
+        try:
+            app = await start_telegram_session(token)
+            bot = await app.bot.get_me()
+            return web.json_response({
+                "ok": True,
+                "running": True,
+                "mode": "polling",
+                "bot": {"id": bot.id, "username": bot.username, "name": bot.first_name},
+            })
+        except Exception as err:
+            logger.error("Failed to start user Telegram session: %s", err)
+            return web.json_response({"ok": False, "error": str(err)}, status=400)
+
+    async def disconnect_handler(request: web.Request) -> web.Response:
+        """Stop polling for a user-provided token."""
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return web.json_response({"ok": False, "error": "Request body must be JSON."}, status=400)
+        token = str(
+            body.get("token") or body.get("telegramBotToken") or body.get("botToken") or ""
+        ).strip() if isinstance(body, dict) else ""
+        if not token:
+            return web.json_response({"ok": False, "error": "Missing Telegram bot token."}, status=400)
+        stopped = await stop_telegram_session(token)
+        return web.json_response({"ok": True, "stopped": stopped})
 
     async def webhook_handler(request: web.Request) -> web.Response:
         """Handle incoming Telegram webhook updates for POST /webhook and POST /api/webhook."""
@@ -919,6 +1013,8 @@ def create_web_application(tg_app: Optional[Application]) -> web.Application:
     web_app.router.add_get("/", health_handler)
     web_app.router.add_get("/health", health_handler)
     web_app.router.add_get("/api/health", health_handler)
+    web_app.router.add_post("/api/telegram/connect", connect_handler)
+    web_app.router.add_post("/api/telegram/disconnect", disconnect_handler)
 
     web_app.router.add_post("/webhook", webhook_handler)
     web_app.router.add_post("/api/webhook", webhook_handler)
@@ -930,16 +1026,13 @@ def create_web_application(tg_app: Optional[Application]) -> web.Application:
 # MAIN APPLICATION LIFECYCLE
 # ==========================================
 
-def build_telegram_application() -> Application:
+def build_telegram_application(token: Optional[str] = None) -> Application:
     """Build and configure the python-telegram-bot Application instance."""
-    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN.startswith("YOUR_") or ":" not in TELEGRAM_BOT_TOKEN:
-        logger.error(
-            "❌ [TelegramBot] TELEGRAM_BOT_TOKEN is missing or invalid! "
-            "Please provide a valid bot token from @BotFather in your environment variables."
-        )
-        sys.exit(1)
+    normalized_token = (token if token is not None else TELEGRAM_BOT_TOKEN).strip()
+    if not _is_valid_bot_token(normalized_token):
+        raise ValueError("Telegram bot token is missing or invalid.")
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(normalized_token).build()
 
     # Register Command Handlers
     app.add_handler(CommandHandler("start", start_command))
@@ -977,25 +1070,18 @@ async def main_async() -> None:
     logger.info(f"AI provider configured: {is_ai_configured}")
     logger.info(f"Telegram mode: {RUN_MODE}")
 
-    tg_app = build_telegram_application()
+    tg_app: Optional[Application] = None
 
-    # Initialize Telegram Application
-    await tg_app.initialize()
-    await tg_app.start()
+    # An environment token remains supported; user tokens can connect later via HTTP.
+    if _is_valid_bot_token(TELEGRAM_BOT_TOKEN) and RUN_MODE == "polling":
+        tg_app = await start_telegram_session(TELEGRAM_BOT_TOKEN)
+    elif _is_valid_bot_token(TELEGRAM_BOT_TOKEN):
+        tg_app = build_telegram_application(TELEGRAM_BOT_TOKEN)
+        await tg_app.initialize()
+        await tg_app.start()
 
     # Handle Mode Specific Initialization
-    if RUN_MODE == "polling":
-        try:
-            logger.info("🧹 Calling deleteWebhook to ensure no lingering webhook locks...")
-            await tg_app.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("✅ deleteWebhook succeeded.")
-        except Exception as e:
-            logger.warning(f"⚠️ deleteWebhook notice: {e}")
-
-        if tg_app.updater:
-            await tg_app.updater.start_polling(drop_pending_updates=True)
-            logger.info("✅ Telegram bot polling worker started.")
-    elif RUN_MODE == "webhook":
+    if RUN_MODE == "webhook" and tg_app:
         if PUBLIC_BASE_URL:
             webhook_url = f"{PUBLIC_BASE_URL}/webhook"
             logger.info(f"🌐 Registering Telegram Webhook with Telegram API: {webhook_url}")
@@ -1028,10 +1114,13 @@ async def main_async() -> None:
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("🛑 Shutting down gracefully...")
     finally:
-        if tg_app.updater and tg_app.updater.running:
+        for session_token in list(telegram_sessions):
+            await stop_telegram_session(session_token)
+        if tg_app and tg_app.updater and tg_app.updater.running:
             await tg_app.updater.stop()
-        await tg_app.stop()
-        await tg_app.shutdown()
+        if tg_app and TELEGRAM_BOT_TOKEN not in telegram_sessions:
+            await tg_app.stop()
+            await tg_app.shutdown()
         await runner.cleanup()
         logger.info("✅ Service stopped successfully.")
 

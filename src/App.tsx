@@ -244,6 +244,7 @@ const DEFAULT_CONFIG: BotConfig = {
 
   // YouTube OAuth2 & AI SEO Automation
   enableYouTubeAutomation: true,
+  youtubeApiKey: '',
   youtubeClientId: '',
   youtubeClientSecret: '',
   youtubeRefreshToken: '',

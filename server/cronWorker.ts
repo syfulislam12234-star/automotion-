@@ -1,6 +1,15 @@
 import { ServerDatabase } from './db';
 import { TelegramBotService } from './telegramBot';
 
+type ChannelBroadcastTarget = {
+  id: string;
+  label: string;
+  platform: string;
+  chatId: string;
+  channelId: string;
+  credentials: Record<string, string>;
+};
+
 export interface YouTubeChannelConfig {
   id: string;
   name: string;
@@ -482,6 +491,91 @@ export class CronWorkerServiceImpl {
     return msg;
   }
 
+  private getChannelBroadcastTargets(): ChannelBroadcastTarget[] {
+    const targets: ChannelBroadcastTarget[] = [];
+
+    for (const channel of ServerDatabase.getAllChannels()) {
+      if (!channel.enabled || channel.status === 'stopped') continue;
+
+      const chatIds = [
+        channel.credentials.chatId,
+        channel.credentials.recipientId,
+        ...(channel.credentials.broadcastChatIds || '').split(','),
+      ]
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+      for (const chatId of chatIds) {
+        targets.push({
+          id: `${channel.id}:${chatId}`,
+          label: `${channel.userId} ${channel.platform}`,
+          platform: channel.platform,
+          chatId,
+          channelId: channel.id,
+          credentials: channel.credentials,
+        });
+      }
+    }
+
+    return targets;
+  }
+
+  private async sendChannelBroadcast(target: ChannelBroadcastTarget, message: string): Promise<void> {
+    if (target.platform === 'telegram') {
+      const token = target.credentials.token || target.credentials.botToken || target.credentials.telegramBotToken;
+      if (!token) throw new Error('Missing Telegram bot token.');
+      await this.sendJson(`https://api.telegram.org/bot${token}/sendMessage`, {
+        chat_id: target.chatId,
+        text: message,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    if (target.platform === 'whatsapp') {
+      const phoneNumberId = target.credentials.phoneNumberId || target.credentials.whatsappPhoneNumberId;
+      const accessToken = target.credentials.accessToken || target.credentials.whatsappAccessToken;
+      if (!phoneNumberId || !accessToken) throw new Error('Missing WhatsApp credentials.');
+      await this.sendJson(
+        `https://graph.facebook.com/v20.0/${encodeURIComponent(phoneNumberId)}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          to: target.chatId,
+          type: 'text',
+          text: { body: message.replace(/<[^>]+>/g, '') },
+        },
+        { Authorization: `Bearer ${accessToken}` }
+      );
+      return;
+    }
+
+    if (target.platform === 'line') {
+      const accessToken = target.credentials.channelAccessToken || target.credentials.lineChannelAccessToken;
+      if (!accessToken) throw new Error('Missing LINE channel access token.');
+      await this.sendJson(
+        'https://api.line.me/v2/bot/message/push',
+        { to: target.chatId, messages: [{ type: 'text', text: message.replace(/<[^>]+>/g, '') }] },
+        { Authorization: `Bearer ${accessToken}` }
+      );
+      return;
+    }
+
+    throw new Error(`Unsupported broadcast platform: ${target.platform}`);
+  }
+
+  private async sendJson(url: string, body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<void> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(`${response.status}: ${payload.description || payload.error?.message || 'Channel delivery failed'}`);
+    }
+  }
+
   /**
    * Execute full broadcast cycle across all 10 Telegram chat IDs/groups
    */
@@ -513,9 +607,10 @@ export class CronWorkerServiceImpl {
         triggerType,
       });
 
-      // Filter active recipient targets
+      // Preserve configured Telegram targets and add active tenant channel recipients.
       const activeTargets = this.config.targets.filter((t) => t.enabled);
-      console.log(`🚀 [CronWorker] Broadcasting payload to ${activeTargets.length} Telegram chat IDs/groups...`);
+      const channelTargets = this.getChannelBroadcastTargets();
+      console.log(`🚀 [CronWorker] Broadcasting payload to ${activeTargets.length + channelTargets.length} configured and tenant recipients...`);
 
       const recipientResults: Array<{ chatId: string; label: string; success: boolean; error?: string }> = [];
       let successfulSends = 0;
@@ -548,6 +643,20 @@ export class CronWorkerServiceImpl {
         }
 
         // Small 60ms delay to prevent hitting Telegram rate limiter
+        await new Promise((r) => setTimeout(r, 60));
+      }
+
+      for (const target of channelTargets) {
+        try {
+          console.log(`📤 [CronWorker] Dispatching to [${target.label}] (${target.platform}, recipient: ${target.chatId})...`);
+          await this.sendChannelBroadcast(target, broadcastHtml);
+          recipientResults.push({ chatId: target.chatId, label: target.label, success: true });
+          successfulSends++;
+        } catch (sendErr: any) {
+          console.error(`❌ [CronWorker] Failed to send to ${target.platform} recipient ${target.chatId}:`, sendErr?.message || sendErr);
+          recipientResults.push({ chatId: target.chatId, label: target.label, success: false, error: sendErr?.message || 'Dispatch error' });
+          failedSends++;
+        }
         await new Promise((r) => setTimeout(r, 60));
       }
 

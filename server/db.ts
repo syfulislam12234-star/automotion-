@@ -24,12 +24,28 @@ export interface DbSession {
   expiresAt: number;
 }
 
+export interface DbChannelConnection {
+  id: string;
+  userId: string;
+  platform: string;
+  enabled: boolean;
+  mode: 'polling' | 'webhook';
+  credentials: Record<string, string>;
+  modelId?: string;
+  systemPrompt?: string;
+  status: 'configured' | 'running' | 'error' | 'stopped';
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DbSchema {
   version: number;
   lastSaved: string;
   users: DbUser[];
   sessions: DbSession[];
   botConfigs: Record<string, any>; // keyed by userId or email
+  channels: Record<string, DbChannelConnection>;
   backupMetadata: {
     lastBackupAt?: string;
     backupCount: number;
@@ -89,6 +105,7 @@ const INITIAL_DB: DbSchema = {
   ],
   sessions: [],
   botConfigs: {},
+  channels: {},
   backupMetadata: {
     lastBackupAt: new Date().toISOString(),
     backupCount: 1,
@@ -116,6 +133,7 @@ export class ServerDatabase {
           users: parsed.users || INITIAL_DB.users,
           sessions: parsed.sessions || [],
           botConfigs: parsed.botConfigs || {},
+          channels: parsed.channels || {},
           backupMetadata: parsed.backupMetadata || INITIAL_DB.backupMetadata,
         };
       } else {
@@ -448,6 +466,41 @@ export class ServerDatabase {
     return this.memoryDb.botConfigs[userIdOrEmail.toLowerCase().trim()] || null;
   }
 
+  public static getAllBotConfigs(): Record<string, any> {
+    this.init();
+    return { ...this.memoryDb.botConfigs };
+  }
+
+  public static saveChannel(channel: DbChannelConnection) {
+    this.init();
+    this.memoryDb.channels[channel.id] = channel;
+    this.saveToFile();
+    return channel;
+  }
+
+  public static getChannel(channelId: string): DbChannelConnection | null {
+    this.init();
+    return this.memoryDb.channels[channelId] || null;
+  }
+
+  public static getChannelsForUser(userId: string): DbChannelConnection[] {
+    this.init();
+    return Object.values(this.memoryDb.channels).filter(channel => channel.userId === userId);
+  }
+
+  public static getAllChannels(): DbChannelConnection[] {
+    this.init();
+    return Object.values(this.memoryDb.channels);
+  }
+
+  public static deleteChannel(channelId: string): boolean {
+    this.init();
+    if (!this.memoryDb.channels[channelId]) return false;
+    delete this.memoryDb.channels[channelId];
+    this.saveToFile();
+    return true;
+  }
+
   // Export full backup for easy migration to any new VPS
   public static exportBackup() {
     this.init();
@@ -467,6 +520,7 @@ export class ServerDatabase {
       data: {
         users: this.memoryDb.users,
         botConfigs: this.memoryDb.botConfigs,
+        channels: this.memoryDb.channels,
       },
     };
   }
@@ -481,6 +535,7 @@ export class ServerDatabase {
 
       const usersToImport: DbUser[] = backupJson.data.users || [];
       const configsToImport: Record<string, any> = backupJson.data.botConfigs || {};
+      const channelsToImport: Record<string, DbChannelConnection> = backupJson.data.channels || {};
 
       let importedUsers = 0;
       let importedConfigs = 0;
@@ -500,6 +555,10 @@ export class ServerDatabase {
       for (const [key, val] of Object.entries(configsToImport)) {
         this.memoryDb.botConfigs[key.toLowerCase()] = val;
         importedConfigs++;
+      }
+
+      for (const [key, val] of Object.entries(channelsToImport)) {
+        this.memoryDb.channels[key] = val;
       }
 
       this.memoryDb.backupMetadata.lastBackupAt = new Date().toISOString();
