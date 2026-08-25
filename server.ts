@@ -543,7 +543,7 @@ async function startServer() {
       const selectedProviderModel = selectedCatalogModel?.modelId || model;
 
       if (!prompt && (!history || history.length === 0)) {
-        return res.status(400).json({ error: 'Missing prompt or history in request body' });
+        return res.status(400).json({ success: false, message: 'Missing prompt or history in request body' });
       }
 
       const defaultSysInstruction = isChatAssistant
@@ -797,7 +797,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error in /api/ai/generate:', err);
-      return res.status(500).json({ error: err.message || 'Internal server error in centralized AI engine' });
+      return res.status(500).json({ success: false, message: err.message || 'Internal server error in centralized AI engine' });
     }
   });
 
@@ -845,7 +845,7 @@ async function startServer() {
         winner: benchmarkResults.filter((r) => r.success).sort((a, b) => a.latencyMs - b.latencyMs)[0] || benchmarkResults[0],
       });
     } catch (benchErr: any) {
-      return res.status(500).json({ error: benchErr?.message || 'Benchmark error' });
+      return res.status(500).json({ success: false, message: benchErr?.message || 'Benchmark error' });
     }
   });
 
@@ -854,7 +854,7 @@ async function startServer() {
     const { platform, token, webhookUrl } = req.body;
 
     if (!platform || !token) {
-      return res.status(400).json({ error: 'Platform and bot token are required.' });
+      return res.status(400).json({ success: false, message: 'Platform and bot token are required.' });
     }
 
     const latency = Math.floor(Math.random() * 40) + 30;
@@ -865,7 +865,7 @@ async function startServer() {
     if (!isValid) {
       return res.status(400).json({
         success: false,
-        error: `Invalid token format for ${platform}. Please paste a valid token from the provider portal.`,
+        message: `Invalid token format for ${platform}. Please paste a valid token from the provider portal.`,
       });
     }
 
@@ -1474,7 +1474,7 @@ async function startServer() {
     app.get('*', (req, res) => {
       // Avoid sending HTML for missing API routes
       if (req.path.startsWith('/api/') || req.path === '/health' || req.path === '/webhook') {
-        return res.status(404).json({ error: 'Endpoint not found', path: req.path });
+        return res.status(404).json({ success: false, message: 'Endpoint not found', path: req.path });
       }
 
       const indexPath = path.join(distPath, 'index.html');
