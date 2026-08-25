@@ -108,6 +108,7 @@ const DEFAULT_YT_CHANNELS: YouTubeChannelConfig[] = [
 ];
 
 export class CronWorkerServiceImpl {
+  private readonly DEFAULT_INTERVAL_MS = 10_800_000;
   private config: CronBroadcastConfig = {
     enabled: true,
     intervalHours: 3,
@@ -221,14 +222,20 @@ export class CronWorkerServiceImpl {
       return;
     }
 
-    const intervalMs = this.config.intervalHours * 60 * 60 * 1000;
+    const intervalMs = this.config.intervalHours > 0
+      ? this.config.intervalHours * 60 * 60 * 1000
+      : this.DEFAULT_INTERVAL_MS;
     const nextTime = Date.now() + intervalMs;
     this.config.nextRunTimestamp = new Date(nextTime).toISOString();
 
-    this.timer = setTimeout(async () => {
-      console.log(`\n🔔 [CronWorker] 3-Hour Interval Triggered! Starting automated background broadcast...`);
-      await this.executeBroadcast('automated_cron_3h');
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      // Schedule independently of delivery so a slow or failed upstream cannot stop the worker.
       this.scheduleNextRun();
+      console.log(`\n🔔 [CronWorker] 3-Hour Interval Triggered! Starting automated background broadcast...`);
+      void this.executeBroadcast('automated_cron_3h').catch((error) => {
+        console.error('[CronWorker] Automated broadcast failed; next run remains scheduled:', error);
+      });
     }, intervalMs);
 
     console.log(`⏳ [CronWorker] Next automated broadcast scheduled for ${this.config.nextRunTimestamp} (in ${this.config.intervalHours}h)`);
@@ -623,6 +630,7 @@ export class CronWorkerServiceImpl {
 
           await TelegramBotService.sendMessage(target.chatId, broadcastHtml, {
             parse_mode: 'HTML',
+            throwOnError: true,
           });
 
           recipientResults.push({
@@ -665,7 +673,7 @@ export class CronWorkerServiceImpl {
         id: `bcast_${Date.now()}`,
         timestamp: runTimestamp,
         triggerType,
-        totalTargets: activeTargets.length,
+        totalTargets: activeTargets.length + channelTargets.length,
         successfulSends,
         failedSends,
         earthquakesFound: eqData.earthquakes.length,
@@ -692,7 +700,7 @@ export class CronWorkerServiceImpl {
         console.warn('[CronWorker] Error saving run log to DB:', dbErr);
       }
 
-      console.log(`✅ [CronWorker] Broadcast completed! Success: ${successfulSends}/${activeTargets.length} recipients.`);
+      console.log(`✅ [CronWorker] Broadcast completed! Success: ${successfulSends}/${activeTargets.length + channelTargets.length} recipients.`);
       return logEntry;
     } finally {
       this.isProcessing = false;

@@ -40,6 +40,7 @@ export interface TelegramBotStatus {
 }
 
 class TelegramBotServiceImpl {
+  private readonly STREAM_EDIT_INTERVAL_MS = 700;
   private token: string = '';
   private runMode: 'polling' | 'webhook' | 'disabled' = 'disabled';
   private secretToken: string = '';
@@ -57,6 +58,12 @@ class TelegramBotServiceImpl {
   // Contextual Memory & Sliding Window Buffer per Chat ID
   private chatMemories: Map<string, ChatMemorySession> = new Map();
   private chatModes: Map<string, 'ai' | 'youtube'> = new Map();
+  private streamingEdits: Map<string, {
+    lastSentAt: number;
+    pendingText?: string;
+    timer?: ReturnType<typeof setTimeout>;
+    waiters: Array<{ resolve: () => void; reject: (error: unknown) => void }>;
+  }> = new Map();
 
   // Sliding Window Memory Bounds
   private readonly MAX_MEMORY_TURNS = 16;
@@ -1496,22 +1503,22 @@ class TelegramBotServiceImpl {
     const tasks: Array<Promise<{ provider: string; model: string; text: string; latencyMs: number }>> = [];
 
     // 1. Groq Candidate (Fast LPU)
-    tasks.push(this.queryGroq(prompt, history, systemPrompt));
+    tasks.push(this.withTimeout(this.queryGroq(prompt, history, systemPrompt), 3000));
 
     // 2. Google Gemini Candidate (Deep reasoning & context)
-    tasks.push(this.queryGemini(prompt, history, systemPrompt));
+    tasks.push(this.withTimeout(this.queryGemini(prompt, history, systemPrompt), 3000));
 
     // 3. OpenRouter Candidate (DeepSeek R1 / Llama 3.3 Free)
-    tasks.push(this.queryOpenRouter(prompt, history, systemPrompt));
+    tasks.push(this.withTimeout(this.queryOpenRouter(prompt, history, systemPrompt), 3000));
 
     // 4. Cerebras Candidate (Ultra-low latency LPU)
-    tasks.push(this.queryCerebras(prompt, history, systemPrompt));
+    tasks.push(this.withTimeout(this.queryCerebras(prompt, history, systemPrompt), 3000));
 
     // 5. SambaNova Candidate (High-throughput RDU)
-    tasks.push(this.querySambaNova(prompt, history, systemPrompt));
+    tasks.push(this.withTimeout(this.querySambaNova(prompt, history, systemPrompt), 3000));
 
     // 6. Zero-Key Pollinations AI Candidate (Universal Free Fallback)
-    tasks.push(this.queryPollinations(prompt, history, systemPrompt));
+    tasks.push(this.withTimeout(this.queryPollinations(prompt, history, systemPrompt), 3000));
 
     // Fast-Path Race Runner: If a high-confidence model responds in <650ms, return immediately
     const fastestPromise = new Promise<{ provider: string; model: string; text: string; latencyMs: number } | null>((resolve) => {
@@ -1601,7 +1608,10 @@ class TelegramBotServiceImpl {
 
     if (geminiCandidate && groqCandidate && Math.abs(geminiCandidate.score - groqCandidate.score) < 35) {
       // Both models gave rich answers: try rapid intelligent Super-Brain synthesis
-      const synthesized = await this.synthesizeSuperBrain(prompt, groqCandidate.text, geminiCandidate.text, systemPrompt);
+      const synthesized = await this.withTimeout(
+        this.synthesizeSuperBrain(prompt, groqCandidate.text, geminiCandidate.text, systemPrompt),
+        1500
+      );
       if (synthesized && synthesized.trim()) {
         return synthesized.trim();
       }
@@ -1609,6 +1619,13 @@ class TelegramBotServiceImpl {
 
     // Output highest scored response directly
     return topCandidate.text.trim();
+  }
+
+  private withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`AI provider timed out after ${timeoutMs}ms`)), timeoutMs)),
+    ]);
   }
 
   /**
@@ -1662,7 +1679,7 @@ class TelegramBotServiceImpl {
     const groqKeys = this.getGroqKeys();
     if (groqKeys.length === 0) throw new Error('No Groq key configured');
 
-    const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+    const groqModel = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
     const messages = [
       { role: 'system', content: systemPrompt },
       ...history.map((h) => ({ role: h.role, content: h.content })),
@@ -1675,7 +1692,7 @@ class TelegramBotServiceImpl {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
           body: JSON.stringify({ model: groqModel, messages, temperature: 0.7, max_tokens: 2048 }),
-          signal: AbortSignal.timeout(4000),
+          signal: AbortSignal.timeout(2500),
         });
 
         if (resp.ok) {
@@ -1780,7 +1797,7 @@ class TelegramBotServiceImpl {
     const key = process.env.CEREBRAS_API_KEY;
     if (!key || key.startsWith('YOUR_')) throw new Error('No Cerebras key configured');
 
-    const model = process.env.CEREBRAS_MODEL || 'llama3.3-70b';
+    const model = process.env.CEREBRAS_MODEL || 'llama3.1-8b';
     const resp = await fetch('https://api.cerebras.ai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key.trim()}` },
@@ -1788,7 +1805,7 @@ class TelegramBotServiceImpl {
         model,
         messages: [{ role: 'system', content: systemPrompt }, ...history.map((h) => ({ role: h.role, content: h.content })), { role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(3500),
+      signal: AbortSignal.timeout(2500),
     });
 
     if (resp.ok) {
@@ -2061,7 +2078,7 @@ class TelegramBotServiceImpl {
   public async sendMessage(
     chatId: number | string,
     text: string,
-    options: { parse_mode?: 'HTML' | 'Markdown' | 'MarkdownV2'; reply_to_message_id?: number } = {}
+    options: { parse_mode?: 'HTML' | 'Markdown' | 'MarkdownV2'; reply_to_message_id?: number; throwOnError?: boolean } = {}
   ): Promise<void> {
     if (!this.token) {
       console.warn(`[TelegramBot] Cannot send message: Token is not configured.`);
@@ -2093,12 +2110,56 @@ class TelegramBotServiceImpl {
             });
           } catch (retryErr) {
             console.error(`[TelegramBot] Failed secondary plain text send to ${chatId}:`, retryErr);
+            if (options.throwOnError) throw retryErr;
           }
         } else {
           console.error(`[TelegramBot] Failed to send message to ${chatId}:`, err);
+          if (options.throwOnError) throw err;
         }
       }
     }
+  }
+
+  /** Coalesce streaming updates so Telegram edits are sent at most once every 700ms. */
+  public async editMessageTextThrottled(
+    chatId: number | string,
+    messageId: number,
+    text: string,
+    options: { parse_mode?: 'HTML' | 'Markdown' | 'MarkdownV2' } = {}
+  ): Promise<void> {
+    if (!this.token) return;
+
+    const key = `${chatId}:${messageId}`;
+    const state = this.streamingEdits.get(key) || { lastSentAt: 0, waiters: [] };
+    const elapsed = Date.now() - state.lastSentAt;
+    if (elapsed >= this.STREAM_EDIT_INTERVAL_MS && !state.timer) {
+      state.lastSentAt = Date.now();
+      this.streamingEdits.set(key, state);
+      await this.callApi('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: options.parse_mode });
+      return;
+    }
+
+    state.pendingText = text;
+    this.streamingEdits.set(key, state);
+    await new Promise<void>((resolve, reject) => {
+      state.waiters.push({ resolve, reject });
+      if (!state.timer) {
+        state.timer = setTimeout(async () => {
+          state.timer = undefined;
+          const latestText = state.pendingText;
+          state.pendingText = undefined;
+          state.lastSentAt = Date.now();
+          try {
+            if (latestText !== undefined) {
+              await this.callApi('editMessageText', { chat_id: chatId, message_id: messageId, text: latestText, parse_mode: options.parse_mode });
+            }
+            state.waiters.splice(0).forEach((waiter) => waiter.resolve());
+          } catch (error) {
+            state.waiters.splice(0).forEach((waiter) => waiter.reject(error));
+          }
+        }, Math.max(1, this.STREAM_EDIT_INTERVAL_MS - elapsed));
+      }
+    });
   }
 
   /**

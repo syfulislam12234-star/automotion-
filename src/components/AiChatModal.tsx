@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Sparkles,
   Send,
@@ -57,6 +57,66 @@ const SUGGESTED_PROMPTS = [
   'Give me 5 viral bot command ideas',
 ];
 
+interface ChatInputProps {
+  isLoading: boolean;
+  onSend: (prompt: string) => void;
+  isOpen: boolean;
+}
+
+const ChatInput = React.memo(({ isLoading, onSend, isOpen }: ChatInputProps) => {
+  const [value, setValue] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (isOpen) textareaRef.current?.focus();
+  }, [isOpen]);
+
+  const submit = () => {
+    const prompt = value.trim();
+    if (!prompt || isLoading) return;
+    onSend(prompt);
+    setValue('');
+  };
+
+  return (
+    <div className="p-3 bg-slate-950 border-t border-slate-800 rounded-b-3xl shrink-0">
+      <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="relative flex items-center gap-2">
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="Ask about bot code, cascades, webhooks, or VPS deployment..."
+          className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl py-2.5 pl-3.5 pr-12 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 resize-none max-h-24 transition"
+        />
+        <button
+          type="submit"
+          disabled={isLoading || !value.trim()}
+          className="absolute right-2 p-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white transition disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-cyan-500/20 active:scale-95 cursor-pointer"
+          title="Send Message (Enter)"
+        >
+          <Send className="w-3.5 h-3.5" />
+        </button>
+      </form>
+      <div className="mt-1.5 px-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+        <span>Shift + Enter for new line</span>
+        <span className="text-cyan-400/80 font-sans">Powered by Google Gemini & Groq</span>
+      </div>
+    </div>
+  );
+});
+
+const MemoizedMessageContent = React.memo(({ content, renderContent }: {
+  content: string;
+  renderContent: (value: string) => React.ReactNode;
+}) => <div className="space-y-1">{renderContent(content)}</div>);
+
 export const AiChatModal: React.FC<AiChatModalProps> = ({
   isOpen,
   onClose,
@@ -77,14 +137,12 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     return INITIAL_MESSAGES;
   });
 
-  const [inputPrompt, setInputPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<'gemini-3.7-flash' | 'groq-llama-3.3' | 'deepseek-r1' | 'cerebras-llama3.3'>('gemini-3.7-flash');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto scroll to bottom
   const scrollToBottom = () => {
@@ -94,7 +152,6 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       scrollToBottom();
-      textareaRef.current?.focus();
     }
   }, [isOpen, messages, isLoading]);
 
@@ -109,8 +166,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSendMessage = async (customPrompt?: string) => {
-    const textToSend = customPrompt || inputPrompt.trim();
+  const handleSendMessage = useCallback(async (textToSend: string) => {
     if (!textToSend || isLoading) return;
 
     const userMsg: ChatMessage = {
@@ -121,7 +177,6 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    if (!customPrompt) setInputPrompt('');
     setIsLoading(true);
 
     const startTime = Date.now();
@@ -179,14 +234,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
+  }, [isLoading, messages, selectedModel]);
 
   const handleClearHistory = () => {
     setMessages(INITIAL_MESSAGES);
@@ -206,7 +254,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   };
 
   // Helper to format basic markdown text nicely
-  const renderFormattedContent = (content: string) => {
+  const renderFormattedContent = useCallback((content: string) => {
     // Simple markdown renderer for headers, bold, code blocks, bullet points
     const lines = content.split('\n');
     return lines.map((line, i) => {
@@ -262,7 +310,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         />
       );
     });
-  };
+  }, []);
 
   const formatInlineMarkdown = (text: string) => {
     let formatted = text
@@ -399,7 +447,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
               }`}
             >
               {/* Message Body */}
-              <div className="space-y-1">{renderFormattedContent(msg.content)}</div>
+              <MemoizedMessageContent content={msg.content} renderContent={renderFormattedContent} />
 
               {/* Message Metadata & Copy Button */}
               <div
@@ -483,39 +531,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         </div>
       )}
 
-      {/* Input Form & Action Bar */}
-      <div className="p-3 bg-slate-950 border-t border-slate-800 rounded-b-3xl shrink-0">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSendMessage();
-          }}
-          className="relative flex items-center gap-2"
-        >
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={inputPrompt}
-            onChange={(e) => setInputPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask about bot code, cascades, webhooks, or VPS deployment..."
-            className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl py-2.5 pl-3.5 pr-12 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 resize-none max-h-24 transition"
-          />
-
-          <button
-            type="submit"
-            disabled={isLoading || !inputPrompt.trim()}
-            className="absolute right-2 p-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white transition disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-cyan-500/20 active:scale-95 cursor-pointer"
-            title="Send Message (Enter)"
-          >
-            <Send className="w-3.5 h-3.5" />
-          </button>
-        </form>
-        <div className="mt-1.5 px-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
-          <span>Shift + Enter for new line</span>
-          <span className="text-cyan-400/80 font-sans">Powered by Google Gemini & Groq</span>
-        </div>
-      </div>
+      <ChatInput isLoading={isLoading} onSend={handleSendMessage} isOpen={isOpen} />
     </div>
   );
 };
