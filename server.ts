@@ -331,6 +331,8 @@ const CENTRAL_PLATFORM_STATUS = {
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  const heartbeatIntervalMs = 4 * 60 * 1000;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   app.use(express.json({
     verify: (req, _res, buffer) => {
@@ -348,6 +350,35 @@ async function startServer() {
     if (!response.ok || !data.success || !data.text) throw new Error(data.error || 'AI generation failed.');
     return data.text;
   });
+
+  const refreshRuntimeConfig = async (targetId: string, config: any, previousConfig?: any): Promise<void> => {
+    try {
+      await TelegramBotService.reloadFromConfig(config);
+      await multiChannelGateway.syncFromBotConfig(targetId, config);
+    } catch (error) {
+      try {
+        if (previousConfig) {
+          await TelegramBotService.reloadFromConfig(previousConfig);
+          await multiChannelGateway.syncFromBotConfig(targetId, previousConfig);
+        }
+      } catch (rollbackError: any) {
+        console.error('[Runtime Refresh] Rollback failed:', rollbackError?.message || rollbackError);
+      }
+      throw error;
+    }
+  };
+
+  const refreshAdminConfig = (config: any): void => {
+    const adminChatId = config.telegramAdminChatId || config.adminTelegramId;
+    const adminBotToken = config.telegramAdminBotToken || config.telegramBotToken;
+    TelegramAdminService.updateConfig({
+      ...(adminChatId ? { adminChatId: String(adminChatId).trim() } : {}),
+      ...(adminBotToken ? { adminBotToken: String(adminBotToken).trim() } : {}),
+      isEnabled: config.enableTelegramAdminController !== false,
+      strictWhitelist: config.telegramAdminStrictWhitelist !== false,
+      allowRestart: config.telegramAdminAllowRestart !== false,
+    });
+  };
 
   // Initialize Real Production Telegram Bot Engine (Polling or Webhook mode)
   try {
@@ -1024,21 +1055,6 @@ async function startServer() {
     }
   });
 
-  // Quick Demo Login
-  app.post('/api/auth/quick-demo', (req, res) => {
-    try {
-      const { type } = req.body; // 'admin' | 'developer'
-      const session = ServerDatabase.quickLogin(type === 'admin' ? 'admin' : 'developer');
-      return res.json({
-        success: true,
-        message: `Quick logged in as ${session.user.name}`,
-        session,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  });
-
   // Validate Active Session
   app.get('/api/auth/me', (req, res) => {
     try {
@@ -1081,7 +1097,8 @@ async function startServer() {
 
   // Save User's Bot Configuration to Server DB
   app.post('/api/user/config', (req, res) => {
-    try {
+    void (async () => {
+      try {
       const authHeader = req.headers.authorization;
       const { config, userId } = req.body;
 
@@ -1101,19 +1118,20 @@ async function startServer() {
         return res.status(400).json({ success: false, message: 'Missing bot configuration payload.' });
       }
 
+      const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
+      await refreshRuntimeConfig(targetId, config, previousConfig);
+      refreshAdminConfig(config);
       const result = ServerDatabase.saveBotConfig(targetId, config);
-      void multiChannelGateway.syncFromBotConfig(targetId, config).catch((syncError: any) => {
-        console.error(`❌ [Channel Sync ${targetId}]`, syncError);
-      });
       return res.json({
         success: true,
         message: 'Bot configuration permanently saved to server database.',
         targetId,
         ...result,
       });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
+      } catch (err: any) {
+        return res.status(400).json({ success: false, message: err.message || 'Runtime configuration refresh failed.' });
+      }
+    })();
   });
 
   // Get User's Bot Configuration from Server DB
@@ -1152,7 +1170,8 @@ async function startServer() {
 
   // Real-time Automated Key Sync (Receives updated keys and automatically provisions services)
   app.post('/api/sync/keys', (req, res) => {
-    try {
+    void (async () => {
+      try {
       const authHeader = req.headers.authorization;
       const { config, userId } = req.body;
 
@@ -1167,23 +1186,10 @@ async function startServer() {
       }
       if (!targetId) targetId = 'global_default_user';
 
-      // 1. Save permanently to database
+      const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
+      await refreshRuntimeConfig(targetId, config, previousConfig);
+      refreshAdminConfig(config);
       ServerDatabase.saveBotConfig(targetId, config);
-      void multiChannelGateway.syncFromBotConfig(targetId, config).catch((syncError: any) => {
-        console.error(`❌ [Channel Sync ${targetId}]`, syncError);
-      });
-
-      // 2. Synchronize Telegram Admin Service credentials
-      const adminChatId = config.telegramAdminChatId || config.adminTelegramId;
-      const adminBotToken = config.telegramAdminBotToken || config.telegramBotToken;
-
-      TelegramAdminService.updateConfig({
-        ...(adminChatId ? { adminChatId: String(adminChatId).trim() } : {}),
-        ...(adminBotToken ? { adminBotToken: String(adminBotToken).trim() } : {}),
-        isEnabled: config.enableTelegramAdminController !== false,
-        strictWhitelist: config.telegramAdminStrictWhitelist !== false,
-        allowRestart: config.telegramAdminAllowRestart !== false,
-      });
 
       return res.json({
         success: true,
@@ -1191,9 +1197,10 @@ async function startServer() {
         syncedAt: new Date().toISOString(),
         targetId,
       });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
+      } catch (err: any) {
+        return res.status(400).json({ success: false, message: err.message || 'Runtime credential refresh failed.' });
+      }
+    })();
   });
 
   // Automated Key Sync Status & Diagnostic Health
@@ -1301,7 +1308,7 @@ async function startServer() {
 
       const result = TelegramAdminService.executeCommand({
         command,
-        chatId: chatId || '749201994',
+        chatId: chatId || '',
         username: username || 'admin',
         source: source || 'admin_panel_simulator',
       });
@@ -1482,6 +1489,21 @@ async function startServer() {
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Universal Bot Server running on http://0.0.0.0:${PORT}`);
+    heartbeatTimer = setInterval(() => {
+      void (async () => {
+        try {
+          ServerDatabase.getStats();
+          const response = await fetch(`http://127.0.0.1:${PORT}/health`, {
+            signal: AbortSignal.timeout(2500),
+          });
+          if (!response.ok) console.warn(`[KeepAlive] Health check returned HTTP ${response.status}.`);
+        } catch (error: any) {
+          console.warn('[KeepAlive] Internal heartbeat failed:', error?.message || error);
+        }
+      })();
+    }, heartbeatIntervalMs);
+    heartbeatTimer.unref?.();
+    console.log(`[KeepAlive] Internal health and database heartbeat enabled every ${heartbeatIntervalMs / 60000} minutes.`);
     void multiChannelGateway.startAll().catch((error: any) => {
       console.error('❌ [MultiChannelGateway] Startup exception:', error);
     });
@@ -1489,6 +1511,10 @@ async function startServer() {
 
   const shutdown = async (signal: string) => {
     console.log(`\n🛑 [Server] Received ${signal}. Initiating graceful shutdown...`);
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     await multiChannelGateway.stopAll();
     await TelegramBotService.stop();
     server.close(() => {

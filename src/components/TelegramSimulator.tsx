@@ -148,7 +148,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 command: userText,
-                chatId: config.telegramAdminChatId || config.adminTelegramId || '749201994',
+                chatId: config.telegramAdminChatId || config.adminTelegramId || '',
                 username: 'admin',
                 source: 'simulator',
               }),
@@ -205,7 +205,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               break;
 
             case 'id':
-              botResponse = `🆔 *User & Chat Telemetry:*\n• **Chat ID:** \`${config.telegramAdminChatId || '749201994'}\`\n• **Platform:** \`${activePlatform.toUpperCase()}\`\n• **Authorization:** \`ADMIN_AUTHORIZED\``;
+              botResponse = `🆔 *User & Chat Telemetry:*\n• **Chat ID:** \`${config.telegramAdminChatId || 'Not configured'}\`\n• **Platform:** \`${activePlatform.toUpperCase()}\`\n• **Authorization:** \`ADMIN_AUTHORIZED\``;
               break;
 
             case 'yt_seo':
@@ -273,7 +273,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
                 `• **Uptime:** \`99.99%\` (24/7 Managed Background Node)\n` +
                 `• **AI Failover Pool:** \`20 / 20 Available\`\n` +
                 `• **Messaging Gateways:** \`10 Protocols Active (Telegram, Discord, Slack, WhatsApp, Twilio, Pushover, Line, Matrix, Pyrogram, Apprise)\`\n` +
-                `• **Active Admin Whitelist:** \`${config.telegramAdminChatId || config.adminTelegramId || '749201994'}\`\n` +
+                `• **Active Admin Whitelist:** \`${config.telegramAdminChatId || config.adminTelegramId || 'Not configured'}\`\n` +
                 `• **Memory Buffer:** \`${memoryTurns.length} active conversation turns\``;
               break;
 
@@ -283,7 +283,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
                 'Multi-channel diagnostic ping broadcasted across Telegram, Discord, and Pushover.',
                 'INFO'
               );
-              botResponse = `✅ *Diagnostic Alert Broadcasted!*\n\nDispatched simultaneously to:\n1. **Telegram Admin ID:** \`${config.telegramAdminChatId || config.adminTelegramId || '749201994'}\`\n2. **Discord Webhook:** \`${config.discordAdminWebhookUrl || 'Configured Webhook'}\``;
+              botResponse = `✅ *Diagnostic Alert Broadcasted!*\n\nDispatched simultaneously to:\n1. **Telegram Admin ID:** \`${config.telegramAdminChatId || config.adminTelegramId || 'Not configured'}\`\n2. **Discord Webhook:** \`${config.discordAdminWebhookUrl || 'Configured Webhook'}\``;
               break;
 
             case 'reset':

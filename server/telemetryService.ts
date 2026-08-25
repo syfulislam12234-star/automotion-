@@ -151,7 +151,7 @@ class TelemetryServiceImpl {
     );
 
     // Initial seed recent interaction events
-    const sampleChats = ['749201994', '582910382', '629103847', '391028472', '819203948'];
+    const sampleChats = ['sample-chat-a', 'sample-chat-b', 'sample-chat-c', 'sample-chat-d', 'sample-chat-e'];
     const sampleQueries = [
       'What are the latest earthquake alerts in Bangladesh?',
       'Write a high-performance Python script for WebSocket streams',
@@ -207,6 +207,10 @@ class TelemetryServiceImpl {
       status: 'winner' | 'runner_up' | 'timed_out' | 'failed';
     }>;
   }) {
+    queueMicrotask(() => this.applyInteraction(event));
+  }
+
+  private applyInteraction(event: Parameters<TelemetryServiceImpl['recordInteraction']>[0]) {
     this.totalTelegramQueries += event.isTelegram ? 1 : 0;
 
     // Find best match in metrics
@@ -319,7 +323,7 @@ class TelemetryServiceImpl {
         modelUsed: p.model,
         latencyMs: lat,
         success: true,
-        chatId: '749201994',
+        chatId: 'system-benchmark',
         sender: '@system_benchmark',
         querySnippet: prompt,
         isTelegram: true,

@@ -185,7 +185,7 @@ const DEFAULT_CONFIG: BotConfig = {
   ollamaModel: 'llama3.3:latest',
 
   // Admin Alerting & Heartbeats
-  adminTelegramId: '749201994',
+  adminTelegramId: '',
   discordAdminWebhookUrl: '',
   enableAdminAlerts: true,
   enableHeartbeatNotifications: true,
@@ -193,7 +193,7 @@ const DEFAULT_CONFIG: BotConfig = {
   // Telegram Admin Bot Controller
   enableTelegramAdminController: true,
   telegramAdminBotToken: '',
-  telegramAdminChatId: '749201994',
+  telegramAdminChatId: '',
   telegramAdminStrictWhitelist: true,
   telegramAdminAllowRestart: true,
 
@@ -360,7 +360,8 @@ export default function App() {
     };
   }, []);
 
-  const handleConfigChange = (newConfig: BotConfig) => {
+  const handleConfigChange = async (newConfig: BotConfig): Promise<boolean> => {
+    const previousConfig = config;
     setConfig(newConfig);
     try {
       localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(newConfig));
@@ -368,7 +369,16 @@ export default function App() {
       console.error('Failed to persist config to localStorage:', e);
     }
     // Permanently sync with server database
-    AuthService.saveUserBotConfig(newConfig, currentUser?.id);
+    const saved = await AuthService.saveUserBotConfig(newConfig, currentUser?.id);
+    if (!saved) {
+      setConfig(previousConfig);
+      try {
+        localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(previousConfig));
+      } catch (e) {
+        console.error('Failed to restore previous config in localStorage:', e);
+      }
+    }
+    return saved;
   };
 
   const showToast = (msg: string) => {

@@ -51,7 +51,7 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
   onShowToast,
 }) => {
   const [adminBotToken, setAdminBotToken] = useState(config.telegramAdminBotToken || config.telegramBotToken || '');
-  const [adminChatId, setAdminChatId] = useState(config.telegramAdminChatId || config.adminTelegramId || '749201994');
+  const [adminChatId, setAdminChatId] = useState(config.telegramAdminChatId || config.adminTelegramId || '');
   const [isEnabled, setIsEnabled] = useState(config.enableTelegramAdminController !== false);
   const [strictWhitelist, setStrictWhitelist] = useState(config.telegramAdminStrictWhitelist !== false);
   const [allowRestart, setAllowRestart] = useState(config.telegramAdminAllowRestart !== false);
@@ -74,9 +74,9 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
     timestamp: string;
   } | null>({
     command: '/status',
-    senderId: '749201994',
-    username: 'syful_admin',
-    isAuthorized: true,
+    senderId: '',
+    username: 'configured-admin',
+    isAuthorized: false,
     response: `🟢 <b>UNIVERSAL CLUSTER STATUS & HEALTH</b>\n━━━━━━━━━━━━━━━━━━━━\n🖥️ <b>VPS Node:</b> <code>Universal-Cloud-Node-01</code> (24/7 Managed)\n⏱️ <b>Server Uptime:</b> <code>14d 11h 23m</code>\n⚡ <b>System Load:</b> CPU: <code>14.2%</code> | RAM: <code>512MB / 2048MB</code>\n\n💾 <b>Permanent Database:</b>\n• Registered Users: <code>2 registered</code>\n• Saved Bot Configs: <code>1 configs</code>\n• Active Auth Sessions: <code>1 active</code>\n\n🧠 <b>20-AI Cascade Pool:</b> <code>20 / 20 OPERATIONAL</code>\n• Tier 1: Groq LPU (42ms) 🟢\n• Tier 2: Google Gemini 3.7 / 2.5 (68ms) 🟢\n• Tier 3: Cerebras (38ms) 🟢\n• Tier 4: OpenRouter DeepSeek R1 (74ms) 🟢\n\n📡 <b>10 Gateways:</b> Telegram, Discord, WhatsApp, Slack, Matrix (All Active)`,
     latencyMs: 38,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -168,9 +168,9 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
     setIsExecuting(true);
     const targetChatId =
       simulatorUserType === 'authorized'
-        ? adminChatId.trim() || '749201994'
+        ? adminChatId.trim()
         : customSimulatorChatId.trim() || '99887766';
-    const targetUsername = simulatorUserType === 'authorized' ? 'syful_admin' : 'unauthorized_attacker';
+    const targetUsername = simulatorUserType === 'authorized' ? 'configured-admin' : 'unauthorized-user';
 
     try {
       const res = await fetch('/api/telegram-admin/command', {
@@ -369,7 +369,7 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
                 type="text"
                 value={adminChatId}
                 onChange={(e) => setAdminChatId(e.target.value)}
-                placeholder="e.g. 749201994"
+                placeholder="e.g. 123456789"
                 className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500 transition"
               />
               <button
@@ -386,7 +386,7 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
               </button>
             </div>
             <p className="text-[11px] text-slate-400">
-              💡 <strong>How to find your Chat ID:</strong> Message <code>@userinfobot</code> or <code>@RawDataBot</code> on Telegram. Enter your numeric ID here (e.g. <code>749201994</code>). Multiple IDs can be separated with commas.
+              💡 <strong>How to find your Chat ID:</strong> Message <code>@userinfobot</code> or <code>@RawDataBot</code> on Telegram. Enter your numeric ID here. Multiple IDs can be separated with commas.
             </p>
           </div>
 
@@ -593,7 +593,7 @@ export const TelegramAdminController: React.FC<TelegramAdminControllerProps> = (
               }`}
             >
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Authorized Admin ({adminChatId || '749201994'})</span>
+              <span>Authorized Admin ({adminChatId || 'Not configured'})</span>
             </button>
             <button
               onClick={() => setSimulatorUserType('unauthorized')}

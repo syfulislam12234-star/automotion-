@@ -540,7 +540,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
                     type="text"
                     value={target.chatId}
                     onChange={(e) => handleUpdateTarget(idx, 'chatId', e.target.value)}
-                    placeholder="Chat ID (e.g. 749201994 or -100...)"
+                    placeholder="Chat ID (e.g. 123456789 or -100...)"
                     className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-cyan-300 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                   />
                 </div>

@@ -130,7 +130,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) throw new Error(data.message || data.error || 'Channel connection failed.');
       setChannelStatuses((prev) => ({ ...prev, [platform]: { status: enabled ? 'connected' : 'stopped' } }));
-      onShowToast(`✅ ${platform.toUpperCase()} ${enabled ? 'connected' : 'stopped'} successfully.`);
+      onShowToast(`🟢 Live & Active: ${platform.toUpperCase()} ${enabled ? 'connected' : 'stopped'} successfully.`);
     } catch (error: any) {
       setChannelStatuses((prev) => ({ ...prev, [platform]: { status: 'error', error: error?.message || 'Connection failed.' } }));
       onShowToast(`⚠️ ${platform.toUpperCase()}: ${error?.message || 'Connection failed.'}`);
@@ -264,6 +264,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           <Cpu className="w-3.5 h-3.5" />
           <span>20 AI APIs</span>
         </button>
+          {Object.values(channelStatuses).some((entry) => entry.status === 'connected' || entry.status === 'running') && (
+            <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold flex items-center gap-1">
+              <Check className="w-3 h-3" /> Live & Active
+            </span>
+          )}
 
         <button
           onClick={() => setActiveTab('messaging')}

@@ -45,8 +45,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [activeTab, setActiveTab] = useState<'login' | 'signup' | 'verify'>(initialTab);
   
   // Login form state
-  const [loginEmail, setLoginEmail] = useState('syfulislam12234@gmail.com');
-  const [loginPassword, setLoginPassword] = useState('admin123456');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
 
@@ -115,7 +115,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       if (res.requiresVerification && res.unverifiedUser) {
         setVerifyEmail(res.unverifiedUser.email);
-        setLastGeneratedOtp(res.unverifiedUser.verificationCode || '749201');
+        setLastGeneratedOtp(res.unverifiedUser.verificationCode || null);
         setActiveTab('verify');
         setErrorMessage(res.message);
         onShowToast('⚠️ Please verify your 6-digit email code to continue.');
@@ -189,7 +189,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       // Fallback in case manual verification was flagged
       setVerifyEmail(res.user.email);
-      setLastGeneratedOtp(res.verificationCode || '749201');
+      setLastGeneratedOtp(res.verificationCode || null);
       setResendCooldown(60);
       setActiveTab('verify');
       setSuccessMessage(res.message);
@@ -286,25 +286,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Quick autofill demo OTP
   const handleAutofillDemoOtp = () => {
-    const code = lastGeneratedOtp || '749201';
+    const code = lastGeneratedOtp;
+    if (!code) return;
     const digits = code.split('').slice(0, 6);
     setOtpDigits(digits);
     setSuccessMessage(`Code ${code} filled into boxes! Click "Verify & Launch".`);
-  };
-
-  // Quick 1-click login for demonstration
-  const handleQuickDemoLogin = async (type: 'admin' | 'developer') => {
-    setIsLoading(true);
-    try {
-      const session = await AuthService.quickLogin(type);
-      setIsLoading(false);
-      onShowToast(`⚡ Authenticated as ${session.user.name} (${session.user.role.toUpperCase()})`);
-      onAuthenticated(session);
-      if (onClose) onClose();
-    } catch (err: any) {
-      setIsLoading(false);
-      onShowToast('⚡ Demo login active');
-    }
   };
 
   return (
@@ -503,28 +489,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 )}
               </button>
 
-              {/* Quick Demo Login Preset Buttons */}
-              <div className="pt-3 border-t border-slate-800/80 space-y-2">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block text-center">
-                  Quick Demo Access (1-Click)
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleQuickDemoLogin('admin')}
-                    className="px-3 py-2 rounded-xl bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/30 text-indigo-300 text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <span>👑 Admin Profile</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickDemoLogin('developer')}
-                    className="px-3 py-2 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/30 text-cyan-300 text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <span>💻 Dev Profile</span>
-                  </button>
-                </div>
-              </div>
             </form>
           )}
 

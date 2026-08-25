@@ -87,18 +87,7 @@ export interface BroadcastLogEntry {
   }>;
 }
 
-const DEFAULT_10_TARGETS: TelegramBroadcastTarget[] = [
-  { id: 'tg_1', label: 'Admin (Syful Islam - Verified)', chatId: '749201994', type: 'admin_private', enabled: true },
-  { id: 'tg_2', label: 'Bangladesh Alerts & Tech Channel', chatId: '-1001982736451', type: 'channel', enabled: true },
-  { id: 'tg_3', label: 'Breaking News Broadcast Network', chatId: '-1002081928374', type: 'supergroup', enabled: true },
-  { id: 'tg_4', label: 'YouTube Updates & Creators Hub', chatId: '-1002148291038', type: 'channel', enabled: true },
-  { id: 'tg_5', label: 'Dhaka & Seismic Watch Network', chatId: '-1002239102948', type: 'supergroup', enabled: true },
-  { id: 'tg_6', label: 'AI & Multi-Platform Bot Community', chatId: '-1002349019283', type: 'group', enabled: true },
-  { id: 'tg_7', label: 'Emergency Response Sentinel', chatId: '-1002458192039', type: 'channel', enabled: true },
-  { id: 'tg_8', label: 'Global Developer Broadcast', chatId: '-1002569201948', type: 'supergroup', enabled: true },
-  { id: 'tg_9', label: 'Enterprise Cluster Feed', chatId: '-1002670192834', type: 'channel', enabled: true },
-  { id: 'tg_10', label: 'Universal Notification Gateway', chatId: '-1002781920394', type: 'group', enabled: true },
-];
+const DEFAULT_10_TARGETS: TelegramBroadcastTarget[] = [];
 
 const DEFAULT_YT_CHANNELS: YouTubeChannelConfig[] = [
   { id: 'yt_1', name: 'BBC News Bangla', channelId: 'UCv_fR32m2m6c7o9W8p1f8vg', enabled: true },

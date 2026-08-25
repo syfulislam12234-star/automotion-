@@ -25,31 +25,10 @@ let serverStartTime = Date.now();
 let totalProcessedCommands = 48;
 let lastReloadTimestamp = new Date().toISOString();
 
-const auditLogs: TelegramAdminLogEntry[] = [
-  {
-    id: 'log-seed-1',
-    timestamp: new Date(Date.now() - 1000 * 60 * 15).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    chatId: '749201994',
-    username: 'syful_admin',
-    command: '/status',
-    status: 'AUTHORIZED',
-    response: 'Cluster Status: Healthy. 20 AI Cascades active.',
-    latencyMs: 38,
-  },
-  {
-    id: 'log-seed-2',
-    timestamp: new Date(Date.now() - 1000 * 60 * 8).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    chatId: '109823412',
-    username: 'random_user',
-    command: '/restart',
-    status: 'UNAUTHORIZED_REJECTED',
-    response: 'Security Violation: Unauthorized Chat ID.',
-    latencyMs: 12,
-  },
-];
+const auditLogs: TelegramAdminLogEntry[] = [];
 
 let adminConfig: TelegramAdminConfig = {
-  adminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || '749201994',
+  adminChatId: process.env.ADMIN_TELEGRAM_ID || '',
   adminBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   isEnabled: true,
   allowRestart: true,
@@ -87,8 +66,7 @@ export class TelegramAdminService {
       return allowed.includes(checkId);
     }
 
-    // Default fallback if not set
-    return checkId === '749201994' || checkId === 'admin';
+    return false;
   }
 
   public static executeCommand(params: {

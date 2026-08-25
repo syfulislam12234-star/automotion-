@@ -35,7 +35,7 @@ interface ApiPortalModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: BotConfig;
-  onUpdateConfig: (newConfig: BotConfig) => void;
+  onUpdateConfig: (newConfig: BotConfig) => void | Promise<boolean>;
   onShowToast: (msg: string) => void;
   initialPlatformId?: string;
 }
@@ -651,11 +651,19 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
     onUpdateConfig({ ...config, [field]: val });
   };
 
-  const handleExplicitSave = () => {
-    onUpdateConfig(config);
-    setIsSavedRecently(true);
-    onShowToast(`💾 All API keys and gateway configurations saved successfully!`);
-    setTimeout(() => setIsSavedRecently(false), 2500);
+  const handleExplicitSave = async () => {
+    try {
+      const result = onUpdateConfig(config);
+      if (result instanceof Promise && !(await result)) {
+        throw new Error('Live runtime refresh was rejected. Previous configuration remains active.');
+      }
+      setIsSavedRecently(true);
+      onShowToast(`🟢 Live & Active: ${currentService.name} configuration refreshed.`);
+      setTimeout(() => setIsSavedRecently(false), 2500);
+    } catch (error: any) {
+      setIsSavedRecently(false);
+      onShowToast(`⚠️ Live update failed: ${error?.message || 'Previous configuration remains active.'}`);
+    }
   };
 
   const handleTestService = (serviceId: string, customKey?: string) => {

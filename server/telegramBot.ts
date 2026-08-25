@@ -48,6 +48,8 @@ class TelegramBotServiceImpl {
   private isRunning: boolean = false;
   private isPollingActive: boolean = false;
   private pollingAbortController: AbortController | null = null;
+  private pollingKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  private lastPollingActivityAt = 0;
   private botUsername: string | null = null;
   private botId: number | string | null = null;
   private lastUpdateId: number = 0;
@@ -77,7 +79,7 @@ class TelegramBotServiceImpl {
     const rawToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
     this.token = rawToken.trim();
     this.secretToken = (process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN || '').trim();
-    this.adminId = (process.env.ADMIN_TELEGRAM_ID || process.env.TELEGRAM_ADMIN_CHAT_ID || '749201994').trim();
+    this.adminId = (process.env.ADMIN_TELEGRAM_ID || '').trim();
 
     const envMode = (process.env.RUN_MODE || 'polling').toLowerCase().trim();
     this.runMode = envMode === 'webhook' ? 'webhook' : 'polling';
@@ -139,7 +141,39 @@ class TelegramBotServiceImpl {
 
     this.isPollingActive = true;
     this.pollingAbortController = new AbortController();
+    this.lastPollingActivityAt = Date.now();
+    this.startPollingKeepAlive();
     this.pollLoop();
+  }
+
+  private startPollingKeepAlive(): void {
+    if (this.pollingKeepAliveTimer) return;
+    this.pollingKeepAliveTimer = setInterval(() => {
+      void this.checkPollingConnection();
+    }, 5 * 60 * 1000);
+    (this.pollingKeepAliveTimer as any).unref?.();
+  }
+
+  private async checkPollingConnection(): Promise<void> {
+    if (!this.isPollingActive || !this.isRunning) return;
+    try {
+      await this.callApi('getMe');
+      if (Date.now() - this.lastPollingActivityAt > 30 * 60 * 1000) {
+        console.warn('[TelegramBot] Polling connection idle for over 30 minutes; refreshing long-poll loop.');
+        this.isPollingActive = false;
+        this.pollingAbortController?.abort();
+        this.pollingAbortController = null;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        if (this.isRunning) await this.startPolling();
+      }
+    } catch (error: any) {
+      console.warn('[TelegramBot] Polling keep-alive ping failed:', error?.message || error);
+      this.isPollingActive = false;
+      this.pollingAbortController?.abort();
+      this.pollingAbortController = null;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (this.isRunning) await this.startPolling();
+    }
   }
 
   /**
@@ -154,7 +188,8 @@ class TelegramBotServiceImpl {
           offset: this.lastUpdateId ? this.lastUpdateId + 1 : 0,
           timeout: 25,
           allowed_updates: ['message', 'edited_message', 'callback_query'],
-        });
+        }, this.pollingAbortController?.signal);
+        this.lastPollingActivityAt = Date.now();
 
         consecutiveErrors = 0;
 
@@ -189,10 +224,48 @@ class TelegramBotServiceImpl {
   public async stop(): Promise<void> {
     console.log('🛑 [TelegramBot] Stopping Telegram Bot Service...');
     this.isPollingActive = false;
+    if (this.pollingKeepAliveTimer) {
+      clearInterval(this.pollingKeepAliveTimer);
+      this.pollingKeepAliveTimer = null;
+    }
     this.isRunning = false;
     if (this.pollingAbortController) {
       this.pollingAbortController.abort();
       this.pollingAbortController = null;
+    }
+  }
+
+  public async reloadFromConfig(config: any): Promise<void> {
+    const nextToken = String(config?.telegramBotToken || '').trim();
+    if (!nextToken || nextToken === this.token) return;
+
+    const previousToken = this.token;
+    const previousWasRunning = this.isRunning;
+    const previousMode = this.runMode;
+
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${nextToken}/getMe`, {
+        signal: AbortSignal.timeout(3500),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok || !data.result?.is_bot) {
+        throw new Error(data.description || `Telegram token validation failed (HTTP ${response.status}).`);
+      }
+
+      await this.stop();
+      this.token = nextToken;
+      this.botUsername = data.result.username || data.result.first_name || null;
+      this.botId = data.result.id || null;
+      this.runMode = config?.deploymentMode === 'webhook' ? 'webhook' : previousMode;
+      this.isRunning = true;
+      if (this.runMode === 'polling') await this.startPolling();
+    } catch (error) {
+      await this.stop();
+      this.token = previousToken;
+      this.runMode = previousMode;
+      this.isRunning = previousWasRunning;
+      if (previousWasRunning && previousMode === 'polling') await this.startPolling();
+      throw error;
     }
   }
 
@@ -1775,7 +1848,7 @@ class TelegramBotServiceImpl {
             model,
             messages: [{ role: 'system', content: systemPrompt }, ...history.map((h) => ({ role: h.role, content: h.content })), { role: 'user', content: prompt }],
           }),
-          signal: AbortSignal.timeout(4000),
+          signal: AbortSignal.timeout(3000),
         });
 
         if (resp.ok) {
@@ -1873,7 +1946,7 @@ class TelegramBotServiceImpl {
             seed: Math.floor(Math.random() * 100000),
             jsonMode: false,
           }),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(3000),
         });
 
         if (resp.ok) {
@@ -1896,7 +1969,7 @@ class TelegramBotServiceImpl {
       // GET Attempt with system prompt & model
       try {
         const getUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=${model}&system=${encodeURIComponent(systemPrompt)}&seed=${Math.floor(Math.random() * 10000)}`;
-        const resp = await fetch(getUrl, { signal: AbortSignal.timeout(4500) });
+        const resp = await fetch(getUrl, { signal: AbortSignal.timeout(3000) });
         if (resp.ok) {
           const text = await resp.text();
           if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
@@ -1909,7 +1982,7 @@ class TelegramBotServiceImpl {
     // Direct fallback GET
     try {
       const getUrl2 = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
-      const resp = await fetch(getUrl2, { signal: AbortSignal.timeout(4000) });
+      const resp = await fetch(getUrl2, { signal: AbortSignal.timeout(3000) });
       if (resp.ok) {
         const text = await resp.text();
         if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
@@ -1992,7 +2065,7 @@ class TelegramBotServiceImpl {
       const pollinationsUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(
         systemPrompt
       )}`;
-      const pResp2 = await fetch(pollinationsUrl, { signal: AbortSignal.timeout(6000) });
+      const pResp2 = await fetch(pollinationsUrl, { signal: AbortSignal.timeout(3000) });
       if (pResp2.ok) {
         const pText2 = await pResp2.text();
         if (pText2 && pText2.trim() && !pText2.includes('<html>') && !pText2.startsWith('<!DOCTYPE')) {
@@ -2015,7 +2088,7 @@ class TelegramBotServiceImpl {
           ],
           max_tokens: 1024,
         }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(3000),
       });
       if (cfResp.ok) {
         const cfData = await cfResp.json();
@@ -2039,7 +2112,7 @@ class TelegramBotServiceImpl {
               messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
               model: 'openai',
             }),
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(3000),
           });
           if (resp.ok) {
             const raw = await resp.text();
@@ -2059,7 +2132,7 @@ class TelegramBotServiceImpl {
     // 10. Direct GET endpoint fallback
     try {
       const fallbackUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
-      const getResp = await fetch(fallbackUrl, { signal: AbortSignal.timeout(5000) });
+      const getResp = await fetch(fallbackUrl, { signal: AbortSignal.timeout(3000) });
       if (getResp.ok) {
         const text = await getResp.text();
         if (text && text.trim() && !text.startsWith('<')) {
@@ -2196,7 +2269,7 @@ class TelegramBotServiceImpl {
   /**
    * Generic Telegram Bot API fetch helper
    */
-  private async callApi<T = any>(method: string, body?: any): Promise<T> {
+  private async callApi<T = any>(method: string, body?: any, signal?: AbortSignal): Promise<T> {
     if (!this.token) {
       throw new Error('Telegram Bot Token not configured');
     }
@@ -2208,7 +2281,7 @@ class TelegramBotServiceImpl {
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(30000),
+      signal: signal || AbortSignal.timeout(30000),
     });
 
     const data = await resp.json();

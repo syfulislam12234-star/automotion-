@@ -4,39 +4,10 @@ import { FirestoreDataService } from './firestoreDataService';
 const USERS_STORAGE_KEY = 'groq_bot_users_db_v1';
 const SESSION_STORAGE_KEY = 'groq_bot_auth_session_v1';
 
-// Seed initial users if none exist in localStorage
-const INITIAL_USERS: UserAccount[] = [
-  {
-    id: 'usr_admin_syful',
-    name: 'Syful Islam',
-    email: 'syfulislam12234@gmail.com',
-    role: 'admin',
-    isVerified: true,
-    verificationCode: '749201',
-    createdAt: '2026-08-20T10:00:00.000Z',
-    lastLoginAt: '2026-08-22T02:00:00.000Z',
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    bio: 'Lead System Architect & Admin',
-  },
-  {
-    id: 'usr_demo_dev',
-    name: 'Alex Rivera',
-    email: 'demo@groqbot.io',
-    role: 'developer',
-    isVerified: true,
-    verificationCode: '749201',
-    createdAt: '2026-08-21T12:00:00.000Z',
-    lastLoginAt: '2026-08-22T01:30:00.000Z',
-    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    bio: 'Bot Engineer & AI Specialist',
-  },
-];
+const INITIAL_USERS: UserAccount[] = [];
 
 const PASSWORDS_STORAGE_KEY = 'groq_bot_passwords_v1';
-const INITIAL_PASSWORDS: Record<string, string> = {
-  'syfulislam12234@gmail.com': 'admin123456',
-  'demo@groqbot.io': 'demo123456',
-};
+const INITIAL_PASSWORDS: Record<string, string> = {};
 
 export class AuthService {
   private static getStoredUsers(): UserAccount[] {
@@ -257,7 +228,7 @@ export class AuthService {
     }
 
     const user = users[userIndex];
-    if (user.verificationCode !== code && code !== '749201') {
+    if (user.verificationCode !== code) {
       return {
         success: false,
         message: 'Invalid verification code. Please check your 6-digit OTP and try again.',
@@ -374,7 +345,7 @@ export class AuthService {
     const passwords = this.getStoredPasswords();
     const savedPassword = passwords[cleanEmail];
 
-    if (savedPassword && savedPassword !== params.password && params.password !== 'admin123456' && params.password !== 'demo123456') {
+    if (savedPassword && savedPassword !== params.password) {
       return {
         success: false,
         message: 'Incorrect password. Please try again or use the demo credentials.',
@@ -408,47 +379,6 @@ export class AuthService {
     };
   }
 
-  // Quick 1-click test login for quick preview / demo
-  public static async quickLogin(type: 'admin' | 'developer'): Promise<AuthSession> {
-    try {
-      const resp = await fetch('/api/auth/quick-demo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type }),
-      });
-      const data = await resp.json();
-      if (resp.ok && data.success && data.session) {
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
-        return data.session;
-      }
-    } catch (e) {
-      console.warn('Backend quick login failed, using local session');
-    }
-
-    const users = this.getStoredUsers();
-    const targetEmail = type === 'admin' ? 'syfulislam12234@gmail.com' : 'demo@groqbot.io';
-    let user = users.find(u => u.email.toLowerCase() === targetEmail);
-
-    if (!user) {
-      user = type === 'admin' ? INITIAL_USERS[0] : INITIAL_USERS[1];
-      users.push(user);
-      this.saveUsers(users);
-    }
-
-    user.isVerified = true;
-    user.lastLoginAt = new Date().toISOString();
-    this.saveUsers(users);
-
-    const session: AuthSession = {
-      token: `gauth_${Date.now()}_quick_${type}`,
-      user,
-      expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
-    };
-
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-    return session;
-  }
-
   // Permanently save user's bot configuration to server database and Firestore cloud
   public static async saveUserBotConfig(config: BotConfig, userId?: string): Promise<boolean> {
     const session = this.getCurrentSession();
@@ -471,9 +401,8 @@ export class AuthService {
           userId: effectiveUserId,
         }),
       });
-      // Also trigger real-time key sync
-      this.syncKeysToServer(config, userId);
-      return resp.ok;
+      const data = await resp.json().catch(() => ({}));
+      return resp.ok && data.success !== false;
     } catch (e) {
       console.warn('Failed to sync bot config to server DB:', e);
       return false;

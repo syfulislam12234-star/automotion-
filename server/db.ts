@@ -69,43 +69,10 @@ function verifyPassword(password: string, hash: string, salt: string): boolean {
   return result === hash;
 }
 
-// Initial seed users with cryptographic hashes
-const adminPass = hashPassword('admin123456');
-const demoPass = hashPassword('demo123456');
-
 const INITIAL_DB: DbSchema = {
   version: 1,
   lastSaved: new Date().toISOString(),
-  users: [
-    {
-      id: 'usr_admin_syful',
-      name: 'Syful Islam',
-      email: 'syfulislam12234@gmail.com',
-      role: 'admin',
-      isVerified: true,
-      verificationCode: '749201',
-      passwordHash: adminPass.hash,
-      passwordSalt: adminPass.salt,
-      createdAt: '2026-08-20T10:00:00.000Z',
-      lastLoginAt: '2026-08-22T02:00:00.000Z',
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      bio: 'Lead System Architect & Admin',
-    },
-    {
-      id: 'usr_demo_dev',
-      name: 'Alex Rivera',
-      email: 'demo@groqbot.io',
-      role: 'developer',
-      isVerified: true,
-      verificationCode: '749201',
-      passwordHash: demoPass.hash,
-      passwordSalt: demoPass.salt,
-      createdAt: '2026-08-21T12:00:00.000Z',
-      lastLoginAt: '2026-08-22T01:30:00.000Z',
-      avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-      bio: 'Bot Engineer & AI Specialist',
-    },
-  ],
+  users: [],
   sessions: [],
   botConfigs: {},
   channels: {},
@@ -286,7 +253,7 @@ export class ServerDatabase {
     }
 
     const isMatch = verifyPassword(params.password, user.passwordHash, user.passwordSalt);
-    if (!isMatch && params.password !== 'admin123456' && params.password !== 'demo123456') {
+    if (!isMatch) {
       return {
         success: false,
         message: 'Incorrect password. Please verify credentials.',
@@ -333,7 +300,7 @@ export class ServerDatabase {
       return { success: false, message: 'User account not found.' };
     }
 
-    if (user.verificationCode !== code && code !== '749201') {
+    if (user.verificationCode !== code) {
       return {
         success: false,
         message: 'Invalid verification code. Please check your 6-digit OTP.',
@@ -420,37 +387,8 @@ export class ServerDatabase {
   }
 
   public static quickLogin(type: 'admin' | 'developer') {
-    this.init();
-    const targetEmail = type === 'admin' ? 'syfulislam12234@gmail.com' : 'demo@groqbot.io';
-    let user = this.getUserByEmail(targetEmail);
-
-    if (!user) {
-      const pass = hashPassword(type === 'admin' ? 'admin123456' : 'demo123456');
-      user = {
-        id: `usr_${type}_${Date.now()}`,
-        name: type === 'admin' ? 'Syful Islam' : 'Alex Rivera',
-        email: targetEmail,
-        role: type,
-        isVerified: true,
-        verificationCode: '749201',
-        passwordHash: pass.hash,
-        passwordSalt: pass.salt,
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-      };
-      this.memoryDb.users.push(user);
-    }
-
-    user.isVerified = true;
-    user.lastLoginAt = new Date().toISOString();
-    const session = this.createSession(user.id);
-    this.saveToFile();
-
-    return {
-      token: session.token,
-      user: this.sanitizeUser(user),
-      expiresAt: session.expiresAt,
-    };
+    void type;
+    return null;
   }
 
   // Save per-user Bot Configurations permanently
