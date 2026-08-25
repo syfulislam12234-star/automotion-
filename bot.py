@@ -884,6 +884,7 @@ async def start_telegram_session(token: str) -> Application:
         app = build_telegram_application(normalized_token)
         try:
             await app.initialize()
+            await app.bot.get_me()
             await app.start()
             if not app.updater:
                 raise RuntimeError("Telegram updater is unavailable.")

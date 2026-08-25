@@ -180,7 +180,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
     }
   };
 
-  const handleTestKey = (serviceId: string, keyValue?: string, isZeroKey: boolean = false) => {
+  const handleTestKey = (serviceId: string, keyValue?: string, isZeroKey: boolean = false, field?: keyof BotConfig) => {
+    onChange(field && keyValue !== undefined ? { ...config, [field]: keyValue as BotConfig[typeof field] } : config);
     setTestResults((prev) => ({
       ...prev,
       [serviceId]: { status: 'testing' },
@@ -426,11 +427,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('groq', config.groqApiKey)}
+                onClick={() => handleTestKey('groq', config.groqApiKey, false, 'groqApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
-                <span>Test</span>
+                <span>Submit</span>
               </button>
             </div>
           </div>
@@ -500,11 +501,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('gemini', config.geminiApiKey)}
+                onClick={() => handleTestKey('gemini', config.geminiApiKey, false, 'geminiApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
-                <span>Test</span>
+                <span>Submit</span>
               </button>
             </div>
           </div>
@@ -566,11 +567,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('cerebras', config.cerebrasApiKey)}
+                onClick={() => handleTestKey('cerebras', config.cerebrasApiKey, false, 'cerebrasApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
-                <span>Test</span>
+                <span>Submit</span>
               </button>
             </div>
           </div>
@@ -632,11 +633,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('openrouter', config.openrouterApiKey)}
+                onClick={() => handleTestKey('openrouter', config.openrouterApiKey, false, 'openrouterApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
-                <span>Test</span>
+                <span>Submit</span>
               </button>
             </div>
           </div>
@@ -698,11 +699,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('sambanova', config.sambanovaApiKey)}
+                onClick={() => handleTestKey('sambanova', config.sambanovaApiKey, false, 'sambanovaApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
-                <span>Test</span>
+                <span>Submit</span>
               </button>
             </div>
           </div>
@@ -767,10 +768,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('mistral', config.mistralApiKey)}
+                onClick={() => handleTestKey('mistral', config.mistralApiKey, false, 'mistralApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
               >
-                Test
+                Submit
               </button>
             </div>
           </div>
@@ -820,10 +821,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('github', config.githubToken)}
+                onClick={() => handleTestKey('github', config.githubToken, false, 'githubToken')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
               >
-                Test
+                Submit
               </button>
             </div>
           </div>
@@ -924,10 +925,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('telegram', config.telegramBotToken)}
+                onClick={() => handleTestKey('telegram', config.telegramBotToken, false, 'telegramBotToken')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
               >
-                Test
+                Submit
               </button>
             </div>
           </div>
@@ -979,10 +980,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('discord', config.discordBotToken)}
+                onClick={() => handleTestKey('discord', config.discordBotToken, false, 'discordBotToken')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
               >
-                Test
+                Submit
               </button>
             </div>
           </div>
@@ -1034,10 +1035,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('slack', config.slackBotToken)}
+                onClick={() => handleTestKey('slack', config.slackBotToken, false, 'slackBotToken')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
               >
-                Test
+                Submit
               </button>
             </div>
           </div>
@@ -1094,7 +1095,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('whatsapp', config.whatsappAccessToken)}
+                onClick={() => handleTestKey('whatsapp', config.whatsappAccessToken, false, 'whatsappAccessToken')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
               >
                 Test
@@ -1223,7 +1224,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   Paste
                 </button>
                 <button
-                  onClick={() => handleTestKey('youtube', config.youtubeClientId)}
+                  onClick={() => handleTestKey('youtube', config.youtubeClientId, false, 'youtubeClientId')}
                   className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
                 >
                   Verify

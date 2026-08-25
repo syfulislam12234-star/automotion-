@@ -659,13 +659,19 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   };
 
   const handleTestService = (serviceId: string, customKey?: string) => {
+    const service = PORTAL_SERVICES.find((item) => item.id === serviceId);
+    if (!service) return;
+    if (service.configKeyField && customKey !== undefined) {
+      onUpdateConfig({ ...config, [service.configKeyField]: customKey });
+    } else {
+      onUpdateConfig(config);
+    }
     setTestStatus((prev) => ({
       ...prev,
       [serviceId]: { status: 'testing', message: 'Verifying credentials and measuring endpoint latency...' },
     }));
 
-    const s = PORTAL_SERVICES.find((item) => item.id === serviceId);
-    if (!s) return;
+    const s = service;
 
     const keyVal = customKey !== undefined 
       ? customKey 
@@ -1134,7 +1140,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
                             </button>
                           )}
 
-                          {/* 1-Click Test Button */}
+                          {/* 1-Click credential submission and validation */}
                           <button
                             onClick={() => handleTestService(currentService.id)}
                             disabled={currentTest.status === 'testing'}
@@ -1143,12 +1149,12 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
                             {currentTest.status === 'testing' ? (
                               <>
                                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                <span>Pinging...</span>
+                                <span>Submitting...</span>
                               </>
                             ) : (
                               <>
                                 <Zap className="w-3.5 h-3.5" />
-                                <span>Test Connection</span>
+                                <span>Submit</span>
                               </>
                             )}
                           </button>

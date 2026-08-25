@@ -40,14 +40,18 @@ export class MultiChannelGateway {
   }
 
   public async configure(channel: DbChannelConnection): Promise<DbChannelConnection> {
-    this.validateChannel(channel);
-    const previous = ServerDatabase.getChannel(channel.id);
-    if (previous && previous.userId !== channel.userId) throw new Error('Channel belongs to another user.');
+    const normalizedChannel = this.normalizeChannel(channel);
+    this.validateChannel(normalizedChannel);
+    if (normalizedChannel.platform === 'telegram' && normalizedChannel.credentials.token) {
+      await this.validateTelegramToken(normalizedChannel.credentials.token);
+    }
+    const previous = ServerDatabase.getChannel(normalizedChannel.id);
+    if (previous && previous.userId !== normalizedChannel.userId) throw new Error('Channel belongs to another user.');
 
     const saved = ServerDatabase.saveChannel({
-      ...channel,
+      ...normalizedChannel,
       updatedAt: new Date().toISOString(),
-      status: channel.enabled ? 'configured' : 'stopped',
+      status: normalizedChannel.enabled ? 'configured' : 'stopped',
     });
     await this.stop(channel.id);
     if (saved.enabled) await this.start(saved);
@@ -74,7 +78,7 @@ export class MultiChannelGateway {
     }
     for (const channel of ServerDatabase.getAllChannels()) {
       if (!channel.enabled) continue;
-      if (channel.platform === 'telegram' && channel.credentials.token === process.env.TELEGRAM_BOT_TOKEN) continue;
+      if (channel.platform === 'telegram' && channel.credentials.token === (process.env.TELEGRAM_BOT_TOKEN || '').trim()) continue;
       try {
         await this.start(channel);
       } catch (error: any) {
@@ -87,7 +91,7 @@ export class MultiChannelGateway {
     const channels: Array<{ platform: Platform; enabled: boolean; mode: 'polling' | 'webhook'; credentials: Record<string, string> }> = [
       {
         platform: 'telegram',
-        enabled: Boolean(config.enableTelegram && config.telegramBotToken && config.telegramBotToken !== process.env.TELEGRAM_BOT_TOKEN),
+        enabled: Boolean(config.enableTelegram && config.telegramBotToken && config.telegramBotToken.trim() !== (process.env.TELEGRAM_BOT_TOKEN || '').trim()),
         mode: config.deploymentMode === 'webhook' ? 'webhook' : 'polling',
         credentials: { token: String(config.telegramBotToken || '') },
       },
@@ -156,14 +160,26 @@ export class MultiChannelGateway {
     }
     this.running.add(channel.id);
     ServerDatabase.saveChannel({ ...channel, status: 'running', lastError: undefined, updatedAt: new Date().toISOString() });
-    if (channel.platform === 'telegram' && channel.mode === 'polling') {
-      const task = this.pollTelegram(channel).finally(() => this.pollingTasks.delete(channel.id));
-      this.pollingTasks.set(channel.id, task);
+    if (channel.platform === 'telegram') {
+      const token = this.requiredCredential(channel, ['token', 'botToken', 'telegramBotToken']);
+      if (channel.mode === 'polling') {
+        await this.telegramApi(token, 'deleteWebhook', { drop_pending_updates: false });
+        const task = this.pollTelegram(channel).finally(() => this.pollingTasks.delete(channel.id));
+        this.pollingTasks.set(channel.id, task);
+      } else if (channel.credentials.webhookUrl) {
+        await this.telegramApi(token, 'setWebhook', {
+          url: channel.credentials.webhookUrl,
+          secret_token: channel.credentials.webhookSecret || undefined,
+          drop_pending_updates: true,
+        });
+      }
     }
   }
 
   private async stop(channelId: string): Promise<void> {
     this.running.delete(channelId);
+    const pollingTask = this.pollingTasks.get(channelId);
+    if (pollingTask) await pollingTask.catch(() => undefined);
     const channel = ServerDatabase.getChannel(channelId);
     if (channel) ServerDatabase.saveChannel({ ...channel, status: 'stopped', updatedAt: new Date().toISOString() });
   }
@@ -187,6 +203,37 @@ export class MultiChannelGateway {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
+  }
+
+  private async validateTelegramToken(token: string): Promise<void> {
+    const normalizedToken = token.trim();
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${normalizedToken}/getMe`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        console.error('[MultiChannelGateway] Telegram token rejected with HTTP 401.');
+        throw new Error('Telegram bot token is invalid or unauthorized (HTTP 401).');
+      }
+      if (!response.ok || !data.ok || !data.result?.is_bot) {
+        console.error('[MultiChannelGateway] Telegram getMe validation failed:', response.status, data.description || 'Invalid token');
+        throw new Error(data.description || `Telegram token validation failed (HTTP ${response.status}).`);
+      }
+    } catch (error: any) {
+      if (error?.message?.includes('invalid or unauthorized') || error?.message?.includes('validation failed')) throw error;
+      console.error('[MultiChannelGateway] Telegram getMe request failed:', error?.message || error);
+      throw new Error(`Telegram token validation failed: ${error?.message || 'network error'}`);
+    }
+  }
+
+  private normalizeChannel(channel: DbChannelConnection): DbChannelConnection {
+    return {
+      ...channel,
+      credentials: Object.fromEntries(
+        Object.entries(channel.credentials || {}).map(([key, value]) => [key, String(value || '').trim()])
+      ),
+    };
   }
 
   private async processMessage(channel: DbChannelConnection, message: IncomingMessage): Promise<void> {
