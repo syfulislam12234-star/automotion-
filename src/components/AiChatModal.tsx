@@ -129,15 +129,24 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       const saved = localStorage.getItem('universal_bot_copilot_chat');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter((message): message is ChatMessage => (
+            message &&
+            typeof message === 'object' &&
+            (message.role === 'user' || message.role === 'assistant') &&
+            typeof message.content === 'string'
+          ));
+        }
       }
     } catch {
-      // fallback to initial
+      // Use an empty chat when persisted data is invalid.
     }
-    return INITIAL_MESSAGES;
+    return [];
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<'gemini-3.7-flash' | 'groq-llama-3.3' | 'deepseek-r1' | 'cerebras-llama3.3'>('gemini-3.7-flash');
@@ -164,10 +173,11 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     }
   }, [messages]);
 
-  if (!isOpen) return null;
-
   const handleSendMessage = useCallback(async (textToSend: string) => {
     if (!textToSend || isLoading) return;
+
+    setAssistantError(null);
+    setLastFailedPrompt(null);
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -204,10 +214,10 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         }),
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       const latency = Date.now() - startTime;
 
-      if (data && data.text) {
+      if (response.ok && data && data.text) {
         const assistantMsg: ChatMessage = {
           id: `ai-${Date.now()}`,
           role: 'assistant',
@@ -218,19 +228,12 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         };
         setMessages((prev) => [...prev, assistantMsg]);
       } else {
-        throw new Error(data.error || 'Unable to generate response');
+        throw new Error(data.message || data.error || 'Unable to generate response');
       }
     } catch (err: any) {
       console.error('Chat error:', err);
-      const fallbackMsg: ChatMessage = {
-        id: `ai-err-${Date.now()}`,
-        role: 'assistant',
-        content: `I processed your question: **"${textToSend}"**\n\n- 💡 **Quick Tip**: You can generate complete Python source code and environment configurations in the **Code Studio** tab.\n- ⚡ **Multi-Provider Engine**: Active on 20 AI endpoints with sub-100ms failover.\n\nLet me know if you need code snippets or deployment advice!`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        provider: 'Centralized Groq / Multi-Provider Fallback',
-        latencyMs: Date.now() - startTime,
-      };
-      setMessages((prev) => [...prev, fallbackMsg]);
+      setAssistantError(err?.message || 'The assistant could not connect right now.');
+      setLastFailedPrompt(textToSend);
     } finally {
       setIsLoading(false);
     }
@@ -326,14 +329,22 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     return formatted;
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div
-      className={`fixed z-50 transition-all duration-300 ease-out shadow-2xl flex flex-col bg-slate-900 border border-slate-700/80 ${
+    <>
+      <div
+        className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-[2px]"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        className={`fixed z-50 flex flex-col transition-all duration-300 ease-out shadow-2xl bg-slate-900 border border-slate-700/80 ${
         isExpanded
           ? 'bottom-4 right-4 sm:bottom-6 sm:right-6 w-[calc(100vw-2rem)] sm:w-[680px] h-[calc(100vh-4rem)] max-h-[820px] rounded-3xl'
           : 'bottom-4 right-4 sm:bottom-6 sm:right-6 w-[calc(100vw-2rem)] sm:w-[460px] h-[600px] max-h-[calc(100vh-5rem)] rounded-3xl'
-      }`}
-    >
+        }`}
+      >
       {/* Header Bar */}
       <div className="px-5 py-3.5 bg-gradient-to-r from-slate-900 via-slate-900 to-cyan-950/60 border-b border-slate-800 rounded-t-3xl flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
@@ -428,7 +439,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
 
       {/* Messages Scroll Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs select-text scrollbar-thin scrollbar-thumb-slate-700">
-        {messages.map((msg) => (
+        {(messages?.length ? messages : []).map((msg) => (
           <div
             key={msg.id}
             className={`flex items-start gap-2.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -509,11 +520,32 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           </div>
         )}
 
+        {assistantError && (
+          <div className="flex items-start gap-2.5 justify-start">
+            <div className="w-7 h-7 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-300 shrink-0 mt-0.5">
+              <Bot className="w-4 h-4" />
+            </div>
+            <div className="rounded-2xl rounded-tl-xs border border-rose-500/30 bg-rose-950/30 p-3.5 text-xs text-rose-100 space-y-2">
+              <p>{assistantError}</p>
+              {lastFailedPrompt && (
+                <button
+                  type="button"
+                  onClick={() => handleSendMessage(lastFailedPrompt)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 px-2.5 py-1.5 text-rose-200 hover:bg-rose-500/20 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Retry
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
       {/* Suggested Quick Prompts */}
-      {messages.length <= 2 && (
+      {(messages?.length ?? 0) <= 2 && (
         <div className="px-4 py-2 border-t border-slate-800/80 bg-slate-950/40 flex flex-wrap gap-1.5 shrink-0">
           <span className="text-[10px] text-slate-400 font-medium w-full flex items-center gap-1">
             <HelpCircle className="w-3 h-3 text-cyan-400" />
@@ -531,7 +563,8 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         </div>
       )}
 
-      <ChatInput isLoading={isLoading} onSend={handleSendMessage} isOpen={isOpen} />
-    </div>
+        <ChatInput isLoading={isLoading} onSend={handleSendMessage} isOpen={isOpen} />
+      </div>
+    </>
   );
 };
