@@ -22,6 +22,7 @@ import { OmniChannelGateway } from './components/OmniChannelGateway';
 import { EnterpriseSecurity } from './components/EnterpriseSecurity';
 import { YouTubeStudioModal } from './components/YouTubeStudioModal';
 import { CronBroadcastManager } from './components/CronBroadcastManager';
+import { Sidebar, AppView } from './components/Sidebar';
 import { AuthService } from './services/authService';
 import {
   Download,
@@ -289,6 +290,7 @@ const DEFAULT_CONFIG: BotConfig = {
 
 const CONFIG_STORAGE_KEY = 'universal_bot_config_v2';
 const ADMIN_UNLOCKED_STORAGE_KEY = 'universal_bot_admin_unlocked';
+const SECRETS_UNLOCKED_STORAGE_KEY = 'universal_bot_secrets_unlocked';
 
 const getInitialConfig = (): BotConfig => {
   try {
@@ -317,7 +319,7 @@ export default function App() {
 
   // Active View Tab Navigation
   const [activeTab, setActiveTab] = useState<
-    'simulator' | 'performance' | 'cascade' | 'cron' | 'gateways' | 'security' | 'vps' | 'scanner' | 'admin' | 'studio'
+    AppView
   >('simulator');
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
@@ -339,6 +341,16 @@ export default function App() {
     }
   });
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [pinTarget, setPinTarget] = useState<'code' | 'secrets'>('code');
+  const [pendingProtectedView, setPendingProtectedView] = useState<AppView | null>(null);
+  const [isSecretsUnlocked, setIsSecretsUnlocked] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(SECRETS_UNLOCKED_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Sync session & load permanently saved user bot config from server database on mount
   useEffect(() => {
@@ -424,13 +436,53 @@ export default function App() {
     AuthService.logOut();
     setSession(null);
     setIsCodeStudioUnlocked(false);
+    setIsSecretsUnlocked(false);
     try {
       sessionStorage.removeItem(ADMIN_UNLOCKED_STORAGE_KEY);
+      sessionStorage.removeItem(SECRETS_UNLOCKED_STORAGE_KEY);
     } catch (e) {
       console.error(e);
     }
     setActiveTab('simulator');
     showToast('👋 You have been logged out.');
+  };
+
+  const handleUnlockSecrets = () => {
+    setIsSecretsUnlocked(true);
+    try {
+      sessionStorage.setItem(SECRETS_UNLOCKED_STORAGE_KEY, 'true');
+    } catch (e) {
+      console.error(e);
+    }
+    setActiveTab(pendingProtectedView || 'settings');
+    setPendingProtectedView(null);
+    showToast('🔓 Secret fields unlocked for this session.');
+  };
+
+  const openSecretsPinModal = (view: AppView = 'settings') => {
+    setPinTarget('secrets');
+    setPendingProtectedView(view);
+    setIsPinModalOpen(true);
+  };
+
+  const handleSidebarSelect = (view: AppView) => {
+    if (['settings', 'gateways', 'vps', 'admin'].includes(view) && !isSecretsUnlocked) {
+      openSecretsPinModal(view);
+      return;
+    }
+    if (view === 'studio') {
+      handleStudioTabClick();
+      return;
+    }
+    if (view === 'admin') {
+      handleAdminTabClick();
+      return;
+    }
+    if (view === 'vps') {
+      handleVpsTabClick();
+      return;
+    }
+    setActiveTab(view);
   };
 
   const handleUnlockCodeStudio = () => {
@@ -459,6 +511,7 @@ export default function App() {
   const handleStudioTabClick = () => {
     requireAuth('Code & Architecture Studio', () => {
       if (!isCodeStudioUnlocked && config.requireAdminPinForCode !== false) {
+        setPinTarget('code');
         setIsPinModalOpen(true);
       } else {
         setActiveTab('studio');
@@ -540,6 +593,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+      <Sidebar
+        isOpen={isSidebarOpen}
+        activeView={activeTab}
+        isSecretsUnlocked={isSecretsUnlocked}
+        isCodeStudioUnlocked={isCodeStudioUnlocked}
+        onClose={() => setIsSidebarOpen(false)}
+        onSelectView={handleSidebarSelect}
+        onOpenPortal={() => handleOpenPortal('groq')}
+        onOpenSubscription={() => setIsSubscriptionModalOpen(true)}
+        onOpenYouTube={() => setIsYouTubeStudioOpen(true)}
+        onOpenDeploy={() => setIsDeployGuideOpen(true)}
+        onOpenAuth={() => { setAuthFeatureContext(undefined); setAuthModalTab('login'); setIsAuthModalOpen(true); }}
+        onLogOut={handleLogOut}
+        currentUser={currentUser}
+      />
       {/* Universal Super-App Navbar */}
       <Navbar
         currentUser={currentUser}
@@ -559,8 +627,9 @@ export default function App() {
         onOpenYouTubeStudio={() => setIsYouTubeStudioOpen(true)}
         onOpenAiChat={() => setIsAiChatOpen(true)}
         isCodeStudioUnlocked={isCodeStudioUnlocked}
-        onOpenAdminPinModal={() => setIsPinModalOpen(true)}
+        onOpenAdminPinModal={() => { setPinTarget('code'); setIsPinModalOpen(true); }}
         onLockCodeStudio={handleLockCodeStudio}
+        onToggleSidebar={() => setIsSidebarOpen(true)}
       />
 
       {/* Main Container */}
@@ -635,7 +704,7 @@ export default function App() {
         </section>
 
         {/* Top View Selector Navigation Bar */}
-        <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-2 overflow-x-auto">
+        <div className="hidden">
           <div className="flex items-center gap-1.5 min-w-max">
             {/* View 1: Live Gateway Simulator */}
             <button
@@ -825,17 +894,35 @@ export default function App() {
                 <TelegramSimulator config={config} />
               </div>
               <div className="lg:col-span-5 space-y-6">
-                <ConfigPanel
-                  config={config}
-                  onChange={handleConfigChange}
-                  onResetToDefaults={handleResetToDefaults}
-                  onOpenPortal={handleOpenPortal}
-                  onShowToast={showToast}
-                />
                 <MemoryInspector config={config} />
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <ConfigPanel
+            config={config}
+            onChange={handleConfigChange}
+            onResetToDefaults={handleResetToDefaults}
+            onOpenPortal={handleOpenPortal}
+            onShowToast={showToast}
+            secretsUnlocked={isSecretsUnlocked}
+            onRequestSecretAccess={openSecretsPinModal}
+          />
+        )}
+
+        {activeTab === 'preferences' && (
+          <ConfigPanel
+            config={config}
+            onChange={handleConfigChange}
+            onResetToDefaults={handleResetToDefaults}
+            onOpenPortal={handleOpenPortal}
+            onShowToast={showToast}
+            initialTab="model"
+            secretsUnlocked={isSecretsUnlocked}
+            onRequestSecretAccess={openSecretsPinModal}
+          />
         )}
 
         {/* View 2: Performance Dashboard (Real-Time 100-AI Telemetry) */}
@@ -901,10 +988,11 @@ export default function App() {
               if (isCodeStudioUnlocked) {
                 handleLockCodeStudio();
               } else {
+                setPinTarget('code');
                 setIsPinModalOpen(true);
               }
             }}
-            onOpenPinModal={() => setIsPinModalOpen(true)}
+            onOpenPinModal={() => { setPinTarget('code'); setIsPinModalOpen(true); }}
           />
         )}
 
@@ -972,7 +1060,7 @@ export default function App() {
                 </div>
                 <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
                   <button
-                    onClick={() => setIsPinModalOpen(true)}
+                    onClick={() => { setPinTarget('code'); setIsPinModalOpen(true); }}
                     className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-white text-sm font-bold transition shadow-lg shadow-amber-500/25 active:scale-95 cursor-pointer"
                   >
                     <Key className="w-4 h-4" />
@@ -1040,9 +1128,10 @@ export default function App() {
       <AdminPinModal
         isOpen={isPinModalOpen}
         onClose={() => setIsPinModalOpen(false)}
-        onSuccess={handleUnlockCodeStudio}
+        onSuccess={pinTarget === 'secrets' ? handleUnlockSecrets : handleUnlockCodeStudio}
         correctPin={config.adminPin || '7788'}
         onShowToast={showToast}
+        successMessage={pinTarget === 'secrets' ? '🔓 Secret fields unlocked for this session.' : undefined}
       />
 
       {/* 1-Click Direct API Setup & Messaging Portal Modal */}

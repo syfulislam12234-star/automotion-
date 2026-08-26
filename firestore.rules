@@ -11,16 +11,20 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return request.auth != null && request.auth.token.role == 'admin';
+    }
+
     // Users Collection
     match /users/{userId} {
       allow read: if isSignedIn();
-      allow write: if isOwner(userId) || (request.auth != null && request.auth.token.role == 'admin');
+      allow write: if isOwner(userId) || isAdmin();
     }
 
     // Bot Configurations Collection
     match /bot_configs/{configId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      // API keys, bot tokens, and deployment credentials are owner-scoped.
+      allow read, write: if isOwner(configId) || isAdmin();
     }
 
     // Chat Simulator Messages Collection
@@ -42,9 +46,10 @@ service cloud.firestore {
       allow write: if isSignedIn();
     }
 
-    // Default catch-all rule
+    // Unknown collections are denied by default. Add an explicit match before
+    // deploying any new server-backed feature.
     match /{document=**} {
-      allow read, write: if isSignedIn();
+      allow read, write: if false;
     }
   }
 }

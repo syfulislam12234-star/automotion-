@@ -37,6 +37,9 @@ interface ConfigPanelProps {
   onResetToDefaults: () => void;
   onOpenPortal?: (serviceId?: string) => void;
   onShowToast?: (msg: string) => void;
+  initialTab?: 'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model';
+  secretsUnlocked?: boolean;
+  onRequestSecretAccess?: () => void;
 }
 
 const PRESET_SYSTEM_PROMPTS = [
@@ -63,8 +66,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   onResetToDefaults,
   onOpenPortal,
   onShowToast = (_msg: string) => {},
+  initialTab = 'providers',
+  secretsUnlocked = true,
+  onRequestSecretAccess,
 }) => {
-  const [activeTab, setActiveTab] = useState<'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model'>('providers');
+  const [activeTab, setActiveTab] = useState<'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model'>(initialTab);
   const [testResults, setTestResults] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid' | 'idle'; latency?: number }>>({});
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
@@ -72,6 +78,14 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
 
   const toggleReveal = (field: string) => {
     setRevealedFields((prev) => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const selectTab = (tab: 'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model') => {
+    if (tab !== 'model' && !secretsUnlocked) {
+      onRequestSecretAccess?.();
+      return;
+    }
+    setActiveTab(tab);
   };
 
   const updateField = <K extends keyof BotConfig>(key: K, value: BotConfig[K]) => {
@@ -258,7 +272,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
       {/* Navigation Tabs */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 my-4 p-1 bg-slate-950/70 rounded-xl border border-slate-800/80">
         <button
-          onClick={() => setActiveTab('providers')}
+          onClick={() => selectTab('providers')}
           className={`py-1.5 px-1.5 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'providers'
               ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-sm font-semibold'
@@ -275,7 +289,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           )}
 
         <button
-          onClick={() => setActiveTab('messaging')}
+          onClick={() => selectTab('messaging')}
           className={`py-1.5 px-1.5 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'messaging'
               ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-sm font-semibold'
@@ -287,7 +301,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('youtube')}
+          onClick={() => selectTab('youtube')}
           className={`py-1.5 px-1.5 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'youtube'
               ? 'bg-gradient-to-r from-red-500 to-pink-600 text-white shadow-sm font-semibold'
@@ -299,7 +313,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('alerts')}
+          onClick={() => selectTab('alerts')}
           className={`py-1.5 px-1.5 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'alerts'
               ? 'bg-gradient-to-r from-rose-500 to-amber-500 text-white shadow-sm font-semibold'
@@ -311,7 +325,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('hosting')}
+          onClick={() => selectTab('hosting')}
           className={`py-1.5 px-1.5 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'hosting'
               ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-sm font-semibold'
@@ -323,7 +337,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('model')}
+          onClick={() => selectTab('model')}
           className={`py-1.5 px-1.5 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'model'
               ? 'bg-gradient-to-r from-slate-700 to-slate-800 text-cyan-300 shadow-sm font-semibold'

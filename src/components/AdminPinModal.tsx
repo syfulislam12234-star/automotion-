@@ -7,6 +7,7 @@ interface AdminPinModalProps {
   onSuccess: () => void;
   correctPin: string;
   onShowToast: (msg: string) => void;
+  successMessage?: string;
 }
 
 export const AdminPinModal: React.FC<AdminPinModalProps> = ({
@@ -15,6 +16,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
   onSuccess,
   correctPin,
   onShowToast,
+  successMessage = '🔓 Admin access verified: Code & Architecture Studio unlocked.',
 }) => {
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
@@ -35,7 +37,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
         setIsSubmitting(false);
         setPin('');
         onSuccess();
-        onShowToast('🔓 Admin access verified: Code & Architecture Studio unlocked.');
+        onShowToast(successMessage);
         onClose();
       }, 300);
     } else {

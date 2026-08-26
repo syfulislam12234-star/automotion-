@@ -22,6 +22,7 @@ import {
   Video,
   Layers,
   Radio,
+  Menu,
 } from 'lucide-react';
 import { UserAccount } from '../types';
 
@@ -42,6 +43,7 @@ interface NavbarProps {
   isCodeStudioUnlocked?: boolean;
   onOpenAdminPinModal?: () => void;
   onLockCodeStudio?: () => void;
+  onToggleSidebar?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -61,6 +63,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   isCodeStudioUnlocked = false,
   onOpenAdminPinModal,
   onLockCodeStudio,
+  onToggleSidebar,
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
@@ -69,6 +72,11 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* Left Branding */}
         <div className="flex items-center gap-3">
+          {onToggleSidebar && (
+            <button onClick={onToggleSidebar} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white lg:hidden" title="Open navigation">
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 ring-1 ring-cyan-400/30">
             <Bot className="w-5 h-5 text-white" />
           </div>
