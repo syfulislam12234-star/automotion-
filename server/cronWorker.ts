@@ -589,9 +589,41 @@ export class CronWorkerServiceImpl {
 
       // Fetch all sources concurrently
       const [eqData, newsData, ytData] = await Promise.all([
-        this.fetchBangladeshEarthquakes(),
-        this.fetchBangladeshBreakingNews(),
-        this.fetchYouTubeUpdates(),
+        this.fetchBangladeshEarthquakes().catch((error) => {
+          console.error('[Cron Broadcast] Earthquake source failed; using fallback bulletin:', error);
+          return {
+            earthquakes: [],
+            summary: `🟡 <b>Seismic Sentinel:</b> Live data is temporarily unavailable. No verified regional events are being reported in this bulletin.`,
+          };
+        }),
+        this.fetchBangladeshBreakingNews().catch((error) => {
+          console.error('[Cron Broadcast] Bangladesh news source failed; using fallback bulletin:', error);
+          const fallback = {
+            id: 'news_fallback',
+            title: 'Bangladesh news feed temporarily unavailable; monitor official sources for verified updates.',
+            source: 'Universal Bot Fallback Bulletin',
+            link: 'https://www.bssnews.net/',
+            publishedAt: new Date().toISOString(),
+          };
+          return {
+            news: [fallback],
+            digest: `<b>1.</b> ${this.escapeHtml(fallback.title)} <i>(${this.escapeHtml(fallback.source)})</i>`,
+          };
+        }),
+        this.fetchYouTubeUpdates().catch((error) => {
+          console.error('[Cron Broadcast] YouTube source failed; using fallback bulletin:', error);
+          const fallback = {
+            id: 'yt_fallback',
+            channelName: 'Universal Bot Fallback Bulletin',
+            title: 'YouTube feeds temporarily unavailable; latest configured channel updates will resume automatically.',
+            videoUrl: 'https://www.youtube.com/',
+            publishedAt: new Date().toISOString(),
+          };
+          return {
+            videos: [fallback],
+            summary: `▶️ <b>${this.escapeHtml(fallback.channelName)}:</b> <a href="${fallback.videoUrl}">${this.escapeHtml(fallback.title)}</a>`,
+          };
+        }),
       ]);
 
       // Compose final HTML message
@@ -689,6 +721,7 @@ export class CronWorkerServiceImpl {
         console.warn('[CronWorker] Error saving run log to DB:', dbErr);
       }
 
+      console.log(`[Cron Broadcast] Successfully sent to ${successfulSends} chats; ${failedSends} failed.`);
       console.log(`✅ [CronWorker] Broadcast completed! Success: ${successfulSends}/${activeTargets.length + channelTargets.length} recipients.`);
       return logEntry;
     } finally {

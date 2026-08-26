@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -334,11 +335,32 @@ async function startServer() {
   const heartbeatIntervalMs = 4 * 60 * 1000;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
+  const configuredOrigins = (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  app.use(cors({
+    origin: configuredOrigins.length > 0
+      ? (origin, callback) => {
+        if (!origin || configuredOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error('Origin is not allowed by CORS'));
+      }
+      : true,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Internal-Channel-Request', 'X-Telegram-Bot-Api-Secret-Token'],
+  }));
+
   app.use(express.json({
     verify: (req, _res, buffer) => {
       (req as express.Request & { rawBody?: string }).rawBody = buffer.toString('utf8');
     },
   }));
+  app.use(express.urlencoded({ extended: true }));
 
   const multiChannelGateway = new MultiChannelGateway(async ({ prompt, model, systemPrompt, history }) => {
     const response = await fetch(`http://127.0.0.1:${PORT}/api/ai/generate`, {
@@ -380,6 +402,37 @@ async function startServer() {
     });
   };
 
+  const notifyAdminOfConfigurationUpdate = async (updatedBy = 'Admin'): Promise<void> => {
+    const adminConfig = TelegramAdminService.getConfig();
+    const chatIds = (process.env.ADMIN_TELEGRAM_ID || adminConfig.adminChatId || '')
+      .split(',')
+      .map((chatId) => chatId.trim())
+      .filter(Boolean);
+    const botToken = (adminConfig.adminBotToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '').trim();
+
+    if (!chatIds.length || !botToken || botToken.startsWith('YOUR_')) {
+      console.warn('[Telegram Alert] Configuration updated, but ADMIN_TELEGRAM_ID or Telegram token is not configured.');
+      return;
+    }
+
+    const message = `⚙️ <b>System Configuration Updated!</b>\n\nUpdated by ${updatedBy}.\nTime: ${new Date().toISOString()}\nChanges applied successfully to live backend services.`;
+    await Promise.all(chatIds.map(async (chatId) => {
+      try {
+        const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok === false) throw new Error(payload.description || `HTTP ${response.status}`);
+        console.log(`[Telegram Alert] Configuration update sent to ${chatId}.`);
+      } catch (error: any) {
+        console.error(`[Telegram Alert] Failed to notify admin chat ${chatId}:`, error?.message || error);
+      }
+    }));
+  };
+
   // Initialize Real Production Telegram Bot Engine (Polling or Webhook mode)
   try {
     await TelegramBotService.init();
@@ -398,34 +451,42 @@ async function startServer() {
   // HEALTH & DIAGNOSTIC ENDPOINTS
   // ==========================================
   const healthHandler = (req: express.Request, res: express.Response) => {
-    const tgStatus = TelegramBotService.getStatus();
-    const dbStats = ServerDatabase.getStats();
+    try {
+      const tgStatus = TelegramBotService.getStatus();
+      const dbStats = ServerDatabase.getStats();
 
-    return res.status(200).json({
-      status: 'ok',
-      service: 'Universal Bot Centralized AI & Telegram Gateway',
-      environment: process.env.NODE_ENV || 'production',
-      uptimeSeconds: Math.floor(process.uptime()),
-      timestamp: new Date().toISOString(),
-      telegramBot: {
-        isConfigured: tgStatus.isConfigured,
-        isRunning: tgStatus.isRunning,
-        mode: tgStatus.mode,
-        botUsername: tgStatus.botUsername,
-        botId: tgStatus.botId,
-        totalUpdatesProcessed: tgStatus.totalUpdatesProcessed,
-        activeChatSessions: tgStatus.activeChatSessions,
-        lastUpdateTimestamp: tgStatus.lastUpdateTimestamp,
-        lastError: tgStatus.lastError,
-      },
-      aiCascade: tgStatus.aiCascade,
-      database: {
-        registeredUsers: dbStats.usersCount,
-        savedBotConfigs: dbStats.savedBotConfigsCount,
-        activeSessions: dbStats.activeSessionsCount,
-      },
-      platform: CENTRAL_PLATFORM_STATUS,
-    });
+      return res.status(200).json({
+        success: true,
+        data: {
+          status: 'ok',
+          service: 'Universal Bot Centralized AI & Telegram Gateway',
+          environment: process.env.NODE_ENV || 'production',
+          uptimeSeconds: Math.floor(process.uptime()),
+          timestamp: new Date().toISOString(),
+          telegramBot: {
+            isConfigured: tgStatus.isConfigured,
+            isRunning: tgStatus.isRunning,
+            mode: tgStatus.mode,
+            botUsername: tgStatus.botUsername,
+            botId: tgStatus.botId,
+            totalUpdatesProcessed: tgStatus.totalUpdatesProcessed,
+            activeChatSessions: tgStatus.activeChatSessions,
+            lastUpdateTimestamp: tgStatus.lastUpdateTimestamp,
+            lastError: tgStatus.lastError,
+          },
+          aiCascade: tgStatus.aiCascade,
+          database: {
+            registeredUsers: dbStats.usersCount,
+            savedBotConfigs: dbStats.savedBotConfigsCount,
+            activeSessions: dbStats.activeSessionsCount,
+          },
+          platform: CENTRAL_PLATFORM_STATUS,
+        },
+      });
+    } catch (error: any) {
+      console.error('Error creating health response:', error);
+      return res.status(500).json({ success: false, message: error?.message || 'Health check failed.' });
+    }
   };
 
   // Serve both /health and /api/health as pure JSON (Never let /health hit SPA catch-all!)
@@ -487,15 +548,21 @@ async function startServer() {
   });
 
   app.get('/api/channels', (req, res) => {
-    const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
-    if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
-    return res.json({ success: true, channels: multiChannelGateway.listForUser(user.id) });
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      const channels = multiChannelGateway.listForUser(user.id);
+      return res.json({ success: true, data: channels, channels });
+    } catch (error: any) {
+      console.error('Error listing channels:', error);
+      return res.status(500).json({ success: false, message: error?.message || 'Unable to list channels.' });
+    }
   });
 
   app.post('/api/channels', async (req, res) => {
-    const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
-    if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
     try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
       const input = req.body || {};
       const channel = await multiChannelGateway.configure({
         id: String(input.id || `${user.id}:${input.platform}`),
@@ -517,21 +584,30 @@ async function startServer() {
   });
 
   app.delete('/api/channels/:channelId', async (req, res) => {
-    const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
-    if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
-    const removed = await multiChannelGateway.remove(req.params.channelId, user.id);
-    return res.json({ success: removed, removed });
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      const removed = await multiChannelGateway.remove(req.params.channelId, user.id);
+      return res.json({ success: removed, data: { removed }, removed, ...(removed ? {} : { message: 'Channel not found.' }) });
+    } catch (error: any) {
+      console.error('Error removing channel:', error);
+      return res.status(500).json({ success: false, message: error?.message || 'Unable to remove channel.' });
+    }
   });
 
   // Centralized Infrastructure Status Endpoint for Pro Users
   app.get('/api/infrastructure/status', (req, res) => {
-    res.json({
-      success: true,
-      data: {
-        ...CENTRAL_PLATFORM_STATUS,
-        lastHeartbeat: new Date().toISOString(),
-      },
-    });
+    try {
+      return res.json({
+        success: true,
+        data: {
+          ...CENTRAL_PLATFORM_STATUS,
+          lastHeartbeat: new Date().toISOString(),
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error?.message || 'Unable to read infrastructure status.' });
+    }
   });
 
   // Centralized AI Proxy Generation (Hybrid AI Ensemble Super-Brain: Parallel Querying & Intelligent Synthesis)
@@ -851,32 +927,37 @@ async function startServer() {
 
   // Test Customer Gateway Token Endpoint (Validates user's bot token against platform)
   app.post('/api/gateways/verify', async (req, res) => {
-    const { platform, token, webhookUrl } = req.body;
+    try {
+      const { platform, token } = req.body || {};
 
-    if (!platform || !token) {
-      return res.status(400).json({ success: false, message: 'Platform and bot token are required.' });
-    }
+      if (!platform || !token) {
+        return res.status(400).json({ success: false, message: 'Platform and bot token are required.' });
+      }
 
-    const latency = Math.floor(Math.random() * 40) + 30;
+      const latency = Math.floor(Math.random() * 40) + 30;
 
-    // Validate token format
-    const isValid = token.trim().length >= 8;
+      // Validate token format
+      const isValid = String(token).trim().length >= 8;
 
-    if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid token format for ${platform}. Please paste a valid token from the provider portal.`,
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid token format for ${platform}. Please paste a valid token from the provider portal.`,
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: { platform, status: 'bridged_to_central_vps', latencyMs: latency, centralVpsNode: CENTRAL_PLATFORM_STATUS.vpsNode },
+        platform,
+        status: 'bridged_to_central_vps',
+        message: `Successfully connected ${platform} bot token! Bridged to 24/7 Centralized VPS and 20-tier AI engine.`,
+        latencyMs: latency,
+        centralVpsNode: CENTRAL_PLATFORM_STATUS.vpsNode,
       });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error?.message || 'Gateway verification failed.' });
     }
-
-    return res.json({
-      success: true,
-      platform,
-      status: 'bridged_to_central_vps',
-      message: `Successfully connected ${platform} bot token! Bridged to 24/7 Centralized VPS and 20-tier AI engine.`,
-      latencyMs: latency,
-      centralVpsNode: CENTRAL_PLATFORM_STATUS.vpsNode,
-    });
   });
 
   // ==========================================
@@ -890,7 +971,7 @@ async function startServer() {
       return res.json({ success: true, data });
     } catch (err: any) {
       console.error('Error fetching telemetry performance data:', err);
-      return res.status(500).json({ success: false, error: err.message || 'Telemetry fetch error' });
+      return res.status(500).json({ success: false, message: err.message || 'Telemetry fetch error' });
     }
   });
 
@@ -902,7 +983,7 @@ async function startServer() {
       return res.json({ success: true, benchmark: benchmarkData });
     } catch (err: any) {
       console.error('Error running telemetry benchmark:', err);
-      return res.status(500).json({ success: false, error: err.message || 'Benchmark error' });
+      return res.status(500).json({ success: false, message: err.message || 'Benchmark error' });
     }
   });
 
@@ -954,7 +1035,7 @@ async function startServer() {
         data: updated,
       });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, message: err.message || 'Telemetry simulation failed.' });
     }
   });
 
@@ -965,7 +1046,7 @@ async function startServer() {
       const freshData = TelemetryService.getDashboardData();
       return res.json({ success: true, message: 'Telemetry statistics recalibrated to baseline.', data: freshData });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, message: err.message || 'Telemetry reset failed.' });
     }
   });
 
@@ -979,7 +1060,7 @@ async function startServer() {
       const stats = ServerDatabase.getStats();
       return res.json({ success: true, stats });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, message: err.message || 'Database stats unavailable.' });
     }
   });
 
@@ -1122,6 +1203,7 @@ async function startServer() {
       await refreshRuntimeConfig(targetId, config, previousConfig);
       refreshAdminConfig(config);
       const result = ServerDatabase.saveBotConfig(targetId, config);
+      void notifyAdminOfConfigurationUpdate();
       return res.json({
         success: true,
         message: 'Bot configuration permanently saved to server database.',
@@ -1190,6 +1272,7 @@ async function startServer() {
       await refreshRuntimeConfig(targetId, config, previousConfig);
       refreshAdminConfig(config);
       ServerDatabase.saveBotConfig(targetId, config);
+      void notifyAdminOfConfigurationUpdate();
 
       return res.json({
         success: true,
@@ -1234,7 +1317,7 @@ async function startServer() {
       res.setHeader('Content-Disposition', `attachment; filename=groq_bot_backup_${Date.now()}.json`);
       return res.json(backup);
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, message: err.message || 'Backup export failed.' });
     }
   });
 
@@ -1280,13 +1363,17 @@ async function startServer() {
   app.post('/api/telegram-admin/config', (req, res) => {
     try {
       const { adminChatId, adminBotToken, isEnabled, allowRestart, strictWhitelist } = req.body;
+      const existingConfig = TelegramAdminService.getConfig();
       const updated = TelegramAdminService.updateConfig({
         adminChatId,
-        adminBotToken,
+        adminBotToken: adminBotToken && !String(adminBotToken).startsWith('••')
+          ? adminBotToken
+          : existingConfig.adminBotToken,
         isEnabled: isEnabled !== undefined ? Boolean(isEnabled) : true,
         allowRestart: allowRestart !== undefined ? Boolean(allowRestart) : true,
         strictWhitelist: strictWhitelist !== undefined ? Boolean(strictWhitelist) : true,
       });
+      void notifyAdminOfConfigurationUpdate();
 
       return res.json({
         success: true,
@@ -1407,6 +1494,7 @@ async function startServer() {
   app.post('/api/cron/config', (req, res) => {
     try {
       const updatedConfig = CronWorkerService.updateConfig(req.body);
+      void notifyAdminOfConfigurationUpdate();
       return res.json({
         success: true,
         message: '3-Hour Cron Worker configuration updated successfully.',
@@ -1457,7 +1545,15 @@ async function startServer() {
 
   // API 404 Guard: Ensure that any unhandled /api/* or /webhook routes NEVER fall through to HTML SPA
   app.all(['/api/*', '/webhook', '/health'], (req, res) => {
-    return res.status(404).json({ success: false, error: 'API endpoint not found', path: req.path });
+    return res.status(404).json({ success: false, message: 'API endpoint not found', path: req.path });
+  });
+
+  // Keep parser, CORS, and route failures JSON for API clients.
+  app.use((error: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error(`[API Error] ${req.method} ${req.path}:`, error);
+    if (res.headersSent) return;
+    const status = Number(error?.statusCode || error?.status) >= 400 ? Number(error.statusCode || error.status) : 500;
+    return res.status(status).json({ success: false, message: error?.message || 'Internal server error.' });
   });
 
   // Vite middleware for development vs static production SPA serving

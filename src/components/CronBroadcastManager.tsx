@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Clock,
   Radio,
@@ -44,6 +44,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
   const [targets, setTargets] = useState<CronBroadcastTarget[]>([]);
   const [youtubeFeeds, setYoutubeFeeds] = useState<YouTubeFeedConfig[]>([]);
   const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
+  const countdownWasActive = useRef(false);
 
   // Fetch Status
   const fetchStatus = async () => {
@@ -94,6 +95,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
   // Local Countdown Timer
   useEffect(() => {
     if (countdownSeconds <= 0) return;
+    countdownWasActive.current = true;
     const timer = setInterval(() => {
       setCountdownSeconds((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
@@ -135,6 +137,13 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
       setIsTriggering(false);
     }
   };
+
+  useEffect(() => {
+    if (countdownSeconds === 0 && countdownWasActive.current) {
+      countdownWasActive.current = false;
+      void handleTriggerNow();
+    }
+  }, [countdownSeconds]);
 
   // Fetch Live Preview
   const handleLoadPreview = async () => {
