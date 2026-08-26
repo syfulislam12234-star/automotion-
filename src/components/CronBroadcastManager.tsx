@@ -45,6 +45,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
   const [youtubeFeeds, setYoutubeFeeds] = useState<YouTubeFeedConfig[]>([]);
   const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
   const countdownWasActive = useRef(false);
+  const isTriggeringRef = useRef(false);
 
   // Fetch Status
   const fetchStatus = async () => {
@@ -112,6 +113,8 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
 
   // Trigger broadcast now
   const handleTriggerNow = async () => {
+    if (isTriggeringRef.current) return;
+    isTriggeringRef.current = true;
     setIsTriggering(true);
     try {
       const resp = await fetch('/api/cron/trigger', {
@@ -123,8 +126,8 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
         const data = await resp.json();
         if (data.success) {
           onShowToast(`🚀 Broadcast dispatched to ${data.result?.totalTargets || 10} Telegram chats!`);
-          fetchStatus();
-          fetchHistory();
+          // The backend schedules the next run only after this request completes.
+          await Promise.all([fetchStatus(), fetchHistory()]);
         } else {
           onShowToast(`❌ Broadcast failed: ${data.message || 'Error'}`);
         }
@@ -134,16 +137,17 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
     } catch (err: any) {
       onShowToast(`❌ Network error: ${err.message}`);
     } finally {
+      isTriggeringRef.current = false;
       setIsTriggering(false);
     }
   };
 
   useEffect(() => {
-    if (countdownSeconds === 0 && countdownWasActive.current) {
+    if (countdownSeconds <= 0 && countdownWasActive.current && !isTriggeringRef.current) {
       countdownWasActive.current = false;
       void handleTriggerNow();
     }
-  }, [countdownSeconds]);
+  }, [countdownSeconds, isTriggering]);
 
   // Fetch Live Preview
   const handleLoadPreview = async () => {
@@ -256,7 +260,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
                 className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/25 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <Play className={`w-4 h-4 ${isTriggering ? 'animate-spin' : ''}`} />
-                {isTriggering ? 'Broadcasting Now...' : 'Trigger Broadcast Now'}
+                {isTriggering ? 'Sending Automated Broadcast...' : 'Trigger Broadcast Now'}
               </button>
 
               <button

@@ -402,7 +402,7 @@ async function startServer() {
     });
   };
 
-  const notifyAdminOfConfigurationUpdate = async (updatedBy = 'Admin'): Promise<void> => {
+  const notifyAdmin = async (message: string, alertName: string): Promise<void> => {
     const adminConfig = TelegramAdminService.getConfig();
     const chatIds = (process.env.ADMIN_TELEGRAM_ID || adminConfig.adminChatId || '')
       .split(',')
@@ -411,11 +411,10 @@ async function startServer() {
     const botToken = (adminConfig.adminBotToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '').trim();
 
     if (!chatIds.length || !botToken || botToken.startsWith('YOUR_')) {
-      console.warn('[Telegram Alert] Configuration updated, but ADMIN_TELEGRAM_ID or Telegram token is not configured.');
+      console.warn(`[Telegram Alert] ${alertName} skipped: ADMIN_TELEGRAM_ID or Telegram token is not configured.`);
       return;
     }
 
-    const message = `⚙️ <b>System Configuration Updated!</b>\n\nUpdated by ${updatedBy}.\nTime: ${new Date().toISOString()}\nChanges applied successfully to live backend services.`;
     await Promise.all(chatIds.map(async (chatId) => {
       try {
         const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -426,12 +425,17 @@ async function startServer() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || payload.ok === false) throw new Error(payload.description || `HTTP ${response.status}`);
-        console.log(`[Telegram Alert] Configuration update sent to ${chatId}.`);
+        console.log(`[Telegram Alert] ${alertName} sent to ${chatId}.`);
       } catch (error: any) {
-        console.error(`[Telegram Alert] Failed to notify admin chat ${chatId}:`, error?.message || error);
+        console.error(`[Telegram Alert] Failed to send ${alertName} to admin chat ${chatId}:`, error?.message || error);
       }
     }));
   };
+
+  const notifyAdminOfConfigurationUpdate = (): Promise<void> => notifyAdmin(
+    `⚙️ <b>Dashboard Settings Updated!</b>\n\nAdmin updated the configuration.\nTimestamp: ${new Date().toISOString()}\nStatus: Applied to live system.`,
+    'configuration update alert'
+  );
 
   // Initialize Real Production Telegram Bot Engine (Polling or Webhook mode)
   try {
@@ -1203,7 +1207,9 @@ async function startServer() {
       await refreshRuntimeConfig(targetId, config, previousConfig);
       refreshAdminConfig(config);
       const result = ServerDatabase.saveBotConfig(targetId, config);
-      void notifyAdminOfConfigurationUpdate();
+      void notifyAdminOfConfigurationUpdate().catch((error) => {
+        console.error('[Telegram Alert] Configuration notification failed:', error);
+      });
       return res.json({
         success: true,
         message: 'Bot configuration permanently saved to server database.',
@@ -1272,7 +1278,9 @@ async function startServer() {
       await refreshRuntimeConfig(targetId, config, previousConfig);
       refreshAdminConfig(config);
       ServerDatabase.saveBotConfig(targetId, config);
-      void notifyAdminOfConfigurationUpdate();
+      void notifyAdminOfConfigurationUpdate().catch((error) => {
+        console.error('[Telegram Alert] Configuration notification failed:', error);
+      });
 
       return res.json({
         success: true,
@@ -1373,7 +1381,9 @@ async function startServer() {
         allowRestart: allowRestart !== undefined ? Boolean(allowRestart) : true,
         strictWhitelist: strictWhitelist !== undefined ? Boolean(strictWhitelist) : true,
       });
-      void notifyAdminOfConfigurationUpdate();
+      void notifyAdminOfConfigurationUpdate().catch((error) => {
+        console.error('[Telegram Alert] Configuration notification failed:', error);
+      });
 
       return res.json({
         success: true,
@@ -1479,6 +1489,7 @@ async function startServer() {
   // Manually trigger broadcast immediately
   app.post('/api/cron/trigger', async (req, res) => {
     try {
+      console.log('[Cron Trigger] Automated broadcast triggered by UI timer completion.');
       const result = await CronWorkerService.triggerNow();
       return res.json({
         success: true,
@@ -1494,7 +1505,9 @@ async function startServer() {
   app.post('/api/cron/config', (req, res) => {
     try {
       const updatedConfig = CronWorkerService.updateConfig(req.body);
-      void notifyAdminOfConfigurationUpdate();
+      void notifyAdminOfConfigurationUpdate().catch((error) => {
+        console.error('[Telegram Alert] Configuration notification failed:', error);
+      });
       return res.json({
         success: true,
         message: '3-Hour Cron Worker configuration updated successfully.',
@@ -1585,6 +1598,12 @@ async function startServer() {
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Universal Bot Server running on http://0.0.0.0:${PORT}`);
+    void notifyAdmin(
+      '🚀 <b>System Updated &amp; Online!</b>\n\nBackend server deployed and running successfully.',
+      'startup alert'
+    ).catch((error) => {
+      console.error('[Telegram Alert] Startup notification failed:', error);
+    });
     heartbeatTimer = setInterval(() => {
       void (async () => {
         try {
