@@ -146,6 +146,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
+    if (isAdminPortal) {
+      setErrorMessage('Use the verified administrator email and password for this portal.');
+      return;
+    }
     setIsGoogleLoading(true);
     try {
       const result = await AuthService.signInWithGoogle();
@@ -196,6 +200,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         ? await AuthService.adminSignUp({ name: signupName, email: signupEmail, password: signupPassword })
         : await AuthService.signUp({ name: signupName, email: signupEmail, password: signupPassword });
       setIsLoading(false);
+
+      if (isAdminPortal && res.pending) {
+        setVerifyEmail(res.email || signupEmail);
+        setOtpDigits(['', '', '', '', '', '']);
+        setResendCooldown(60);
+        setActiveTab('verify');
+        setSuccessMessage(res.message);
+        return;
+      }
 
       if (!res.success || !res.user) {
         setErrorMessage(res.message);
@@ -271,7 +284,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setIsLoading(true);
     try {
-      const res = await AuthService.verifyEmailCode(verifyEmail, fullCode);
+      const res = isAdminPortal
+        ? await AuthService.verifyAdminSignUp(verifyEmail, fullCode)
+        : await AuthService.verifyEmailCode(verifyEmail, fullCode);
       setIsLoading(false);
 
       if (!res.success || !res.session) {
@@ -293,6 +308,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleResendCode = async () => {
     if (resendCooldown > 0) return;
     try {
+      if (isAdminPortal) {
+        setErrorMessage('Please start a new administrator registration to request another code.');
+        return;
+      }
       const res = await AuthService.resendVerificationCode(verifyEmail);
       if (res.success && res.code) {
         setLastGeneratedOtp(res.code);

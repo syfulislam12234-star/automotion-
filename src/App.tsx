@@ -437,6 +437,7 @@ export default function App() {
   };
 
   if (!currentUser) {
+    const isAdminLoginRoute = window.location.pathname === '/admin/login';
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100">
         <AuthModal
@@ -445,7 +446,8 @@ export default function App() {
           initialTab="login"
           onAuthenticated={handleAuthenticated}
           onShowToast={showToast}
-          featureProtectedName="the Universal Bot workspace"
+          isAdminPortal={isAdminLoginRoute}
+          featureProtectedName={isAdminLoginRoute ? 'the administrator portal' : 'the Universal Bot workspace'}
         />
       </div>
     );

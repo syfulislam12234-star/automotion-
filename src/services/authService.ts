@@ -42,6 +42,19 @@ export class AuthService {
     return data;
   }
 
+  public static async verifyAdminSignUp(email: string, code: string): Promise<any> {
+    const response = await fetch('/api/auth/admin/signup/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code }),
+    });
+    const data = await response.json();
+    if (response.ok && data.success && data.session) {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+    }
+    return data;
+  }
+
   private static getStoredUsers(): UserAccount[] {
     try {
       const data = localStorage.getItem(USERS_STORAGE_KEY);

@@ -18,6 +18,23 @@ dotenv.config();
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM;
+
+async function sendAdminRegistrationCode(email: string, code: string): Promise<boolean> {
+  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) return false;
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: AUTH_EMAIL_FROM,
+      to: [email],
+      subject: 'Administrator registration verification',
+      text: `Your administrator registration verification code is ${code}. It expires in 10 minutes.`,
+    }),
+  });
+  return response.ok;
+}
 
 const SECURITY_REFUSAL_BN = 'আমি অ্যাপের ব্যবহার ও সুবিধা সম্পর্কে সাহায্য করতে পারি, তবে নিরাপত্তাজনিত কারণে অ্যাপের অভ্যন্তরীণ প্রযুক্তিগত তথ্য শেয়ার করা সম্ভব নয়।';
 const APP_KNOWLEDGE_BASE_BN = `
@@ -1230,11 +1247,21 @@ async function startServer() {
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: 'Administrator registration fields are required.' });
     }
-    const result = ServerDatabase.registerUser({ name, email, password, role: 'admin' });
-    if (result.success && result.session) {
-      ServerDatabase.authorizeAdminSession(result.session.token);
-      result.session.adminAuthorized = true;
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    if (!ServerDatabase.createPendingAdminRegistration(name, email, password, code)) {
+      return res.status(409).json({ success: false, message: 'A primary administrator already exists or the email is already registered.' });
     }
+    return void sendAdminRegistrationCode(email, code).then((sent) => {
+      if (!sent) return res.status(503).json({ success: false, message: 'Registration email is not configured.' });
+      return res.status(202).json({ success: true, pending: true, email: String(email).toLowerCase().trim(), message: 'A verification code was sent to the administrator email.' });
+    }).catch(() => res.status(503).json({ success: false, message: 'Registration email could not be sent.' }));
+  });
+
+  app.post('/api/auth/admin/signup/verify', (req, res) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
+    if (!email || code.length !== 6) return res.status(400).json({ success: false, message: 'A valid email and 6-digit verification code are required.' });
+    const result = ServerDatabase.completePendingAdminRegistration(email, code);
     return result.success ? res.status(201).json(result) : res.status(400).json(result);
   });
 

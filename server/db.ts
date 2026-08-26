@@ -29,6 +29,20 @@ export interface DbSession {
   adminAuthorized?: boolean;
 }
 
+interface PendingAdminRegistration {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  passwordSalt: string;
+  passwordAlgorithm: 'scrypt';
+  otpHash: string;
+  otpSalt: string;
+  expiresAt: number;
+  attempts: number;
+  createdAt: string;
+}
+
 export interface DbChannelConnection {
   id: string;
   userId: string;
@@ -51,6 +65,7 @@ export interface DbSchema {
   sessions: DbSession[];
   botConfigs: Record<string, any>; // keyed by userId or email
   channels: Record<string, DbChannelConnection>;
+    pendingAdminRegistrations?: Record<string, PendingAdminRegistration>;
   backupMetadata: {
     lastBackupAt?: string;
     backupCount: number;
@@ -80,6 +95,7 @@ const INITIAL_DB: DbSchema = {
   sessions: [],
   botConfigs: {},
   channels: {},
+          pendingAdminRegistrations: {}, // Load pending administrator registration state from the database safely
   backupMetadata: {
     lastBackupAt: new Date().toISOString(),
     backupCount: 1,
@@ -107,7 +123,8 @@ export class ServerDatabase {
           users: parsed.users || INITIAL_DB.users,
           sessions: parsed.sessions || [],
           botConfigs: parsed.botConfigs || {},
-          channels: parsed.channels || {},
+            channels: parsed.channels || {},
+            pendingAdminRegistrations: parsed.pendingAdminRegistrations || INITIAL_DB.pendingAdminRegistrations,
           backupMetadata: parsed.backupMetadata || INITIAL_DB.backupMetadata,
         };
         if ((parsed.version || 1) < 3) {
@@ -212,6 +229,68 @@ export class ServerDatabase {
   public static hasAdminUsers(): boolean {
     this.init();
     return this.memoryDb.users.some((user) => user.role === 'admin');
+  }
+
+  public static createPendingAdminRegistration(name: string, email: string, password: string, otp: string): boolean {
+    this.init();
+    const cleanEmail = email.toLowerCase().trim();
+    if (this.hasAdminUsers() || this.getUserByEmail(cleanEmail)) return false;
+    const passwordData = hashPassword(password);
+    const otpSalt = crypto.randomBytes(16).toString('hex');
+    const otpHash = crypto.scryptSync(otp, otpSalt, 32).toString('hex');
+    this.memoryDb.pendingAdminRegistrations = this.memoryDb.pendingAdminRegistrations || {};
+    this.memoryDb.pendingAdminRegistrations[cleanEmail] = {
+      id: `pending_admin_${Date.now()}`,
+      name: name.trim(),
+      email: cleanEmail,
+      passwordHash: passwordData.hash,
+      passwordSalt: passwordData.salt,
+      passwordAlgorithm: passwordData.algorithm,
+      otpHash,
+      otpSalt,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+      attempts: 0,
+      createdAt: new Date().toISOString(),
+    };
+    this.saveToFile();
+    return true;
+  }
+
+  public static completePendingAdminRegistration(email: string, otp: string): { success: boolean; message: string; session?: any; user?: any } {
+    this.init();
+    const cleanEmail = email.toLowerCase().trim();
+    const pending = this.memoryDb.pendingAdminRegistrations?.[cleanEmail];
+    if (!pending || pending.expiresAt < Date.now()) return { success: false, message: 'Registration code expired. Please start again.' };
+    if (pending.attempts >= 5) return { success: false, message: 'Too many verification attempts. Please start again.' };
+    pending.attempts += 1;
+    const suppliedHash = crypto.scryptSync(otp, pending.otpSalt, 32).toString('hex');
+    if (suppliedHash !== pending.otpHash) {
+      this.saveToFile();
+      return { success: false, message: 'Invalid registration code.' };
+    }
+    if (this.hasAdminUsers() || this.getUserByEmail(cleanEmail)) {
+      delete this.memoryDb.pendingAdminRegistrations![cleanEmail];
+      this.saveToFile();
+      return { success: false, message: 'A primary administrator already exists.' };
+    }
+    const user = {
+      id: `admin_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`,
+      name: pending.name,
+      email: pending.email,
+      role: 'admin' as const,
+      isVerified: true,
+      passwordHash: pending.passwordHash,
+      passwordSalt: pending.passwordSalt,
+      passwordAlgorithm: pending.passwordAlgorithm,
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+    };
+    this.memoryDb.users.push(user);
+    delete this.memoryDb.pendingAdminRegistrations![cleanEmail];
+    const session = this.createSession(user.id);
+    session.adminAuthorized = true;
+    this.saveToFile();
+    return { success: true, message: 'Administrator account verified and created.', user: this.sanitizeUser(user), session };
   }
 
   public static sanitizeUser(user: DbUser) {
