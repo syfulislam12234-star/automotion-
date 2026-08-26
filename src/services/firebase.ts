@@ -6,7 +6,9 @@ import { getAuth } from 'firebase/auth';
 import type { Auth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const configuredApiKey = String(import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey || '').trim();
+const configuredApiKey = String(
+  import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey || ''
+).trim();
 const runtimeFirebaseConfig = {
   ...firebaseConfig,
   apiKey: configuredApiKey,
@@ -27,7 +29,7 @@ if (configuredApiKey) {
     console.warn('[Firebase] Initialization unavailable; continuing without Firebase services.', error);
   }
 } else {
-  console.warn('[Firebase] VITE_FIREBASE_API_KEY is missing; continuing without Firebase services.');
+  console.info('[Firebase] Firebase API key is not configured; Firebase features are disabled.');
 }
 
 export const app = firebaseApp;
