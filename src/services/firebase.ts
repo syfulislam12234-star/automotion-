@@ -7,7 +7,7 @@ import type { Auth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const configuredApiKey = String(
-  import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey || ''
+  import.meta.env?.VITE_FIREBASE_API_KEY ?? firebaseConfig.apiKey ?? ''
 ).trim();
 const runtimeFirebaseConfig = {
   ...firebaseConfig,
