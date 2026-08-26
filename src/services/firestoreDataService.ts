@@ -13,19 +13,13 @@ import {
   onSnapshot,
   Unsubscribe,
 } from 'firebase/firestore';
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  User as FirebaseUser,
-} from 'firebase/auth';
-import { db, auth } from './firebase';
-import { BotConfig, UserAccount, AuthSession, ChatMessage } from '../types';
+import { db } from './firebase';
+import { BotConfig, UserAccount, ChatMessage } from '../types';
 
 export class FirestoreDataService {
   // Save user profile to Firestore
   public static async saveUserProfile(user: UserAccount): Promise<void> {
+    if (!db) return;
     try {
       const userRef = doc(db, 'users', user.id);
       await setDoc(userRef, {
@@ -39,6 +33,7 @@ export class FirestoreDataService {
 
   // Get user profile from Firestore by email or ID
   public static async getUserProfile(userIdOrEmail: string): Promise<UserAccount | null> {
+    if (!db) return null;
     try {
       // First try by ID
       const userRef = doc(db, 'users', userIdOrEmail);
@@ -61,6 +56,7 @@ export class FirestoreDataService {
 
   // Save bot configuration to Firestore
   public static async saveBotConfig(userId: string, config: BotConfig): Promise<boolean> {
+    if (!db) return false;
     try {
       const configRef = doc(db, 'bot_configs', userId);
       await setDoc(configRef, {
@@ -78,6 +74,7 @@ export class FirestoreDataService {
 
   // Load bot configuration from Firestore
   public static async loadBotConfig(userId: string): Promise<BotConfig | null> {
+    if (!db) return null;
     try {
       const configRef = doc(db, 'bot_configs', userId);
       const docSnap = await getDoc(configRef);
@@ -93,6 +90,7 @@ export class FirestoreDataService {
 
   // Save a chat message to Firestore for multi-device synchronization
   public static async saveChatMessage(msg: ChatMessage, userId: string): Promise<void> {
+    if (!db) return;
     try {
       const messagesCol = collection(db, 'chat_messages');
       await addDoc(messagesCol, {
@@ -111,36 +109,40 @@ export class FirestoreDataService {
     callback: (messages: ChatMessage[]) => void
   ): Unsubscribe {
     if (!db) {
-      console.warn('[Firestore] Real-time chat sync unavailable because Firebase is not configured.');
       return () => {};
     }
 
-    const q = query(
-      collection(db, 'chat_messages'),
-      where('userId', '==', userId),
-      orderBy('createdAt', 'asc'),
-      limit(50)
-    );
+    try {
+      const q = query(
+        collection(db, 'chat_messages'),
+        where('userId', '==', userId),
+        orderBy('createdAt', 'asc'),
+        limit(50)
+      );
 
-    return onSnapshot(q, (snapshot) => {
-      const msgs: ChatMessage[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        msgs.push({
-          id: doc.id,
-          sender: data.sender,
-          text: data.text,
-          timestamp: data.timestamp,
-          platform: data.platform,
-          provider: data.provider,
-          isCommand: data.isCommand,
-          imageUrl: data.imageUrl,
-          fileName: data.fileName,
-        } as ChatMessage);
+      return onSnapshot(q, (snapshot) => {
+        const msgs: ChatMessage[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          msgs.push({
+            id: docSnap.id,
+            sender: data.sender,
+            text: data.text,
+            timestamp: data.timestamp,
+            platform: data.platform,
+            provider: data.provider,
+            isCommand: data.isCommand,
+            imageUrl: data.imageUrl,
+            fileName: data.fileName,
+          } as ChatMessage);
+        });
+        callback(msgs);
+      }, (err) => {
+        console.warn('[Firestore] Real-time chat sync notice:', err);
       });
-      callback(msgs);
-    }, (err) => {
-      console.warn('[Firestore] Real-time chat sync notice:', err);
-    });
+    } catch (e) {
+      console.warn('[Firestore] Query subscription notice:', e);
+      return () => {};
+    }
   }
 }

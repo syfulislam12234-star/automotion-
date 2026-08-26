@@ -4,49 +4,57 @@ import { getFirestore } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import type { Auth } from 'firebase/auth';
-import { getAnalytics } from 'firebase/analytics';
-import type { Analytics } from 'firebase/analytics';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const runtimeFirebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfig.appId || '',
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseConfig.measurementId || '',
+// Catch and suppress background Firebase installation permission notices if telemetry tries to run
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event?.reason;
+    const msg = (typeof reason === 'string' ? reason : reason?.message || '') + '';
+    if (msg.includes('installations') || msg.includes('Create Installation request failed')) {
+      event.preventDefault();
+      console.warn('[Firebase] Handled background installations notice gracefully.');
+    }
+  });
+}
+
+// Safely resolve Firebase configuration from Vite environment variables or fallback JSON
+const env = import.meta.env;
+
+const apiKey = (env.VITE_FIREBASE_API_KEY || env.VITE_FIREBASE_APIKEY || firebaseConfig.apiKey || '').trim();
+const authDomain = (env.VITE_FIREBASE_AUTH_DOMAIN || env.VITE_FIREBASE_AUTHDOMAIN || firebaseConfig.authDomain || '').trim();
+const projectId = (env.VITE_FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECTID || firebaseConfig.projectId || '').trim();
+const storageBucket = (env.VITE_FIREBASE_STORAGE_BUCKET || env.VITE_FIREBASE_STORAGEBUCKET || firebaseConfig.storageBucket || '').trim();
+const databaseId = (env.VITE_FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || '').trim();
+
+// Note: We deliberately exclude appId and messagingSenderId here unless needed by FCM/Analytics.
+// Excluding them prevents Firebase Web SDK from triggering unneeded Firebase Installations API (403) calls.
+export const runtimeFirebaseConfig = {
+  apiKey,
+  authDomain,
+  projectId,
+  storageBucket,
 };
-const configuredApiKey = String(runtimeFirebaseConfig.apiKey).trim();
 
 let firebaseApp: FirebaseApp | null = null;
 let firestore: Firestore | null = null;
 let firebaseAuth: Auth | null = null;
-let firebaseAnalytics: Analytics | null = null;
 
-if (configuredApiKey) {
+if (apiKey && projectId) {
   try {
     firebaseApp = getApps().length === 0 ? initializeApp(runtimeFirebaseConfig) : getApp();
-    firestore = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-      ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+    firestore = databaseId && databaseId !== '(default)'
+      ? getFirestore(firebaseApp, databaseId)
       : getFirestore(firebaseApp);
     firebaseAuth = getAuth(firebaseApp);
-    if (typeof window !== 'undefined') {
-      try {
-        firebaseAnalytics = getAnalytics(firebaseApp);
-      } catch (error) {
-        console.info('[Firebase] Analytics unavailable; continuing without analytics.', error);
-      }
-    }
   } catch (error) {
-    console.warn('[Firebase] Initialization unavailable; continuing without Firebase services.', error);
+    console.warn('[Firebase] Initialization notice:', error);
   }
 } else {
-  console.info('[Firebase] Firebase API key is not configured; Firebase features are disabled.');
+  console.info('[Firebase] API key or Project ID not provided; operating in standalone mode.');
 }
 
 export const app = firebaseApp;
 export const db = firestore as Firestore;
 export const auth = firebaseAuth as Auth;
-export const analytics = firebaseAnalytics;
-
+export const isFirebaseConfigured = Boolean(firebaseApp && firebaseAuth);

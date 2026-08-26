@@ -117,7 +117,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsLoading(true);
     try {
       const res = await AuthService.logIn({ email: loginEmail, password: loginPassword });
-      setIsLoading(false);
 
       if (res.requiresVerification && res.unverifiedUser) {
         setIsAdminSignupPending(false);
@@ -130,7 +129,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       if (!res.success || !res.session) {
-        setErrorMessage(res.message);
+        setErrorMessage(res.message || 'Invalid email or password. Please try again.');
         return;
       }
 
@@ -139,18 +138,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      setSuccessMessage(res.message);
-      onShowToast(`🎉 ${res.message}`);
+      setSuccessMessage(res.message || 'Logged in successfully.');
+      onShowToast(`🎉 ${res.message || 'Logged in successfully.'}`);
       onAuthenticated(res.session);
       if (onClose) onClose();
     } catch (err: any) {
+      console.error('[AuthModal] Login error:', err);
+      setErrorMessage(err?.message || 'Login error occurred. Please check your credentials.');
+    } finally {
       setIsLoading(false);
-      setErrorMessage(err.message || 'Login error occurred.');
     }
   };
 
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
+    setSuccessMessage(null);
     if (isAdminPortal) {
       setErrorMessage('Use the verified administrator email and password for this portal.');
       return;
@@ -159,7 +161,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const result = await AuthService.signInWithGoogle();
       if (!result.success || !result.session) {
-        setErrorMessage(result.message);
+        setErrorMessage(result.message || 'Google sign-in could not be completed.');
         return;
       }
       if (result.session.isVerified !== true) {
@@ -174,7 +176,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       onAuthenticated(result.session);
       if (onClose) onClose();
     } catch (error: any) {
-      setErrorMessage(error?.code === 'auth/popup-closed-by-user' ? 'Google sign-in was cancelled.' : 'Google sign-in failed.');
+      console.error('[AuthModal] Google sign-in exception:', error);
+      const code = error?.code || '';
+      if (code === 'auth/popup-closed-by-user') {
+        setErrorMessage('Google sign-in was cancelled (popup closed).');
+      } else if (code === 'auth/popup-blocked') {
+        setErrorMessage('Google sign-in popup was blocked by your browser. Please allow popups.');
+      } else if (code === 'auth/unauthorized-domain') {
+        setErrorMessage('This domain is not authorized in Firebase Authentication. Please check Firebase console.');
+      } else {
+        setErrorMessage(error?.message || 'Google sign-in failed. Please try again.');
+      }
     } finally {
       setIsGoogleLoading(false);
     }
@@ -212,7 +224,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = isAdminPortal
         ? await AuthService.adminSignUp({ name: signupName, email: signupEmail, password: signupPassword })
         : await AuthService.signUp({ name: signupName, email: signupEmail, password: signupPassword });
-      setIsLoading(false);
 
       if (isAdminPortal && res.pending) {
         setIsAdminSignupPending(true);
@@ -225,7 +236,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       if (!res.success || !res.user) {
-        setErrorMessage(res.message);
+        setErrorMessage(res.message || 'Registration failed.');
         return;
       }
 
@@ -249,8 +260,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setSuccessMessage(res.message);
       onShowToast('📩 Verification code sent! Please verify your email.');
     } catch (err: any) {
+      console.error('[AuthModal] Signup error:', err);
+      setErrorMessage(err?.message || 'Sign up error occurred. Please try again.');
+    } finally {
       setIsLoading(false);
-      setErrorMessage(err.message || 'Sign up error occurred.');
     }
   };
 
@@ -305,20 +318,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = isAdminSignupPending
         ? await AuthService.verifyAdminSignUp(verifyEmail, fullCode)
         : await AuthService.verifyEmailCode(verifyEmail, fullCode);
-      setIsLoading(false);
 
       if (!res.success || !res.session) {
-        setErrorMessage(res.message);
+        setErrorMessage(res.message || 'Verification failed. Please check the code.');
         return;
       }
 
-      setSuccessMessage(res.message);
-      onShowToast(`✅ ${res.message}`);
+      setSuccessMessage(res.message || 'Email successfully verified!');
+      onShowToast(`✅ ${res.message || 'Verified!'}`);
       onAuthenticated(res.session);
       if (onClose) onClose();
     } catch (err: any) {
+      console.error('[AuthModal] Verification error:', err);
+      setErrorMessage(err?.message || 'Verification error occurred.');
+    } finally {
       setIsLoading(false);
-      setErrorMessage(err.message || 'Verification error occurred.');
     }
   };
 
@@ -340,7 +354,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setErrorMessage(res.message);
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to resend code');
+      setErrorMessage(err?.message || 'Failed to resend code');
     }
   };
 
@@ -675,7 +689,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   {otpDigits.map((digit, idx) => (
                     <input
                       key={idx}
-                      ref={(el) => (otpInputRefs.current[idx] = el)}
+                      ref={(el) => {
+                        otpInputRefs.current[idx] = el;
+                      }}
                       type="text"
                       inputMode="numeric"
                       maxLength={idx === 0 ? 6 : 1}

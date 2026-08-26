@@ -282,7 +282,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           <Cpu className="w-3.5 h-3.5" />
           <span>20 AI APIs</span>
         </button>
-          {Object.values(channelStatuses).some((entry) => entry.status === 'connected' || entry.status === 'running') && (
+          {Object.values(channelStatuses).some((entry: { status?: string }) => entry?.status === 'connected' || entry?.status === 'running') && (
             <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold flex items-center gap-1">
               <Check className="w-3 h-3" /> Live & Active
             </span>

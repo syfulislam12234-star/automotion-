@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 
 interface AiMediaScannerProps {
+  config?: any;
   onShowToast?: (msg: string) => void;
 }
 

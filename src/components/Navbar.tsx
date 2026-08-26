@@ -31,10 +31,10 @@ interface NavbarProps {
   onOpenAuthModal: (tab?: 'login' | 'signup' | 'verify') => void;
   onLogOut: () => void;
   onOpenDeployGuide: () => void;
-  onDownloadZip: () => void;
-  isZipping: boolean;
-  copiedAll: boolean;
-  onCopyAll: () => void;
+  onDownloadZip?: () => void;
+  isZipping?: boolean;
+  copiedAll?: boolean;
+  onCopyAll?: () => void;
   onOpenPortal?: () => void;
   onOpenSubscriptionModal?: () => void;
   onOpenAiChat?: () => void;
@@ -50,10 +50,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAuthModal,
   onLogOut,
   onOpenDeployGuide,
-  onDownloadZip,
-  isZipping,
-  copiedAll,
-  onCopyAll,
+  onDownloadZip = () => {},
+  isZipping = false,
+  copiedAll = false,
+  onCopyAll = () => {},
   onOpenPortal,
   onOpenSubscriptionModal,
   onOpenAiChat,

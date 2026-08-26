@@ -390,7 +390,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
     ]);
   }, []);
 
-  const getBubbleClass = (sender: 'user' | 'bot' | 'system') => {
+  const getBubbleClass = (sender: string) => {
     if (sender === 'user') {
       if (activePlatform === 'discord') return 'bg-indigo-600 text-white rounded-br-none';
       if (activePlatform === 'slack') return 'bg-emerald-600 text-white rounded-br-none';

@@ -4,6 +4,7 @@ import {
   Bot,
   Brain,
   Clock,
+  Lock,
   MessageSquare,
   Scan,
   ShieldCheck,
@@ -31,6 +32,10 @@ interface SidebarProps {
   activeView: AppView;
   onClose: () => void;
   onSelectView: (view: AppView) => void;
+  onOpenPortal?: () => void;
+  onOpenSubscription?: () => void;
+  onOpenYouTube?: () => void;
+  onOpenDeploy?: () => void;
   onOpenAuth: () => void;
   onLogOut: () => void;
   currentUser: { name: string } | null;

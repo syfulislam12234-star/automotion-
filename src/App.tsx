@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Component, useState, useEffect } from 'react';
 import { BotConfig, UserAccount, AuthSession } from './types';
 import { Navbar } from './components/Navbar';
 import { ConfigPanel } from './components/ConfigPanel';
@@ -696,28 +696,6 @@ function AppContent() {
               <LayoutDashboard className="w-4 h-4" />
               <span>Admin Panel</span>
             </button>
-
-            {/* View 8: Code & Architecture Studio (Protected) */}
-            {false && (
-              <button
-                onClick={handleStudioTabClick}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                  activeTab === 'studio'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <Code2 className="w-4 h-4" />
-                <span>Code Studio</span>
-                {false ? (
-                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    Admin 🔓
-                  </span>
-                ) : (
-                  <Lock className="w-3 h-3 text-amber-400" />
-                )}
-              </button>
-            )}
           </div>
         </div>
 
@@ -975,9 +953,7 @@ function AppContent() {
         config={config}
         onShowToast={showToast}
         onNavigateTab={(tab) => {
-          if (tab === 'studio') {
-            handleStudioTabClick();
-          } else if (tab === 'admin') {
+          if (tab === 'admin') {
             handleAdminTabClick();
           } else if (tab === 'vps') {
             handleVpsTabClick();
@@ -998,8 +974,19 @@ function AppContent() {
   );
 }
 
-class AppErrorBoundary extends React.Component<React.PropsWithChildren, { hasError: boolean }> {
-  public state = { hasError: false };
+interface AppErrorBoundaryProps {
+  children?: React.ReactNode;
+}
+
+interface AppErrorBoundaryState {
+  hasError: boolean;
+}
+
+class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
+  constructor(props: AppErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError() {
     return { hasError: true };

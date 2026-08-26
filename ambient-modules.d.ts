@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 declare module 'fs' {
   const fs: any;
   export default fs;
