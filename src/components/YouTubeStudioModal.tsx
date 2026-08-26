@@ -72,8 +72,8 @@ export const YouTubeStudioModal: React.FC<YouTubeStudioModalProps> = ({
     ],
     description: `🚀 In this complete engineering masterclass, Syful Islam reveals how to build and deploy a Universal Multi-Platform AI Bot capable of concurrent ingress across Telegram, Discord, Slack, and WhatsApp.
 
-📦 Download Full Source Code & Free Cloud Templates:
-👉 https://ai.studio/build
+📦 Production deployment guidance and operational best practices:
+👉 See the deployment guide in this dashboard.
 
 ⏱️ VIDEO CHAPTERS:
 00:00 - Architecture Overview & 20-Tier AI Cascade

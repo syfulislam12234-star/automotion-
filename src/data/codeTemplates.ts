@@ -3275,7 +3275,7 @@ MAX_OUTPUT_TOKENS="${config.maxOutputTokens}"
 
 # System Persona
 SYSTEM_PROMPT="${config.systemPrompt.replace(/"/g, '\\"')}"
-ADMIN_PIN="${config.adminPin || '7788'}"
+ADMIN_PASSWORD=""
 `;
 }
 

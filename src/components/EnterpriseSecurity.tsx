@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { BotConfig, SecurityConfigState, SecurityAuditIssue, SecurityAuditLog } from '../types';
+import { AuthService } from '../services/authService';
 import {
   Shield,
   ShieldCheck,
@@ -182,9 +183,9 @@ export const EnterpriseSecurity: React.FC<EnterpriseSecurityProps> = ({
     onShowToast('🔐 Two-Factor Authentication successfully activated for Admin!');
   };
 
-  const handleUnlockVault = (e: React.FormEvent) => {
+  const handleUnlockVault = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (masterPassphrase === config.adminPin || masterPassphrase === 'admin' || masterPassphrase.length >= 4) {
+    if (await AuthService.verifyAdminPassword(masterPassphrase)) {
       setIsVaultLocked(false);
       onShowToast('🔓 AES-256 Encrypted Credential Vault unlocked.');
     } else {

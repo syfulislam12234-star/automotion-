@@ -25,6 +25,7 @@ export interface DbSession {
   userId: string;
   createdAt: string;
   expiresAt: number;
+  adminAuthorized?: boolean;
 }
 
 export interface DbChannelConnection {
@@ -201,7 +202,7 @@ export class ServerDatabase {
       id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: params.name.trim(),
       email: cleanEmail,
-      role: params.role || (cleanEmail.includes('admin') ? 'admin' : 'developer'),
+      role: 'developer',
       isVerified: true, // Automated instant verification
       verificationCode,
       passwordHash: hash,
@@ -361,6 +362,22 @@ export class ServerDatabase {
     this.saveToFile();
 
     return session;
+  }
+
+  public static authorizeAdminSession(token: string): boolean {
+    this.init();
+    const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+    const session = this.memoryDb.sessions.find((entry) => entry.token === cleanToken && entry.expiresAt > Date.now());
+    if (!session) return false;
+    session.adminAuthorized = true;
+    this.saveToFile();
+    return true;
+  }
+
+  public static isAdminSessionAuthorized(token: string): boolean {
+    this.init();
+    const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+    return this.memoryDb.sessions.some((entry) => entry.token === cleanToken && entry.expiresAt > Date.now() && entry.adminAuthorized === true);
   }
 
   public static getSessionUser(token: string): any | null {

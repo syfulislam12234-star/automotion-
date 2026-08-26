@@ -1,9 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import JSZip from 'jszip';
+import React, { useState, useEffect } from 'react';
 import { BotConfig, UserAccount, AuthSession } from './types';
-import { getAllGeneratedFiles } from './data/codeTemplates';
 import { Navbar } from './components/Navbar';
-import { CodeViewer } from './components/CodeViewer';
 import { ConfigPanel } from './components/ConfigPanel';
 import { TelegramSimulator } from './components/TelegramSimulator';
 import { DeployGuideModal } from './components/DeployGuideModal';
@@ -25,7 +22,6 @@ import { CronBroadcastManager } from './components/CronBroadcastManager';
 import { Sidebar, AppView } from './components/Sidebar';
 import { AuthService } from './services/authService';
 import {
-  Download,
   Rocket,
   Bot,
   Zap,
@@ -35,7 +31,6 @@ import {
   ExternalLink,
   Sparkles,
   Terminal,
-  Code2,
   Layers,
   Repeat,
   LayoutDashboard,
@@ -264,11 +259,6 @@ const DEFAULT_CONFIG: BotConfig = {
   userProfileName: 'Syful Islam',
   userPlanTier: 'enterprise_cluster',
 
-  // Code Studio Privacy & Admin Security Gate
-  adminPin: '7788',
-  hideCodeStudioTab: false,
-  requireAdminPinForCode: true,
-
   // VPS / Cloud Server Management & Monitoring
   vpsServerName: 'Universal-Cloud-Node-01',
   vpsApiBaseUrl: 'http://127.0.0.1:8080',
@@ -289,7 +279,6 @@ const DEFAULT_CONFIG: BotConfig = {
 };
 
 const CONFIG_STORAGE_KEY = 'universal_bot_config_v2';
-const ADMIN_UNLOCKED_STORAGE_KEY = 'universal_bot_admin_unlocked';
 const SECRETS_UNLOCKED_STORAGE_KEY = 'universal_bot_secrets_unlocked';
 
 const getInitialConfig = (): BotConfig => {
@@ -321,27 +310,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<
     AppView
   >('simulator');
-  const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
   const [isPortalOpen, setIsPortalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
   const [isYouTubeStudioOpen, setIsYouTubeStudioOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(true);
   const [portalInitialServiceId, setPortalInitialServiceId] = useState<string | undefined>(undefined);
-  const [isZipping, setIsZipping] = useState(false);
-  const [copiedAll, setCopiedAll] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Admin PIN / Code Studio Security Unlock state
-  const [isCodeStudioUnlocked, setIsCodeStudioUnlocked] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem(ADMIN_UNLOCKED_STORAGE_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
-  const [pinTarget, setPinTarget] = useState<'code' | 'secrets'>('code');
   const [pendingProtectedView, setPendingProtectedView] = useState<AppView | null>(null);
   const [isSecretsUnlocked, setIsSecretsUnlocked] = useState<boolean>(() => {
     try {
@@ -359,9 +336,6 @@ export default function App() {
       if (!isMounted) return;
       if (updatedSession) {
         setSession(updatedSession);
-        if (updatedSession.user.role === 'admin') {
-          setIsCodeStudioUnlocked(true);
-        }
       }
       if (serverConfig) {
         setConfig((prev) => ({ ...prev, ...serverConfig }));
@@ -421,24 +395,14 @@ export default function App() {
 
   const handleAuthenticated = (newSession: AuthSession) => {
     setSession(newSession);
-    if (newSession.user.role === 'admin') {
-      setIsCodeStudioUnlocked(true);
-      try {
-        sessionStorage.setItem(ADMIN_UNLOCKED_STORAGE_KEY, 'true');
-      } catch (e) {
-        console.error(e);
-      }
-    }
     showToast(`✅ Welcome, ${newSession.user.name}! Session active.`);
   };
 
   const handleLogOut = () => {
     AuthService.logOut();
     setSession(null);
-    setIsCodeStudioUnlocked(false);
     setIsSecretsUnlocked(false);
     try {
-      sessionStorage.removeItem(ADMIN_UNLOCKED_STORAGE_KEY);
       sessionStorage.removeItem(SECRETS_UNLOCKED_STORAGE_KEY);
     } catch (e) {
       console.error(e);
@@ -460,18 +424,18 @@ export default function App() {
   };
 
   const openSecretsPinModal = (view: AppView = 'settings') => {
-    setPinTarget('secrets');
     setPendingProtectedView(view);
     setIsPinModalOpen(true);
   };
 
   const handleSidebarSelect = (view: AppView) => {
-    if (['settings', 'gateways', 'vps', 'admin'].includes(view) && !isSecretsUnlocked) {
-      openSecretsPinModal(view);
+    if (!currentUser || currentUser.role !== 'admin') {
+      setActiveTab('simulator');
+      showToast('Administrator access required.');
       return;
     }
-    if (view === 'studio') {
-      handleStudioTabClick();
+    if (['settings', 'gateways', 'vps', 'admin'].includes(view) && !isSecretsUnlocked) {
+      openSecretsPinModal(view);
       return;
     }
     if (view === 'admin') {
@@ -485,55 +449,19 @@ export default function App() {
     setActiveTab(view);
   };
 
-  const handleUnlockCodeStudio = () => {
-    setIsCodeStudioUnlocked(true);
-    try {
-      sessionStorage.setItem(ADMIN_UNLOCKED_STORAGE_KEY, 'true');
-    } catch (e) {
-      console.error(e);
-    }
-    setActiveTab('studio');
-  };
-
-  const handleLockCodeStudio = () => {
-    setIsCodeStudioUnlocked(false);
-    try {
-      sessionStorage.removeItem(ADMIN_UNLOCKED_STORAGE_KEY);
-    } catch (e) {
-      console.error(e);
-    }
-    if (activeTab === 'studio') {
-      setActiveTab('simulator');
-    }
-    showToast('🔒 Code & Architecture Studio locked.');
-  };
-
-  const handleStudioTabClick = () => {
-    requireAuth('Code & Architecture Studio', () => {
-      if (!isCodeStudioUnlocked && config.requireAdminPinForCode !== false) {
-        setPinTarget('code');
-        setIsPinModalOpen(true);
-      } else {
-        setActiveTab('studio');
-      }
-    });
-  };
-
   const handleAdminTabClick = () => {
     requireAuth('Admin Dashboard', () => {
+      if (currentUser?.role !== 'admin') return;
       setActiveTab('admin');
     });
   };
 
   const handleVpsTabClick = () => {
     requireAuth('VPS & Cloud Server Monitor', () => {
+      if (currentUser?.role !== 'admin') return;
       setActiveTab('vps');
     });
   };
-
-  const generatedFiles = useMemo(() => {
-    return getAllGeneratedFiles(config);
-  }, [config]);
 
   const handleResetToDefaults = () => {
     setConfig(DEFAULT_CONFIG);
@@ -543,47 +471,6 @@ export default function App() {
       console.error(e);
     }
     showToast('🔄 All configurations reset to high-resilience defaults.');
-  };
-
-  const handleDownloadZip = async () => {
-    setIsZipping(true);
-    showToast('📦 Bundling universal multi-platform bot project...');
-    try {
-      const zip = new JSZip();
-      generatedFiles.forEach((file) => {
-        zip.file(file.filename, file.content);
-      });
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'universal-multi-platform-bot.zip';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      showToast('🎉 Project zip downloaded successfully!');
-    } catch (err) {
-      console.error('Failed to create zip: ', err);
-      showToast('❌ Failed to create zip package.');
-    } finally {
-      setIsZipping(false);
-    }
-  };
-
-  const handleCopyAllCode = async () => {
-    try {
-      const allText = generatedFiles
-        .map((f) => `### FILE: ${f.filename}\n${f.content}\n\n`)
-        .join('----------------------------------------\n\n');
-      await navigator.clipboard.writeText(allText);
-      setCopiedAll(true);
-      showToast('📋 Copied all source files to clipboard!');
-      setTimeout(() => setCopiedAll(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy: ', err);
-      showToast('❌ Failed to copy to clipboard.');
-    }
   };
 
   const handleOpenPortal = (serviceId?: string) => {
@@ -597,7 +484,7 @@ export default function App() {
         isOpen={isSidebarOpen}
         activeView={activeTab}
         isSecretsUnlocked={isSecretsUnlocked}
-        isCodeStudioUnlocked={isCodeStudioUnlocked}
+        isAdmin={currentUser?.role === 'admin'}
         onClose={() => setIsSidebarOpen(false)}
         onSelectView={handleSidebarSelect}
         onOpenPortal={() => handleOpenPortal('groq')}
@@ -619,17 +506,10 @@ export default function App() {
         }}
         onLogOut={handleLogOut}
         onOpenDeployGuide={() => setIsDeployGuideOpen(true)}
-        onDownloadZip={handleDownloadZip}
-        isZipping={isZipping}
-        copiedAll={copiedAll}
-        onCopyAll={handleCopyAllCode}
         onOpenPortal={() => handleOpenPortal('groq')}
         onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
         onOpenYouTubeStudio={() => setIsYouTubeStudioOpen(true)}
         onOpenAiChat={() => setIsAiChatOpen(true)}
-        isCodeStudioUnlocked={isCodeStudioUnlocked}
-        onOpenAdminPinModal={() => { setPinTarget('code'); setIsPinModalOpen(true); }}
-        onLockCodeStudio={handleLockCodeStudio}
         onToggleSidebar={() => setIsSidebarOpen(true)}
       />
 
@@ -671,14 +551,6 @@ export default function App() {
               >
                 <Video className="w-4 h-4" />
                 <span>YouTube Studio</span>
-              </button>
-              <button
-                onClick={handleDownloadZip}
-                disabled={isZipping}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <Download className={`w-4 h-4 ${isZipping ? 'animate-bounce' : ''}`} />
-                <span>{isZipping ? 'Bundling...' : 'Download Code .ZIP'}</span>
               </button>
             </div>
           </div>
@@ -831,7 +703,7 @@ export default function App() {
             </button>
 
             {/* View 8: Code & Architecture Studio (Protected) */}
-            {(!config.hideCodeStudioTab || isCodeStudioUnlocked) && (
+            {false && (
               <button
                 onClick={handleStudioTabClick}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
@@ -842,7 +714,7 @@ export default function App() {
               >
                 <Code2 className="w-4 h-4" />
                 <span>Code Studio</span>
-                {isCodeStudioUnlocked ? (
+                {false ? (
                   <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                     Admin 🔓
                   </span>
@@ -901,7 +773,7 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'settings' && (
+        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'settings' && (
           <ConfigPanel
             config={config}
             onChange={handleConfigChange}
@@ -950,7 +822,7 @@ export default function App() {
         )}
 
         {/* View 4: Omni-Channel Gateways */}
-        {activeTab === 'gateways' && (
+        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'gateways' && (
           <OmniChannelGateway
             config={config}
             onChange={handleConfigChange}
@@ -960,7 +832,7 @@ export default function App() {
         )}
 
         {/* View 4: Enterprise Security & 2FA */}
-        {activeTab === 'security' && (
+        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'security' && (
           <EnterpriseSecurity
             config={config}
             onChange={handleConfigChange}
@@ -969,7 +841,7 @@ export default function App() {
         )}
 
         {/* View 5: VPS Server Monitor */}
-        {activeTab === 'vps' && (
+        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'vps' && (
           <VpsManager config={config} onChange={handleConfigChange} onShowToast={showToast} />
         )}
 
@@ -977,107 +849,16 @@ export default function App() {
         {activeTab === 'scanner' && <AiMediaScanner onShowToast={showToast} />}
 
         {/* View 7: Admin Panel */}
-        {activeTab === 'admin' && (
+        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'admin' && (
           <AdminControlPanel
             config={config}
             onChange={handleConfigChange}
             onShowToast={showToast}
             onOpenPortal={handleOpenPortal}
             onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
-            isCodeStudioUnlocked={isCodeStudioUnlocked}
-            onToggleCodeStudioLock={() => {
-              if (isCodeStudioUnlocked) {
-                handleLockCodeStudio();
-              } else {
-                setPinTarget('code');
-                setIsPinModalOpen(true);
-              }
-            }}
-            onOpenPinModal={() => { setPinTarget('code'); setIsPinModalOpen(true); }}
           />
         )}
 
-        {/* View 8: Code Studio */}
-        {activeTab === 'studio' && (
-          <>
-            {isCodeStudioUnlocked ? (
-              <div className="space-y-4">
-                <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-2xl px-5 py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                    <div>
-                      <span className="text-xs font-bold text-emerald-300">
-                        Admin Mode Active • Raw Source Code Studio Unlocked
-                      </span>
-                      <p className="text-[11px] text-slate-400">
-                        Edit code files directly in browser or generate production VPS deployment scripts.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleLockCodeStudio}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-xs font-semibold text-rose-400 hover:text-rose-300 transition cursor-pointer"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>Lock Code Studio</span>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                  <div className="lg:col-span-7 space-y-6">
-                    <CodeViewer
-                      files={generatedFiles}
-                      activeFileIndex={activeFileIndex}
-                      onSelectFile={setActiveFileIndex}
-                      onShowToast={showToast}
-                    />
-                    <MemoryInspector config={config} />
-                  </div>
-
-                  <div className="lg:col-span-5 space-y-6">
-                    <ConfigPanel
-                      config={config}
-                      onChange={handleConfigChange}
-                      onResetToDefaults={handleResetToDefaults}
-                      onOpenPortal={handleOpenPortal}
-                      onShowToast={showToast}
-                    />
-                    <TelegramSimulator config={config} />
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="max-w-2xl mx-auto my-12 bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-6 shadow-2xl">
-                <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto shadow-lg shadow-amber-500/20">
-                  <Lock className="w-8 h-8" />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-xl font-bold text-white tracking-tight">
-                    Admin-Only Protected Area
-                  </h3>
-                  <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-                    The Code & Architecture Studio is restricted to authorized administrators. Enter the 4-digit Admin PIN to access live code editing and deployment tools.
-                  </p>
-                </div>
-                <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
-                  <button
-                    onClick={() => { setPinTarget('code'); setIsPinModalOpen(true); }}
-                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-white text-sm font-bold transition shadow-lg shadow-amber-500/25 active:scale-95 cursor-pointer"
-                  >
-                    <Key className="w-4 h-4" />
-                    <span>Enter Admin PIN (Default: 7788)</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('simulator')}
-                    className="w-full sm:w-auto px-5 py-3 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 text-sm font-medium transition cursor-pointer"
-                  >
-                    Back to Live Simulator
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
       </main>
 
       {/* Footer */}
@@ -1130,10 +911,9 @@ export default function App() {
       <AdminPinModal
         isOpen={isPinModalOpen}
         onClose={() => setIsPinModalOpen(false)}
-        onSuccess={pinTarget === 'secrets' ? handleUnlockSecrets : handleUnlockCodeStudio}
-        correctPin={config.adminPin || '7788'}
+        onSuccess={handleUnlockSecrets}
         onShowToast={showToast}
-        successMessage={pinTarget === 'secrets' ? '🔓 Secret fields unlocked for this session.' : undefined}
+        successMessage="🔓 Administrator access verified for this session."
       />
 
       {/* 1-Click Direct API Setup & Messaging Portal Modal */}

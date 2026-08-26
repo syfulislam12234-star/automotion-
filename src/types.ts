@@ -216,11 +216,6 @@ export interface BotConfig {
   userProfileName?: string;
   userPlanTier?: 'pro_managed' | 'free_custom' | 'enterprise' | 'enterprise_cluster';
 
-  // Code Studio Privacy & Admin Security Gate
-  adminPin?: string;
-  hideCodeStudioTab?: boolean;
-  requireAdminPinForCode?: boolean;
-
   // VPS / Cloud Server Management & Monitoring
   vpsServerName?: string;
   vpsApiBaseUrl?: string;

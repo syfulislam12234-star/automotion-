@@ -4,7 +4,6 @@ import {
   Bot,
   Brain,
   Clock,
-  Code2,
   Database,
   FileText,
   Globe,
@@ -35,14 +34,13 @@ export type AppView =
   | 'vps'
   | 'scanner'
   | 'admin'
-  | 'studio'
   | 'settings';
 
 interface SidebarProps {
   isOpen: boolean;
   activeView: AppView;
   isSecretsUnlocked: boolean;
-  isCodeStudioUnlocked: boolean;
+  isAdmin: boolean;
   onClose: () => void;
   onSelectView: (view: AppView) => void;
   onOpenPortal: () => void;
@@ -69,14 +67,13 @@ const protectedItems = [
   { id: 'gateways', label: 'Telegram bot tokens', icon: Radio },
   { id: 'vps', label: 'Database credentials', icon: Database },
   { id: 'admin', label: 'Environment & admin controls', icon: Terminal },
-  { id: 'studio', label: 'Code & deployment studio', icon: Code2 },
 ] as const;
 
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   activeView,
   isSecretsUnlocked,
-  isCodeStudioUnlocked,
+  isAdmin,
   onClose,
   onSelectView,
   onOpenPortal,
@@ -109,9 +106,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SidebarGroup label="Public / open">
               {publicItems.map(({ id, label, icon: Icon }) => <SidebarItem key={id} label={label} icon={<Icon className="h-4 w-4" />} active={activeView === id} onClick={() => select(id)} />)}
             </SidebarGroup>
-            <SidebarGroup label="Protected / secret">
-              {protectedItems.map(({ id, label, icon: Icon }) => <SidebarItem key={id} label={label} icon={<Icon className="h-4 w-4" />} active={activeView === id} locked={id === 'studio' ? !isCodeStudioUnlocked : !isSecretsUnlocked} onClick={() => select(id as AppView)} />)}
-            </SidebarGroup>
+            {isAdmin && <SidebarGroup label="Protected / secret">
+              {protectedItems.map(({ id, label, icon: Icon }) => <SidebarItem key={id} label={label} icon={<Icon className="h-4 w-4" />} active={activeView === id} locked={!isSecretsUnlocked} onClick={() => select(id as AppView)} />)}
+            </SidebarGroup>}
             <SidebarGroup label="Tools">
               <SidebarItem label="1-Click setup portal" icon={<Globe className="h-4 w-4" />} onClick={onOpenPortal} />
               <SidebarItem label="YouTube Studio" icon={<Video className="h-4 w-4" />} onClick={onOpenYouTube} />

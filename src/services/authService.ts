@@ -10,6 +10,20 @@ const PASSWORDS_STORAGE_KEY = 'groq_bot_passwords_v1';
 const INITIAL_PASSWORDS: Record<string, string> = {};
 
 export class AuthService {
+  public static async verifyAdminPassword(password: string): Promise<boolean> {
+    const session = this.getCurrentSession();
+    if (!session?.token) return false;
+    try {
+      const response = await fetch('/api/auth/admin/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({ password }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
   private static getStoredUsers(): UserAccount[] {
     try {
       const data = localStorage.getItem(USERS_STORAGE_KEY);

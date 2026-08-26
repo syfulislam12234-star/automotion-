@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock, Unlock, Key, Eye, EyeOff, AlertCircle, Sparkles, X, Check } from 'lucide-react';
+import { AuthService } from '../services/authService';
+import { ShieldCheck, Lock, Unlock, AlertCircle, X } from 'lucide-react';
 
 interface AdminPinModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
-  correctPin: string;
   onShowToast: (msg: string) => void;
   successMessage?: string;
 }
@@ -14,12 +14,10 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  correctPin,
   onShowToast,
   successMessage = '🔓 Admin access verified: Code & Architecture Studio unlocked.',
 }) => {
   const [pin, setPin] = useState('');
-  const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -30,22 +28,18 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
     setIsSubmitting(true);
     setError('');
 
-    const targetPin = correctPin || '7788';
-
-    if (pin.trim() === targetPin.trim() || pin.trim() === '7788' || pin.trim() === 'admin123') {
-      setTimeout(() => {
+    void AuthService.verifyAdminPassword(pin).then((authorized) => {
+      if (authorized) {
         setIsSubmitting(false);
         setPin('');
         onSuccess();
         onShowToast(successMessage);
         onClose();
-      }, 300);
-    } else {
-      setTimeout(() => {
+      } else {
         setIsSubmitting(false);
-        setError('Invalid Admin PIN. Please check your credentials and try again.');
-      }, 300);
-    }
+        setError('Administrator authorization failed.');
+      }
+    });
   };
 
   const handleKeypadClick = (digit: string) => {
@@ -76,13 +70,13 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
-                <span>Admin PIN Required</span>
+                <span>Administrator authorization required</span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
                   Protected Area
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                Unlock Code & Architecture Studio
+                Verify administrator access
               </p>
             </div>
           </div>
@@ -99,43 +93,30 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
           <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 text-xs text-slate-300 space-y-2">
             <div className="flex items-center gap-2 font-semibold text-slate-200">
               <ShieldCheck className="w-4 h-4 text-cyan-400" />
-              <span>Source Code Privacy & Security Lock</span>
+              <span>Secure administrator session</span>
             </div>
-            <p className="text-slate-400 leading-relaxed">
-              The Code & Architecture Studio is restricted to administrators. Enter your Admin PIN to reveal full Python source codes, environment secrets templates, and cloud manifest blueprints.
+              <p className="text-slate-400 leading-relaxed">
+              Administrator controls require the configured master password. Verification applies only to this active session.
             </p>
-            <div className="pt-1 flex items-center gap-2 text-[11px] text-cyan-400/90 font-mono">
-              <Key className="w-3.5 h-3.5" />
-              <span>Default Admin PIN: <strong>7788</strong></span>
-            </div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Enter Admin Access PIN / Password
+                Master password
               </label>
               <div className="relative">
                 <input
-                  type={showPin ? 'text' : 'password'}
+                  type="password"
                   value={pin}
                   onChange={(e) => {
                     setPin(e.target.value);
                     setError('');
                   }}
-                  placeholder="••••"
+                  placeholder="Enter master password"
                   autoFocus
-                  maxLength={12}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-center text-xl tracking-widest font-mono text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPin(!showPin)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-1 cursor-pointer"
-                  title={showPin ? 'Hide PIN' : 'Show PIN'}
-                >
-                  {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
               </div>
             </div>
 
@@ -199,7 +180,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                 ) : (
                   <>
                     <Unlock className="w-3.5 h-3.5" />
-                    <span>Unlock Studio</span>
+                    <span>Verify administrator access</span>
                   </>
                 )}
               </button>

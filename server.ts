@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -15,6 +16,14 @@ import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { EdgeTTS } from 'node-edge-tts';
 
 dotenv.config();
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+function safeSecretEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
 
 const SECURITY_REFUSAL_BN = 'আমি অ্যাপের ব্যবহার ও সুবিধা সম্পর্কে সাহায্য করতে পারি, তবে নিরাপত্তাজনিত কারণে অ্যাপের অভ্যন্তরীণ প্রযুক্তিগত তথ্য শেয়ার করা সম্ভব নয়।';
 const APP_KNOWLEDGE_BASE_BN = `
@@ -408,6 +417,26 @@ async function startServer() {
     },
   }));
   app.use(express.urlencoded({ extended: true }));
+
+  const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization;
+    const user = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+    if (!user || user.role !== 'admin' || !ServerDatabase.isAdminSessionAuthorized(authHeader || '')) {
+      return res.status(403).json({ success: false, message: 'Administrator authorization required.' });
+    }
+    return next();
+  };
+
+  app.use('/api/admin', requireAdmin);
+  app.use('/api/telegram-admin/config', requireAdmin);
+  app.use('/api/telegram-admin/command', requireAdmin);
+  app.use('/api/sync/keys', requireAdmin);
+  app.use('/api/cron/trigger', requireAdmin);
+  app.use('/api/cron/config', requireAdmin);
+  app.use('/api/database/stats', requireAdmin);
+  app.use('/api/user/config', requireAdmin);
+  app.use('/api/channels', requireAdmin);
+  app.use('/api/gateways/verify', requireAdmin);
 
   app.post('/api/tts', async (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
@@ -1180,12 +1209,12 @@ async function startServer() {
   // User Sign Up
   app.post('/api/auth/signup', (req, res) => {
     try {
-      const { name, email, password, role } = req.body;
+      const { name, email, password } = req.body;
       if (!name || !email || !password) {
         return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
       }
 
-      const result = ServerDatabase.registerUser({ name, email, password, role });
+      const result = ServerDatabase.registerUser({ name, email, password });
       if (!result.success) {
         return res.status(400).json(result);
       }
@@ -1274,6 +1303,23 @@ async function startServer() {
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });
     }
+  });
+
+  app.post('/api/auth/admin/verify', (req, res) => {
+    const authHeader = req.headers.authorization;
+    const user = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Administrator authorization required.' });
+    }
+    if (!ADMIN_PASSWORD) {
+      return res.status(503).json({ success: false, message: 'Administrator password is not configured.' });
+    }
+    if (!safeSecretEquals(password, ADMIN_PASSWORD)) {
+      return res.status(403).json({ success: false, message: 'Administrator authorization failed.' });
+    }
+    ServerDatabase.authorizeAdminSession(authHeader || '');
+    return res.json({ success: true });
   });
 
   // Log Out

@@ -78,7 +78,7 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
   >('providers');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'desktop' | 'mobile_preview' | 'telegram_mini_app'>('desktop');
-  const [adminPinInput, setAdminPinInput] = useState(config.adminPin || '7788');
+  const [adminPinInput, setAdminPinInput] = useState('');
 
   // Database System Stats & Backup state
   const [dbStats, setDbStats] = useState<any>(null);
@@ -1603,7 +1603,7 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
         )}
 
         {/* TAB 6: CODE PRIVACY & ADMIN SECURITY GATE */}
-        {activeAdminTab === 'privacy' && (
+        {false && activeAdminTab === 'privacy' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-800">
@@ -1617,7 +1617,7 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                     </h3>
                   </div>
                   <p className="text-xs text-slate-400">
-                    Hide source code, credentials templates, and configuration blueprints from general users and restrict access behind an Admin PIN.
+                    Legacy source-management controls are disabled. Administrator authorization is managed by the backend.
                   </p>
                 </div>
 
@@ -1662,7 +1662,7 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                   <p className="text-slate-300 leading-relaxed">
                     {isCodeStudioUnlocked
                       ? 'You currently have administrative privileges to view all Python scripts, requirements, and manifest files. Locking the studio will immediately shield these files.'
-                      : 'Source code viewers, bot.py copy buttons, and manifest templates are currently restricted from public viewing. Users must provide the Admin PIN to inspect files.'}
+                      : 'Legacy source-management controls are disabled.'}
                   </p>
                 </div>
               </div>
@@ -1684,11 +1684,8 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={!!config.hideCodeStudioTab}
-                        onChange={(e) => {
-                          onChange({ ...config, hideCodeStudioTab: e.target.checked });
-                          onShowToast(e.target.checked ? '🔒 Code tab hidden from navigation bar' : '👁️ Code tab visible in navigation bar');
-                        }}
+                        checked
+                        onChange={() => {}}
                         className="sr-only peer"
                       />
                       <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
@@ -1705,17 +1702,14 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                         <span>Enforce 4-Digit Admin PIN</span>
                       </div>
                       <p className="text-xs text-slate-400">
-                        Require entering the security PIN before any source code or file contents can be decrypted and displayed.
+                        Legacy source-view controls are permanently disabled.
                       </p>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={config.requireAdminPinForCode !== false}
-                        onChange={(e) => {
-                          onChange({ ...config, requireAdminPinForCode: e.target.checked });
-                          onShowToast(e.target.checked ? '🔒 Admin PIN requirement enforced' : '⚠️ PIN requirement disabled');
-                        }}
+                        checked
+                        onChange={() => {}}
                         className="sr-only peer"
                       />
                       <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
@@ -1733,23 +1727,22 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                       <span>Admin Security PIN Code</span>
                     </h4>
                     <p className="text-xs text-slate-400">
-                      Set the secret PIN or password required to unlock source code and configuration tools (Default: <code className="text-cyan-300">7788</code>).
+                      Administrator authorization is configured by the backend environment and cannot be changed in the application.
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <input
-                      type="text"
+                      type="password"
                       value={adminPinInput}
                       onChange={(e) => setAdminPinInput(e.target.value)}
-                      placeholder="e.g. 7788"
+                      placeholder="Managed by backend"
                       maxLength={12}
                       className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-cyan-300 font-mono text-sm tracking-widest text-center w-32 focus:outline-none focus:border-cyan-500"
                     />
                     <button
                       onClick={() => {
-                        onChange({ ...config, adminPin: adminPinInput.trim() || '7788' });
-                        onShowToast(`🔑 Admin PIN updated to: ${adminPinInput.trim() || '7788'}`);
+                        onShowToast('Administrator password is managed by the backend environment.');
                       }}
                       className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition cursor-pointer"
                     >
@@ -1768,7 +1761,7 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-slate-400">
                   <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-yellow-400"></span>
-                    <span>bot.py (Full Source)</span>
+                    <span>Application source (unavailable)</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>

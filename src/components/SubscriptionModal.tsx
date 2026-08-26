@@ -132,7 +132,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
         'Connect your own Groq, Gemini & Mistral Keys',
         'Telegram & Discord Bot Protocols',
         '20-Tier Local Failover Engine',
-        'Full Source Code Export & Docker Templates',
+        'Managed deployment guidance',
         'Standard Community Discord Support',
       ],
       disabledFeatures: [
