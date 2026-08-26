@@ -12,6 +12,8 @@ import {
   Layers,
   Copy,
   Check,
+  Mic,
+  Volume2,
   RefreshCw,
   HelpCircle,
   Code,
@@ -29,7 +31,21 @@ export interface ChatMessage {
   timestamp: string;
   provider?: string;
   latencyMs?: number;
+  voiceInput?: boolean;
 }
+
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 interface AiChatModalProps {
   isOpen: boolean;
@@ -59,22 +75,81 @@ const SUGGESTED_PROMPTS = [
 
 interface ChatInputProps {
   isLoading: boolean;
-  onSend: (prompt: string) => void;
+  onSend: (prompt: string, fromVoice?: boolean) => void;
   isOpen: boolean;
+  onVoiceError: (message: string) => void;
 }
 
-const ChatInput = React.memo(({ isLoading, onSend, isOpen }: ChatInputProps) => {
+const ChatInput = React.memo(({ isLoading, onSend, isOpen, onVoiceError }: ChatInputProps) => {
   const [value, setValue] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const voiceInputRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   useEffect(() => {
     if (isOpen) textareaRef.current?.focus();
   }, [isOpen]);
 
+  const toggleVoiceInput = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const speechWindow = window as Window & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+    const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      onVoiceError('এই ব্রাউজারে voice input সমর্থিত নয়।');
+      return;
+    }
+
+    try {
+      const recognition = new Recognition();
+      recognition.lang = 'bn-BD';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.onresult = (event) => {
+        let transcript = '';
+        for (let index = 0; index < event.results.length; index += 1) {
+          transcript += event.results[index][0].transcript;
+        }
+        setValue(transcript);
+        voiceInputRef.current = true;
+      };
+      recognition.onend = () => {
+        recognitionRef.current = null;
+        setIsListening(false);
+      };
+      recognition.onerror = (event) => {
+        recognitionRef.current = null;
+        setIsListening(false);
+        onVoiceError(event.error === 'not-allowed'
+          ? 'মাইক্রোফোন permission দেওয়া হয়নি। Browser settings থেকে permission দিন।'
+          : 'Voice input সাময়িকভাবে unavailable।');
+      };
+      recognitionRef.current = recognition;
+      setIsListening(true);
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      onVoiceError('মাইক্রোফোন চালু করা যায়নি।');
+    }
+  };
+
   const submit = () => {
     const prompt = value.trim();
     if (!prompt || isLoading) return;
-    onSend(prompt);
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+      setIsListening(false);
+    }
+    onSend(prompt, voiceInputRef.current);
+    voiceInputRef.current = false;
     setValue('');
   };
 
@@ -93,8 +168,18 @@ const ChatInput = React.memo(({ isLoading, onSend, isOpen }: ChatInputProps) => 
             }
           }}
           placeholder="Ask about bot code, cascades, webhooks, or VPS deployment..."
-          className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl py-2.5 pl-3.5 pr-12 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 resize-none max-h-24 transition"
+          className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl py-2.5 pl-11 pr-12 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 resize-none max-h-24 transition"
         />
+        <button
+          type="button"
+          onClick={toggleVoiceInput}
+          disabled={isLoading}
+          className={`absolute left-2 p-2 rounded-xl transition cursor-pointer disabled:opacity-40 ${isListening ? 'text-rose-300 bg-rose-500/20 animate-pulse' : 'text-slate-400 hover:text-cyan-300 hover:bg-slate-800'}`}
+          title={isListening ? 'Stop voice input' : 'Start Bengali voice input'}
+          aria-label={isListening ? 'Stop voice input' : 'Start Bengali voice input'}
+        >
+          <Mic className="w-3.5 h-3.5" />
+        </button>
         <button
           type="submit"
           disabled={isLoading || !value.trim()}
@@ -150,8 +235,15 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<'gemini-3.7-flash' | 'groq-llama-3.3' | 'deepseek-r1' | 'cerebras-llama3.3'>('gemini-3.7-flash');
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => () => {
+    audioRef.current?.pause();
+    if (audioRef.current?.src) URL.revokeObjectURL(audioRef.current.src);
+  }, []);
 
   // Auto scroll to bottom
   const scrollToBottom = () => {
@@ -173,7 +265,31 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     }
   }, [messages]);
 
-  const handleSendMessage = useCallback(async (textToSend: string) => {
+  const speakMessage = useCallback(async (text: string, messageId: string) => {
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) return;
+      const audioUrl = URL.createObjectURL(await response.blob());
+      audioRef.current?.pause();
+      if (audioRef.current?.src) URL.revokeObjectURL(audioRef.current.src);
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      setSpeakingMessageId(messageId);
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        setSpeakingMessageId(null);
+      };
+      await audio.play();
+    } catch {
+      setSpeakingMessageId(null);
+    }
+  }, []);
+
+  const handleSendMessage = useCallback(async (textToSend: string, fromVoice = false) => {
     if (!textToSend || isLoading) return;
 
     setAssistantError(null);
@@ -225,8 +341,10 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           provider: data.providerUsed || 'Centralized Multi-Provider Engine',
           latencyMs: data.latencyMs || latency,
+          voiceInput: fromVoice,
         };
         setMessages((prev) => [...prev, assistantMsg]);
+        if (fromVoice) void speakMessage(data.text, assistantMsg.id);
       } else {
         throw new Error(data.message || data.error || 'Unable to generate response');
       }
@@ -237,7 +355,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, messages, selectedModel]);
+  }, [isLoading, messages, selectedModel, speakMessage]);
 
   const handleClearHistory = () => {
     setMessages(INITIAL_MESSAGES);
@@ -254,6 +372,11 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     setCopiedIndex(id);
     if (onShowToast) onShowToast('📋 Response copied to clipboard!');
     setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
+  const handleVoiceError = (message: string) => {
+    setAssistantError(message);
+    if (onShowToast) onShowToast(message);
   };
 
   // Helper to format basic markdown text nicely
@@ -479,17 +602,23 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                 </div>
 
                 {msg.role === 'assistant' && (
-                  <button
-                    onClick={() => handleCopyMessage(msg.id, msg.content)}
-                    className="opacity-60 group-hover:opacity-100 hover:text-cyan-300 transition cursor-pointer p-0.5"
-                    title="Copy Answer"
-                  >
-                    {copiedIndex === msg.id ? (
-                      <Check className="w-3 h-3 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3 h-3" />
-                    )}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => void speakMessage(msg.content, msg.id)}
+                      className="opacity-60 group-hover:opacity-100 hover:text-cyan-300 transition cursor-pointer p-0.5"
+                      title="Play voice response"
+                      aria-label="Play voice response"
+                    >
+                      <Volume2 className={`w-3 h-3 ${speakingMessageId === msg.id ? 'text-cyan-300 animate-pulse' : ''}`} />
+                    </button>
+                    <button
+                      onClick={() => handleCopyMessage(msg.id, msg.content)}
+                      className="opacity-60 group-hover:opacity-100 hover:text-cyan-300 transition cursor-pointer p-0.5"
+                      title="Copy Answer"
+                    >
+                      {copiedIndex === msg.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -563,7 +692,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         </div>
       )}
 
-        <ChatInput isLoading={isLoading} onSend={handleSendMessage} isOpen={isOpen} />
+        <ChatInput isLoading={isLoading} onSend={handleSendMessage} onVoiceError={handleVoiceError} isOpen={isOpen} />
       </div>
     </>
   );

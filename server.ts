@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -11,6 +12,7 @@ import { CronWorkerService } from './server/cronWorker';
 import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
+import { EdgeTTS } from 'node-edge-tts';
 
 dotenv.config();
 
@@ -406,6 +408,29 @@ async function startServer() {
     },
   }));
   app.use(express.urlencoded({ extended: true }));
+
+  app.post('/api/tts', async (req, res) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    if (!text) return res.status(400).json({ success: false, message: 'Text is required.' });
+
+    const outputPath = path.join(process.cwd(), `.tts-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+    try {
+      const tts = new EdgeTTS({
+        voice: process.env.TTS_VOICE || 'bn-BD-NabanitaNeural',
+        outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
+      });
+      await tts.ttsPromise(text.slice(0, 4000), outputPath);
+      const audio = await fs.promises.readFile(outputPath);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', audio.length);
+      return res.status(200).send(audio);
+    } catch (error: any) {
+      console.warn('[TTS] Edge neural voice generation failed:', error?.message || error);
+      return res.status(502).json({ success: false, message: 'Voice output is temporarily unavailable.' });
+    } finally {
+      await fs.promises.unlink(outputPath).catch(() => {});
+    }
+  });
 
   const multiChannelGateway = new MultiChannelGateway(async ({ prompt, model, systemPrompt, history }) => {
     const response = await fetch(`http://127.0.0.1:${PORT}/api/ai/generate`, {

@@ -16,3 +16,10 @@ declare module 'crypto' {
 declare module '@google/genai' {
   export const GoogleGenAI: any;
 }
+
+declare module 'node-edge-tts' {
+  export class EdgeTTS {
+    constructor(options?: Record<string, unknown>);
+    ttsPromise(text: string, outputPath: string): Promise<void>;
+  }
+}
