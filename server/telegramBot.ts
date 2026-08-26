@@ -1515,6 +1515,7 @@ class TelegramBotServiceImpl {
 
     // Send typing action
     await this.sendChatAction(chatId, 'typing');
+    const thinkingMessageId = await this.sendThinkingMessage(chatId, rawMsg.message_id);
 
     // Build context with history and previous summary if available
     const historyToSend: ChatTurn[] = [...session.turns];
@@ -1572,8 +1573,16 @@ class TelegramBotServiceImpl {
       }
     }
 
-    // Send formatted reply with fallback
-    await this.sendMessage(chatId, aiReply, { parse_mode: 'Markdown', reply_to_message_id: rawMsg.message_id });
+    if (thinkingMessageId) {
+      try {
+        await this.streamMessageText(chatId, thinkingMessageId, aiReply);
+      } catch (error: any) {
+        console.warn(`[TelegramBot] Thinking message edit failed for ${chatId}; sending a new reply:`, error?.message || error);
+        await this.sendMessage(chatId, aiReply, { parse_mode: 'Markdown', reply_to_message_id: rawMsg.message_id });
+      }
+    } else {
+      await this.sendMessage(chatId, aiReply, { parse_mode: 'Markdown', reply_to_message_id: rawMsg.message_id });
+    }
   }
 
   /**
@@ -2231,6 +2240,32 @@ class TelegramBotServiceImpl {
           if (options.throwOnError) throw err;
         }
       }
+    }
+  }
+
+  public async sendThinkingMessage(chatId: number | string, replyToMessageId?: number): Promise<number | null> {
+    if (!this.token) return null;
+    try {
+      const response = await this.callApi<{ message_id?: number }>('sendMessage', {
+        chat_id: chatId,
+        text: '💭 <i>Thinking... AI is preparing a response.</i>',
+        parse_mode: 'HTML',
+        reply_to_message_id: replyToMessageId,
+        disable_web_page_preview: true,
+      });
+      return response?.message_id || null;
+    } catch (error: any) {
+      console.warn(`[TelegramBot] Could not send Thinking placeholder to ${chatId}:`, error?.message || error);
+      return null;
+    }
+  }
+
+  private async streamMessageText(chatId: number | string, messageId: number, text: string): Promise<void> {
+    const chunks = this.splitMessage(text, 240);
+    let visibleText = '';
+    for (const chunk of chunks) {
+      visibleText += chunk;
+      await this.editMessageTextThrottled(chatId, messageId, visibleText, { parse_mode: 'Markdown' });
     }
   }
 

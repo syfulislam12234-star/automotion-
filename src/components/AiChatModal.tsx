@@ -239,10 +239,13 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const typewriterTimersRef = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
 
   useEffect(() => () => {
     audioRef.current?.pause();
     if (audioRef.current?.src) URL.revokeObjectURL(audioRef.current.src);
+    typewriterTimersRef.current.forEach((timer) => clearInterval(timer));
+    typewriterTimersRef.current.clear();
   }, []);
 
   // Auto scroll to bottom
@@ -287,6 +290,25 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     } catch {
       setSpeakingMessageId(null);
     }
+  }, []);
+
+  const streamAssistantText = useCallback((messageId: string, text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      let position = 0;
+      const timer = setInterval(() => {
+        position = Math.min(text.length, position + 3);
+        const visibleText = text.slice(0, position);
+        setMessages((previous) => previous.map((message) => (
+          message.id === messageId ? { ...message, content: visibleText } : message
+        )));
+        if (position >= text.length) {
+          clearInterval(timer);
+          typewriterTimersRef.current.delete(timer);
+          resolve();
+        }
+      }, 18);
+      typewriterTimersRef.current.add(timer);
+    });
   }, []);
 
   const handleSendMessage = useCallback(async (textToSend: string, fromVoice = false) => {
@@ -344,6 +366,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           voiceInput: fromVoice,
         };
         setMessages((prev) => [...prev, assistantMsg]);
+        await streamAssistantText(assistantMsg.id, data.text);
         if (fromVoice) void speakMessage(data.text, assistantMsg.id);
       } else {
         throw new Error(data.message || data.error || 'Unable to generate response');
@@ -355,7 +378,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, messages, selectedModel, speakMessage]);
+  }, [isLoading, messages, selectedModel, speakMessage, streamAssistantText]);
 
   const handleClearHistory = () => {
     setMessages(INITIAL_MESSAGES);
@@ -639,7 +662,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
             </div>
             <div className="bg-slate-950 border border-slate-800 rounded-2xl rounded-tl-xs p-3.5 text-xs text-slate-400 flex items-center gap-2.5">
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-              <span className="text-cyan-300 font-medium">Synthesizing with 20-AI cascade...</span>
+              <span className="text-cyan-300 font-medium">AI ভাবছে... Thinking...</span>
               <div className="flex items-center gap-1 pl-1">
                 <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></div>
                 <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse delay-150"></div>
