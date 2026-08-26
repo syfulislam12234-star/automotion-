@@ -373,6 +373,7 @@ export interface AuthSession {
   token: string;
   user: UserAccount;
   expiresAt: number;
+  isVerified: boolean;
   adminAuthorized?: boolean;
 }
 

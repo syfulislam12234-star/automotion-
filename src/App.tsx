@@ -436,14 +436,14 @@ export default function App() {
     setIsPortalOpen(true);
   };
 
-  if (!currentUser) {
+  if (!currentUser || session?.isVerified !== true) {
     const isAdminLoginRoute = window.location.pathname === '/admin/login';
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100">
         <AuthModal
           isOpen
           isGateMode
-          initialTab="login"
+          initialTab={currentUser ? 'verify' : 'login'}
           onAuthenticated={handleAuthenticated}
           onShowToast={showToast}
           isAdminPortal={isAdminLoginRoute}

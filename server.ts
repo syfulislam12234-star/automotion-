@@ -36,6 +36,21 @@ async function sendAdminRegistrationCode(email: string, code: string): Promise<b
   return response.ok;
 }
 
+async function sendEmailVerificationCode(email: string, code: string): Promise<boolean> {
+  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) return false;
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: AUTH_EMAIL_FROM,
+      to: [email],
+      subject: 'Your email verification code',
+      text: `Your 6-digit verification code is ${code}. It expires in 10 minutes.`,
+    }),
+  });
+  return response.ok;
+}
+
 const SECURITY_REFUSAL_BN = 'আমি অ্যাপের ব্যবহার ও সুবিধা সম্পর্কে সাহায্য করতে পারি, তবে নিরাপত্তাজনিত কারণে অ্যাপের অভ্যন্তরীণ প্রযুক্তিগত তথ্য শেয়ার করা সম্ভব নয়।';
 const APP_KNOWLEDGE_BASE_BN = `
 তুমি Universal Bot Dashboard-এর সহায়ক AI Assistant। এটি একটি নিরাপদ multi-channel bot management platform, যেখানে ব্যবহারকারী:
@@ -1230,7 +1245,10 @@ async function startServer() {
         return res.status(400).json(result);
       }
 
-      return res.status(201).json(result);
+      return void sendEmailVerificationCode(email, result.verificationCode || '').then((sent) => {
+        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
+        return res.status(201).json({ ...result, verificationCode: undefined });
+      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Registration failed' });
     }
@@ -1278,12 +1296,10 @@ async function startServer() {
         return res.status(401).json(result);
       }
 
-      if (result.session?.user?.role === 'admin') {
-        ServerDatabase.authorizeAdminSession(result.session.token);
-        result.session.adminAuthorized = true;
-      }
-
-      return res.json(result);
+      return void sendEmailVerificationCode(email, result.verificationCode || '').then((sent) => {
+        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
+        return res.json({ ...result, verificationCode: undefined });
+      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Login failed' });
     }
@@ -1301,8 +1317,11 @@ async function startServer() {
       if (!tokenResponse.ok || !belongsToConfiguredClient || !claims.email || !(claims.email_verified === true || claims.email_verified === 'true')) {
         return res.status(401).json({ success: false, message: 'Invalid Google authentication token.' });
       }
-      const { user, session } = ServerDatabase.findOrCreateGoogleUser({ email: claims.email, name: claims.name || claims.email, avatarUrl: claims.picture });
-      return res.json({ success: true, user, session: { token: session.token, user, expiresAt: session.expiresAt } });
+      const { user, session, verificationCode } = ServerDatabase.findOrCreateGoogleUser({ email: claims.email, name: claims.name || claims.email, avatarUrl: claims.picture });
+      return void sendEmailVerificationCode(user.email, verificationCode).then((sent) => {
+        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
+        return res.json({ success: true, user, session: { token: session.token, user, expiresAt: session.expiresAt, isVerified: false } });
+      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch {
       return res.status(502).json({ success: false, message: 'Google authentication service is unavailable.' });
     }
@@ -1316,7 +1335,7 @@ async function startServer() {
         return res.status(400).json({ success: false, message: 'Email and 6-digit OTP code are required.' });
       }
 
-      const result = ServerDatabase.verifyOtp(email, code);
+      const result = ServerDatabase.verifyOtp(email, code, req.headers.authorization);
       if (!result.success) {
         return res.status(400).json(result);
       }
@@ -1336,7 +1355,11 @@ async function startServer() {
       }
 
       const result = ServerDatabase.resendOtp(email);
-      return res.json(result);
+      if (!result.success || !result.code) return res.json(result);
+      return void sendEmailVerificationCode(email, result.code).then((sent) => {
+        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
+        return res.json({ success: true, message: result.message });
+      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -1361,6 +1384,7 @@ async function startServer() {
       return res.json({
         success: true,
         user,
+        isVerified: user.isVerified === true,
         adminAuthorized: ServerDatabase.isAdminSessionAuthorized(authHeader),
         botConfig: savedConfig?.config || null,
         configUpdatedAt: savedConfig?.updatedAt || null,

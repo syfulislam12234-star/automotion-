@@ -26,6 +26,7 @@ export interface DbSession {
   userId: string;
   createdAt: string;
   expiresAt: number;
+  isVerified: boolean;
   adminAuthorized?: boolean;
 }
 
@@ -190,7 +191,7 @@ export class ServerDatabase {
     return this.memoryDb.users.find(u => u.email.toLowerCase() === clean);
   }
 
-  public static findOrCreateGoogleUser(profile: { email: string; name: string; avatarUrl?: string }): { user: any; session: DbSession } {
+  public static findOrCreateGoogleUser(profile: { email: string; name: string; avatarUrl?: string }): { user: any; session: DbSession; verificationCode: string } {
     this.init();
     const cleanEmail = profile.email.toLowerCase().trim();
     let user = this.getUserByEmail(cleanEmail);
@@ -213,12 +214,12 @@ export class ServerDatabase {
     } else {
       user.name = profile.name.trim() || user.name;
       user.avatarUrl = profile.avatarUrl || user.avatarUrl;
-      user.isVerified = true;
       user.lastLoginAt = new Date().toISOString();
     }
-    const session = this.createSession(user.id);
+    const verificationCode = this.issueVerificationCode(user);
+    const session = this.createSession(user.id, false);
     this.saveToFile();
-    return { user: this.sanitizeUser(user), session };
+    return { user: this.sanitizeUser(user), session, verificationCode };
   }
 
   public static getUserById(id: string): DbUser | undefined {
@@ -287,14 +288,14 @@ export class ServerDatabase {
     };
     this.memoryDb.users.push(user);
     delete this.memoryDb.pendingAdminRegistrations![cleanEmail];
-    const session = this.createSession(user.id);
+    const session = this.createSession(user.id, true);
     session.adminAuthorized = true;
     this.saveToFile();
     return { success: true, message: 'Administrator account verified and created.', user: this.sanitizeUser(user), session };
   }
 
   public static sanitizeUser(user: DbUser) {
-    const { passwordHash, passwordSalt, ...safe } = user;
+    const { passwordHash, passwordSalt, verificationCode, ...safe } = user;
     return safe;
   }
 
@@ -307,7 +308,7 @@ export class ServerDatabase {
     success: boolean;
     message: string;
     user?: any;
-    session?: { token: string; user: any; expiresAt: number };
+    session?: { token: string; user: any; expiresAt: number; isVerified: boolean };
     verificationCode?: string;
   } {
     this.init();
@@ -328,7 +329,7 @@ export class ServerDatabase {
       name: params.name.trim(),
       email: cleanEmail,
       role: params.role || 'developer',
-      isVerified: true, // Automated instant verification
+      isVerified: true,
       verificationCode,
       passwordHash: hash,
       passwordSalt: salt,
@@ -341,18 +342,18 @@ export class ServerDatabase {
 
     this.memoryDb.users.push(newUser);
     
-    // Automatically generate persistent session immediately
-    const session = this.createSession(newUser.id);
+    const session = this.createSession(newUser.id, false);
     this.saveToFile();
 
     return {
       success: true,
-      message: 'Account created and verified instantly! Logging you in...',
+      message: 'Account created. A 6-digit verification code was sent to your email.',
       user: this.sanitizeUser(newUser),
       session: {
         token: session.token,
         user: this.sanitizeUser(newUser),
         expiresAt: session.expiresAt,
+        isVerified: session.isVerified,
       },
       verificationCode,
     };
@@ -364,9 +365,10 @@ export class ServerDatabase {
   }): {
     success: boolean;
     message: string;
-    session?: { token: string; user: any; expiresAt: number };
+    session?: { token: string; user: any; expiresAt: number; isVerified: boolean };
     requiresVerification?: boolean;
     unverifiedUser?: any;
+    verificationCode?: string;
   } {
     this.init();
     const cleanEmail = params.email.toLowerCase().trim();
@@ -387,37 +389,33 @@ export class ServerDatabase {
       };
     }
 
-    if (!user.isVerified) {
-      return {
-        success: false,
-        message: 'Your email address is not yet verified. Please enter your 6-digit verification code.',
-        requiresVerification: true,
-        unverifiedUser: this.sanitizeUser(user),
-      };
-    }
-
     // Update last login
     user.lastLoginAt = new Date().toISOString();
+    const verificationCode = this.issueVerificationCode(user);
     
     // Create session
-    const session = this.createSession(user.id);
+    const session = this.createSession(user.id, false);
     this.saveToFile();
 
     return {
       success: true,
-      message: `Welcome back, ${user.name}!`,
+      message: `A 6-digit verification code was sent to ${user.email}.`,
+      requiresVerification: true,
+      unverifiedUser: this.sanitizeUser(user),
       session: {
         token: session.token,
         user: this.sanitizeUser(user),
         expiresAt: session.expiresAt,
+        isVerified: session.isVerified,
       },
+      verificationCode,
     };
   }
 
-  public static verifyOtp(email: string, code: string): {
+  public static verifyOtp(email: string, code: string, token?: string): {
     success: boolean;
     message: string;
-    session?: { token: string; user: any; expiresAt: number };
+    session?: { token: string; user: any; expiresAt: number; isVerified: boolean };
   } {
     this.init();
     const cleanEmail = email.toLowerCase().trim();
@@ -427,7 +425,7 @@ export class ServerDatabase {
       return { success: false, message: 'User account not found.' };
     }
 
-    if (user.verificationCode !== code) {
+    if (user.verificationCode !== code || code.length !== 6) {
       return {
         success: false,
         message: 'Invalid verification code. Please check your 6-digit OTP.',
@@ -436,7 +434,14 @@ export class ServerDatabase {
 
     user.isVerified = true;
     user.lastLoginAt = new Date().toISOString();
-    const session = this.createSession(user.id);
+    const cleanToken = token?.replace(/^Bearer\s+/i, '').trim();
+    const existingSession = cleanToken
+      ? this.memoryDb.sessions.find((entry) => entry.token === cleanToken && entry.userId === user.id && entry.expiresAt > Date.now())
+      : undefined;
+    const session = existingSession || this.createSession(user.id, false);
+    session.isVerified = true;
+    if (user.role === 'admin') session.adminAuthorized = true;
+    user.verificationCode = undefined;
     this.saveToFile();
 
     return {
@@ -446,6 +451,7 @@ export class ServerDatabase {
         token: session.token,
         user: this.sanitizeUser(user),
         expiresAt: session.expiresAt,
+        isVerified: session.isVerified,
       },
     };
   }
@@ -465,12 +471,17 @@ export class ServerDatabase {
 
     return {
       success: true,
-      message: `A new 6-digit verification code (${newCode}) has been generated.`,
-      code: newCode,
+      message: 'A new 6-digit verification code was generated.',
     };
   }
 
-  public static createSession(userId: string): DbSession {
+  private static issueVerificationCode(user: DbUser): string {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    user.verificationCode = code;
+    return code;
+  }
+
+  public static createSession(userId: string, isVerified = false): DbSession {
     this.init();
     const token = `gauth_${Date.now()}_${crypto.randomBytes(24).toString('hex')}`;
     const expiresAt = Date.now() + 14 * 24 * 60 * 60 * 1000; // 14 days
@@ -480,6 +491,7 @@ export class ServerDatabase {
       userId,
       createdAt: new Date().toISOString(),
       expiresAt,
+      isVerified,
     };
 
     // Clean old expired sessions
@@ -519,7 +531,7 @@ export class ServerDatabase {
     const user = this.getUserById(session.userId);
     if (!user) return null;
 
-    return this.sanitizeUser(user);
+    return { ...this.sanitizeUser(user), isVerified: session.isVerified === true };
   }
 
   public static removeSession(token: string) {

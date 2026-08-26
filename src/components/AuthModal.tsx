@@ -64,6 +64,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [verifyEmail, setVerifyEmail] = useState('');
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [lastGeneratedOtp, setLastGeneratedOtp] = useState<string | null>(null);
+  const [isAdminSignupPending, setIsAdminSignupPending] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -116,8 +117,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setIsLoading(false);
 
       if (res.requiresVerification && res.unverifiedUser) {
+        setIsAdminSignupPending(false);
         setVerifyEmail(res.unverifiedUser.email);
-        setLastGeneratedOtp(res.unverifiedUser.verificationCode || null);
+        setLastGeneratedOtp(null);
         setActiveTab('verify');
         setErrorMessage(res.message);
         onShowToast('⚠️ Please verify your 6-digit email code to continue.');
@@ -157,6 +159,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setErrorMessage(result.message);
         return;
       }
+      if (result.session.isVerified !== true) {
+        setIsAdminSignupPending(false);
+        setVerifyEmail(result.session.user.email);
+        setOtpDigits(['', '', '', '', '', '']);
+        setActiveTab('verify');
+        onShowToast('📩 A 6-digit verification code was sent to your email.');
+        return;
+      }
       onShowToast(`Welcome, ${result.session.user.name}.`);
       onAuthenticated(result.session);
       if (onClose) onClose();
@@ -167,7 +177,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Handle Sign Up submission with Instant Automated Verification & Login
+  // Handle sign-up submission and start mandatory email verification.
   const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -202,6 +212,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setIsLoading(false);
 
       if (isAdminPortal && res.pending) {
+        setIsAdminSignupPending(true);
         setVerifyEmail(res.email || signupEmail);
         setOtpDigits(['', '', '', '', '', '']);
         setResendCooldown(60);
@@ -215,11 +226,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      // Automated Instant Verification & Immediate Login
-      if (res.session) {
-        onShowToast(`🎉 Welcome, ${res.user.name}! Your account has been verified instantly.`);
-        onAuthenticated(res.session);
-        if (onClose) onClose();
+      if (res.session && res.session.isVerified !== true) {
+        setIsAdminSignupPending(false);
+        setVerifyEmail(res.user.email);
+        setOtpDigits(['', '', '', '', '', '']);
+        setLastGeneratedOtp(null);
+        setResendCooldown(60);
+        setActiveTab('verify');
+        setSuccessMessage(res.message);
+        onShowToast('📩 A 6-digit verification code was sent to your email.');
         return;
       }
 
@@ -284,7 +299,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setIsLoading(true);
     try {
-      const res = isAdminPortal
+      const res = isAdminSignupPending
         ? await AuthService.verifyAdminSignUp(verifyEmail, fullCode)
         : await AuthService.verifyEmailCode(verifyEmail, fullCode);
       setIsLoading(false);
@@ -308,15 +323,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleResendCode = async () => {
     if (resendCooldown > 0) return;
     try {
-      if (isAdminPortal) {
+      if (isAdminSignupPending) {
         setErrorMessage('Please start a new administrator registration to request another code.');
         return;
       }
       const res = await AuthService.resendVerificationCode(verifyEmail);
       if (res.success && res.code) {
-        setLastGeneratedOtp(res.code);
+        setLastGeneratedOtp(null);
         setResendCooldown(60);
-        setSuccessMessage(`New code generated: ${res.code}`);
+        setSuccessMessage(res.message);
         onShowToast(`📬 New verification code sent to ${verifyEmail}`);
       } else {
         setErrorMessage(res.message);
@@ -326,14 +341,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Quick autofill demo OTP
-  const handleAutofillDemoOtp = () => {
-    const code = lastGeneratedOtp;
-    if (!code) return;
-    const digits = code.split('').slice(0, 6);
-    setOtpDigits(digits);
-    setSuccessMessage(`Code ${code} filled into boxes! Click "Verify & Launch".`);
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-lg animate-in fade-in duration-200">
@@ -608,9 +615,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
 
 
-              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-xs text-emerald-400">
+              <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center gap-2 text-xs text-indigo-300">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Instant automated verification enabled: no manual email link confirmation required.</span>
+                <span>A 6-digit verification code is required after authentication.</span>
               </div>
 
               <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none pt-1">
@@ -635,7 +642,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </>
                 ) : (
                   <>
-                    <span>Create Account & Instant Log In</span>
+                    <span>Create Account & Verify Email</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
@@ -654,20 +661,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <p className="text-xs text-slate-300 leading-relaxed">
                   Enter the 6-digit confirmation code for <strong>{verifyEmail || loginEmail}</strong> to activate your session.
                 </p>
-                {lastGeneratedOtp && (
-                  <div className="pt-2 flex items-center justify-between bg-indigo-950/60 p-2 rounded-xl border border-indigo-500/30">
-                    <div className="text-xs font-mono text-indigo-200">
-                      Simulated OTP: <strong className="text-amber-400">{lastGeneratedOtp}</strong>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleAutofillDemoOtp}
-                      className="px-2.5 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-[11px] font-bold transition cursor-pointer"
-                    >
-                      Autofill Code
-                    </button>
-                  </div>
-                )}
               </div>
 
               {/* 6-digit Pin Box Inputs */}

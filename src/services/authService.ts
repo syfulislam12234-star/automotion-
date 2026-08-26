@@ -175,7 +175,6 @@ export class AuthService {
       });
       const data = await resp.json();
       if (resp.ok && data.success) {
-        // Automatically save session to localStorage for immediate persistence
         if (data.session) {
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
         }
@@ -199,7 +198,7 @@ export class AuthService {
       console.warn('Backend signup offline, using local storage engine:', err);
     }
 
-    // Local fallback with instant automated verification
+    // Local fallback keeps the same verification gate when the backend is unavailable.
     const users = this.getStoredUsers();
     if (users.some(u => u.email.toLowerCase() === cleanEmail)) {
       return {
@@ -214,7 +213,7 @@ export class AuthService {
       name: params.name.trim(),
       email: cleanEmail,
       role: params.role || (cleanEmail.includes('admin') ? 'admin' : 'developer'),
-      isVerified: true, // Automated instant verification
+      isVerified: true,
       verificationCode,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
@@ -234,13 +233,14 @@ export class AuthService {
       token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
       user: newUser,
       expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+      isVerified: false,
     };
 
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 
     return {
       success: true,
-      message: `Account created and verified! Welcome, ${newUser.name}.`,
+      message: `Account created. Enter the 6-digit code sent to ${newUser.email}.`,
       user: newUser,
       session,
       verificationCode,
@@ -254,7 +254,10 @@ export class AuthService {
     try {
       const resp = await fetch('/api/auth/verify-otp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.getCurrentSession()?.token ? { Authorization: `Bearer ${this.getCurrentSession()!.token}` } : {}),
+        },
         body: JSON.stringify({ email: cleanEmail, code }),
       });
       const data = await resp.json();
@@ -297,6 +300,7 @@ export class AuthService {
       token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
       user,
       expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+      isVerified: true,
     };
 
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
@@ -338,8 +342,7 @@ export class AuthService {
 
     return {
       success: true,
-      message: `A new 6-digit verification code (${newCode}) has been generated.`,
-      code: newCode,
+      message: 'A new 6-digit verification code was generated.',
     };
   }
 
@@ -353,6 +356,7 @@ export class AuthService {
     session?: AuthSession;
     requiresVerification?: boolean;
     unverifiedUser?: UserAccount;
+    verificationCode?: string;
   }> {
     const cleanEmail = params.email.toLowerCase().trim();
 
@@ -366,9 +370,11 @@ export class AuthService {
       if (resp.ok && data.success && data.session) {
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
         return {
-          success: true,
+          success: data.session.isVerified === true,
           message: data.message,
           session: data.session,
+          requiresVerification: data.session.isVerified !== true,
+          unverifiedUser: data.session.user,
         };
       } else if (data.requiresVerification) {
         return {
@@ -405,29 +411,26 @@ export class AuthService {
       };
     }
 
-    if (!user.isVerified) {
-      return {
-        success: false,
-        message: 'Your email address is not yet verified. Please enter your 6-digit verification code.',
-        requiresVerification: true,
-        unverifiedUser: user,
-      };
-    }
-
     user.lastLoginAt = new Date().toISOString();
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    user.verificationCode = verificationCode;
     this.saveUsers(users);
 
     const session: AuthSession = {
       token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
       user,
       expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+      isVerified: false,
     };
 
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 
     return {
       success: true,
-      message: `Welcome back, ${user.name}!`,
+      message: `Enter the 6-digit code sent to ${user.email}.`,
+      requiresVerification: true,
+      unverifiedUser: user,
+      verificationCode,
       session,
     };
   }
