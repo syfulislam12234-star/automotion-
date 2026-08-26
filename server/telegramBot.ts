@@ -2248,8 +2248,7 @@ class TelegramBotServiceImpl {
     try {
       const response = await this.callApi<{ message_id?: number }>('sendMessage', {
         chat_id: chatId,
-        text: '💭 <i>Thinking... AI is preparing a response.</i>',
-        parse_mode: 'HTML',
+        text: 'Thinking...',
         reply_to_message_id: replyToMessageId,
         disable_web_page_preview: true,
       });

@@ -366,6 +366,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           voiceInput: fromVoice,
         };
         setMessages((prev) => [...prev, assistantMsg]);
+        setIsLoading(false);
         await streamAssistantText(assistantMsg.id, data.text);
         if (fromVoice) void speakMessage(data.text, assistantMsg.id);
       } else {
@@ -656,18 +657,14 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
 
         {/* Typing Indicator */}
         {isLoading && (
-          <div className="flex items-start gap-2.5 justify-start">
-            <div className="w-7 h-7 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white shrink-0 shadow-md shadow-cyan-500/20 mt-0.5">
-              <Bot className="w-4 h-4 animate-bounce" />
-            </div>
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl rounded-tl-xs p-3.5 text-xs text-slate-400 flex items-center gap-2.5">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-              <span className="text-cyan-300 font-medium">AI ভাবছে... Thinking...</span>
-              <div className="flex items-center gap-1 pl-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></div>
-                <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse delay-150"></div>
-                <div className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse delay-300"></div>
-              </div>
+          <div className="flex justify-center py-1" aria-live="polite" aria-label="Thinking">
+            <div className="flex items-center justify-center gap-1.5 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-300">
+              <span>Thinking</span>
+              <span className="flex items-center gap-1" aria-hidden="true">
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-bounce" />
+              </span>
             </div>
           </div>
         )}
