@@ -292,8 +292,9 @@ const getInitialConfig = (): BotConfig => {
   return DEFAULT_CONFIG;
 };
 
-export default function App() {
+function AppContent() {
   const [config, setConfig] = useState<BotConfig>(getInitialConfig);
+  const [loading, setLoading] = useState(true);
 
   // User Authentication & Session State
   const [session, setSession] = useState<AuthSession | null>(() => {
@@ -322,6 +323,9 @@ export default function App() {
   // Sync session & load permanently saved user bot config from server database on mount
   useEffect(() => {
     let isMounted = true;
+    const fallbackTimer = setTimeout(() => {
+      if (isMounted) setLoading(false);
+    }, 2000);
     AuthService.syncSessionWithServer()
       .then(({ session: updatedSession, botConfig: serverConfig }) => {
         if (!isMounted) return;
@@ -331,14 +335,17 @@ export default function App() {
         if (serverConfig) {
           setConfig((prev) => ({ ...prev, ...serverConfig }));
         }
+        setLoading(false);
       })
       .catch((error) => {
         if (isMounted) {
           console.warn('Session check unavailable; continuing with the local authentication state.', error);
+          setLoading(false);
         }
       });
     return () => {
       isMounted = false;
+      clearTimeout(fallbackTimer);
     };
   }, []);
 
@@ -379,7 +386,7 @@ export default function App() {
       showToast(`🔒 Please log in to access ${featureName}.`);
       return;
     }
-    if (!currentUser.isVerified) {
+    if (currentUser?.isVerified !== true || session?.isVerified !== true) {
       setAuthFeatureContext(featureName);
       setAuthModalTab('verify');
       setIsAuthModalOpen(true);
@@ -391,7 +398,7 @@ export default function App() {
 
   const handleAuthenticated = (newSession: AuthSession) => {
     setSession(newSession);
-    showToast(`✅ Welcome, ${newSession.user.name}! Session active.`);
+    showToast(`✅ Welcome, ${newSession.user?.name || 'user'}! Session active.`);
   };
 
   const handleLogOut = () => {
@@ -441,6 +448,17 @@ export default function App() {
     setPortalInitialServiceId(serviceId);
     setIsPortalOpen(true);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-5 text-center shadow-xl">
+          <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent" />
+          <p className="text-sm text-slate-300">Loading secure workspace...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser || session?.isVerified !== true) {
     const isAdminLoginRoute = window.location.pathname === '/admin/login';
@@ -929,7 +947,7 @@ export default function App() {
         isAdminPortal
         featureProtectedName="Administrator Portal"
         onAuthenticated={(adminSession) => {
-          if (adminSession.user.role === 'admin') {
+          if (adminSession.user?.role === 'admin' && adminSession.isVerified === true) {
             handleAuthenticated(adminSession);
             setActiveTab('admin');
           }
@@ -977,5 +995,47 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+class AppErrorBoundary extends React.Component<React.PropsWithChildren, { hasError: boolean }> {
+  public state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('Application rendering failed:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+          <div className="max-w-md rounded-2xl border border-rose-500/30 bg-slate-900 p-6 text-center shadow-xl">
+            <h1 className="text-lg font-semibold text-white">The workspace could not load</h1>
+            <p className="mt-2 text-sm text-slate-400">Refresh the page to retry the secure application startup.</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-5 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+            >
+              Refresh workspace
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppContent />
+    </AppErrorBoundary>
   );
 }

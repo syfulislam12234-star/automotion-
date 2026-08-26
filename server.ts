@@ -22,7 +22,10 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM;
 
 async function sendAdminRegistrationCode(email: string, code: string): Promise<boolean> {
-  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) return false;
+  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) {
+    console.warn(`[Auth OTP FALLBACK] Admin code for ${email}: ${code}`);
+    return false;
+  }
   try {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -37,12 +40,16 @@ async function sendAdminRegistrationCode(email: string, code: string): Promise<b
     return response.ok;
   } catch (error) {
     console.warn('[Auth] Admin verification email unavailable:', error);
+    console.warn(`[Auth OTP FALLBACK] Admin code for ${email}: ${code}`);
     return false;
   }
 }
 
 async function sendEmailVerificationCode(email: string, code: string): Promise<boolean> {
-  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) return false;
+  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) {
+    console.warn(`[Auth OTP FALLBACK] Code for ${email}: ${code}`);
+    return false;
+  }
   try {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -57,6 +64,7 @@ async function sendEmailVerificationCode(email: string, code: string): Promise<b
     return response.ok;
   } catch (error) {
     console.warn('[Auth] Verification email unavailable:', error);
+    console.warn(`[Auth OTP FALLBACK] Code for ${email}: ${code}`);
     return false;
   }
 }
@@ -1256,8 +1264,10 @@ async function startServer() {
       }
 
       return void sendEmailVerificationCode(email, result.verificationCode || '').then((sent) => {
-        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
-        return res.status(201).json({ ...result, verificationCode: undefined });
+        const message = sent
+          ? 'Account created. A 6-digit verification code was sent to your email.'
+          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+        return res.status(201).json({ ...result, message, verificationCode: undefined });
       }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Registration failed' });
@@ -1265,32 +1275,42 @@ async function startServer() {
   });
 
   app.post('/api/auth/admin/signup', (req, res) => {
-    const { name, email, password } = req.body || {};
-    const authHeader = req.headers.authorization;
-    const requestingUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
-    const isFirstAdmin = !ServerDatabase.hasAdminUsers();
-    if (!isFirstAdmin && (!requestingUser || requestingUser.role !== 'admin' || !ServerDatabase.isAdminSessionAuthorized(authHeader || ''))) {
-      return res.status(403).json({ success: false, message: 'An authenticated administrator is required.' });
+    try {
+      const { name, email, password } = req.body || {};
+      const authHeader = req.headers.authorization;
+      const requestingUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+      const isFirstAdmin = !ServerDatabase.hasAdminUsers();
+      if (!isFirstAdmin && (!requestingUser || requestingUser?.role !== 'admin' || !ServerDatabase.isAdminSessionAuthorized(authHeader || ''))) {
+        return res.status(403).json({ success: false, message: 'An authenticated administrator is required.' });
+      }
+      if (!name || !email || !password) {
+        return res.status(400).json({ success: false, message: 'Administrator registration fields are required.' });
+      }
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      if (!ServerDatabase.createPendingAdminRegistration(name, email, password, code)) {
+        return res.status(409).json({ success: false, message: 'A primary administrator already exists or the email is already registered.' });
+      }
+      return void sendAdminRegistrationCode(email, code).then((sent) => {
+        const message = sent
+          ? 'A verification code was sent to the administrator email.'
+          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+        return res.status(202).json({ success: true, pending: true, email: String(email).toLowerCase().trim(), message });
+      }).catch(() => res.status(503).json({ success: false, message: 'Registration email could not be sent.' }));
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Administrator registration failed.' });
     }
-    if (!name || !email || !password) {
-      return res.status(400).json({ success: false, message: 'Administrator registration fields are required.' });
-    }
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    if (!ServerDatabase.createPendingAdminRegistration(name, email, password, code)) {
-      return res.status(409).json({ success: false, message: 'A primary administrator already exists or the email is already registered.' });
-    }
-    return void sendAdminRegistrationCode(email, code).then((sent) => {
-      if (!sent) return res.status(503).json({ success: false, message: 'Registration email is not configured.' });
-      return res.status(202).json({ success: true, pending: true, email: String(email).toLowerCase().trim(), message: 'A verification code was sent to the administrator email.' });
-    }).catch(() => res.status(503).json({ success: false, message: 'Registration email could not be sent.' }));
   });
 
   app.post('/api/auth/admin/signup/verify', (req, res) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email : '';
-    const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
-    if (!email || code.length !== 6) return res.status(400).json({ success: false, message: 'A valid email and 6-digit verification code are required.' });
-    const result = ServerDatabase.completePendingAdminRegistration(email, code);
-    return result.success ? res.status(201).json(result) : res.status(400).json(result);
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email : '';
+      const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
+      if (!email || code.length !== 6) return res.status(400).json({ success: false, message: 'A valid email and 6-digit verification code are required.' });
+      const result = ServerDatabase.completePendingAdminRegistration(email, code);
+      return result.success ? res.status(201).json(result) : res.status(400).json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Administrator verification failed.' });
+    }
   });
 
   // User Login
@@ -1307,8 +1327,10 @@ async function startServer() {
       }
 
       return void sendEmailVerificationCode(email, result.verificationCode || '').then((sent) => {
-        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
-        return res.json({ ...result, verificationCode: undefined });
+        const message = sent
+          ? result.message
+          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+        return res.json({ ...result, message, verificationCode: undefined });
       }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Login failed' });
@@ -1329,8 +1351,10 @@ async function startServer() {
       }
       const { user, session, verificationCode } = ServerDatabase.findOrCreateGoogleUser({ email: claims.email, name: claims.name || claims.email, avatarUrl: claims.picture });
       return void sendEmailVerificationCode(user.email, verificationCode).then((sent) => {
-        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
-        return res.json({ success: true, user, session: { token: session.token, user, expiresAt: session.expiresAt, isVerified: false } });
+        const message = sent
+          ? 'Authentication successful. A 6-digit verification code was sent to your email.'
+          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+        return res.json({ success: true, message, user, session: { token: session.token, user, expiresAt: session.expiresAt, isVerified: false } });
       }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch {
       return res.status(502).json({ success: false, message: 'Google authentication service is unavailable.' });
@@ -1367,8 +1391,10 @@ async function startServer() {
       const result = ServerDatabase.resendOtp(email);
       if (!result.success || !result.code) return res.json(result);
       return void sendEmailVerificationCode(email, result.code).then((sent) => {
-        if (!sent) return res.status(503).json({ success: false, message: 'Verification email is not configured.' });
-        return res.json({ success: true, message: result.message });
+        const message = sent
+          ? result.message
+          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+        return res.json({ success: true, message });
       }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });
