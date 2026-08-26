@@ -23,32 +23,42 @@ const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM;
 
 async function sendAdminRegistrationCode(email: string, code: string): Promise<boolean> {
   if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) return false;
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: AUTH_EMAIL_FROM,
-      to: [email],
-      subject: 'Administrator registration verification',
-      text: `Your administrator registration verification code is ${code}. It expires in 10 minutes.`,
-    }),
-  });
-  return response.ok;
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: AUTH_EMAIL_FROM,
+        to: [email],
+        subject: 'Administrator registration verification',
+        text: `Your administrator registration verification code is ${code}. It expires in 10 minutes.`,
+      }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('[Auth] Admin verification email unavailable:', error);
+    return false;
+  }
 }
 
 async function sendEmailVerificationCode(email: string, code: string): Promise<boolean> {
   if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) return false;
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: AUTH_EMAIL_FROM,
-      to: [email],
-      subject: 'Your email verification code',
-      text: `Your 6-digit verification code is ${code}. It expires in 10 minutes.`,
-    }),
-  });
-  return response.ok;
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: AUTH_EMAIL_FROM,
+        to: [email],
+        subject: 'Your email verification code',
+        text: `Your 6-digit verification code is ${code}. It expires in 10 minutes.`,
+      }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('[Auth] Verification email unavailable:', error);
+    return false;
+  }
 }
 
 const SECURITY_REFUSAL_BN = 'আমি অ্যাপের ব্যবহার ও সুবিধা সম্পর্কে সাহায্য করতে পারি, তবে নিরাপত্তাজনিত কারণে অ্যাপের অভ্যন্তরীণ প্রযুক্তিগত তথ্য শেয়ার করা সম্ভব নয়।';

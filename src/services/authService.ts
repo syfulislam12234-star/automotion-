@@ -111,7 +111,7 @@ export class AuthService {
         return null;
       }
 
-      if (session.user?.role === 'admin' && session.adminAuthorized !== true) {
+      if (session.isVerified === true && session.user?.role === 'admin' && session.adminAuthorized !== true) {
         localStorage.removeItem(SESSION_STORAGE_KEY);
         return null;
       }
@@ -140,6 +140,8 @@ export class AuthService {
           const updatedSession: AuthSession = {
             ...current,
             user: data.user,
+            isVerified: data.isVerified === true && current.isVerified === true,
+            adminAuthorized: data.adminAuthorized === true ? true : current.adminAuthorized,
           };
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updatedSession));
           return {

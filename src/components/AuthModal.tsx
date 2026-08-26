@@ -32,6 +32,7 @@ interface AuthModalProps {
   onShowToast: (msg: string) => void;
   featureProtectedName?: string; // Optional context like "Admin Control Panel" or "VPS Manager"
   isAdminPortal?: boolean;
+  initialEmail?: string;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -43,6 +44,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onShowToast,
   featureProtectedName,
   isAdminPortal = false,
+  initialEmail = '',
 }) => {
   const [activeTab, setActiveTab] = useState<'login' | 'signup' | 'verify'>(initialTab);
   
@@ -78,10 +80,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setActiveTab(initialTab);
+      setVerifyEmail(initialEmail);
       setErrorMessage(null);
       setSuccessMessage(null);
     }
-  }, [isOpen, initialTab]);
+  }, [isOpen, initialTab, initialEmail]);
 
   // Resend cooldown timer
   useEffect(() => {

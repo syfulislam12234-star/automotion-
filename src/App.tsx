@@ -322,15 +322,21 @@ export default function App() {
   // Sync session & load permanently saved user bot config from server database on mount
   useEffect(() => {
     let isMounted = true;
-    AuthService.syncSessionWithServer().then(({ session: updatedSession, botConfig: serverConfig }) => {
-      if (!isMounted) return;
-      if (updatedSession) {
-        setSession(updatedSession);
-      }
-      if (serverConfig) {
-        setConfig((prev) => ({ ...prev, ...serverConfig }));
-      }
-    });
+    AuthService.syncSessionWithServer()
+      .then(({ session: updatedSession, botConfig: serverConfig }) => {
+        if (!isMounted) return;
+        if (updatedSession) {
+          setSession(updatedSession);
+        }
+        if (serverConfig) {
+          setConfig((prev) => ({ ...prev, ...serverConfig }));
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          console.warn('Session check unavailable; continuing with the local authentication state.', error);
+        }
+      });
     return () => {
       isMounted = false;
     };
@@ -447,6 +453,7 @@ export default function App() {
           onAuthenticated={handleAuthenticated}
           onShowToast={showToast}
           isAdminPortal={isAdminLoginRoute}
+          initialEmail={currentUser?.email}
           featureProtectedName={isAdminLoginRoute ? 'the administrator portal' : 'the Universal Bot workspace'}
         />
       </div>
