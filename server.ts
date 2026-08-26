@@ -306,6 +306,32 @@ async function generateWithPollinations(
   return null;
 }
 
+async function generateConfiguredAiText(prompt: string, preferredModel?: string): Promise<string | null> {
+  const messages = [{ role: 'user', content: prompt }];
+  const candidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
+    () => generateWithGroq(messages, preferredModel && preferredModel.includes('llama') ? preferredModel : undefined),
+    () => generateWithGemini(prompt, 'You are a precise notification and news editor.', preferredModel),
+    () => generateWithOpenRouter(messages, preferredModel),
+    () => generateWithCerebras(messages),
+    () => generateWithSambaNova(messages),
+    () => generateWithPollinations(messages, 'You are a precise notification and news editor.', prompt),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const result = await Promise.race([
+        candidate(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+      ]);
+      if (result?.text?.trim()) return result.text.trim();
+    } catch (error: any) {
+      console.warn('[AI Summarizer] Provider failed; trying next provider:', error?.message || error);
+    }
+  }
+
+  return null;
+}
+
 // Global Centralized Platform Infrastructure Registry
 const CENTRAL_PLATFORM_STATUS = {
   plan: 'Hybrid Managed Pro Plan',
@@ -373,6 +399,20 @@ async function startServer() {
     return data.text;
   });
 
+  const sanitizeDashboardConfig = (config: any): any => {
+    if (!config || typeof config !== 'object') return config;
+    const sanitized = { ...config };
+    if (sanitized.telegramBotToken === undefined && sanitized.TELEGRAM_BOT_TOKEN !== undefined) {
+      sanitized.telegramBotToken = sanitized.TELEGRAM_BOT_TOKEN;
+    }
+    for (const key of ['telegramBotToken', 'telegramAdminBotToken']) {
+      if (sanitized[key] !== undefined && sanitized[key] !== null) {
+        sanitized[key] = String(sanitized[key]).trim().replace(/^['"]+|['"]+$/g, '').trim();
+      }
+    }
+    return sanitized;
+  };
+
   const refreshRuntimeConfig = async (targetId: string, config: any, previousConfig?: any): Promise<void> => {
     try {
       await TelegramBotService.reloadFromConfig(config);
@@ -402,7 +442,7 @@ async function startServer() {
     });
   };
 
-  const notifyAdmin = async (message: string, alertName: string): Promise<void> => {
+  const notifyAdmin = async (fallbackMessage: string, alertName: string): Promise<void> => {
     const adminConfig = TelegramAdminService.getConfig();
     const chatIds = (process.env.ADMIN_TELEGRAM_ID || adminConfig.adminChatId || '')
       .split(',')
@@ -415,12 +455,28 @@ async function startServer() {
       return;
     }
 
+    let message = fallbackMessage;
+    try {
+      const aiMessage = await generateConfiguredAiText(
+        JSON.stringify({
+          alertType: alertName,
+          timestamp: new Date().toISOString(),
+          fallbackMessage,
+          instruction: 'Write a short, friendly, human-like Telegram admin notification. Preserve the event meaning. Return only plain text.',
+        }),
+        process.env.AI_SUMMARIZER_MODEL || process.env.GEMINI_MODEL || process.env.GROQ_MODEL
+      );
+      if (aiMessage) message = aiMessage;
+    } catch (error: any) {
+      console.warn(`[Telegram Alert] AI formatting failed for ${alertName}; using standard message:`, error?.message || error);
+    }
+
     await Promise.all(chatIds.map(async (chatId) => {
       try {
         const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
+          body: JSON.stringify({ chat_id: chatId, text: message, disable_web_page_preview: true }),
           signal: AbortSignal.timeout(8000),
         });
         const payload = await response.json().catch(() => ({}));
@@ -436,6 +492,11 @@ async function startServer() {
     `⚙️ <b>Dashboard Settings Updated!</b>\n\nAdmin updated the configuration.\nTimestamp: ${new Date().toISOString()}\nStatus: Applied to live system.`,
     'configuration update alert'
   );
+
+  CronWorkerService.setAiSummarizer((prompt) => generateConfiguredAiText(
+    prompt,
+    process.env.AI_SUMMARIZER_MODEL || process.env.GEMINI_MODEL || process.env.GROQ_MODEL
+  ));
 
   // Initialize Real Production Telegram Bot Engine (Polling or Webhook mode)
   try {
@@ -1185,7 +1246,8 @@ async function startServer() {
     void (async () => {
       try {
       const authHeader = req.headers.authorization;
-      const { config, userId } = req.body;
+      const { config: rawConfig, userId } = req.body;
+      const config = sanitizeDashboardConfig(rawConfig);
 
       let targetId = userId;
       if (authHeader) {
@@ -1261,7 +1323,8 @@ async function startServer() {
     void (async () => {
       try {
       const authHeader = req.headers.authorization;
-      const { config, userId } = req.body;
+      const { config: rawConfig, userId } = req.body;
+      const config = sanitizeDashboardConfig(rawConfig);
 
       if (!config) {
         return res.status(400).json({ success: false, message: 'Missing configuration payload.' });
@@ -1370,8 +1433,11 @@ async function startServer() {
   // Update Telegram Admin Config
   app.post('/api/telegram-admin/config', (req, res) => {
     try {
-      const { adminChatId, adminBotToken, isEnabled, allowRestart, strictWhitelist } = req.body;
+      const { adminChatId, adminBotToken: rawAdminBotToken, isEnabled, allowRestart, strictWhitelist } = req.body;
       const existingConfig = TelegramAdminService.getConfig();
+      const adminBotToken = rawAdminBotToken === undefined || rawAdminBotToken === null
+        ? existingConfig.adminBotToken
+        : String(rawAdminBotToken).trim().replace(/^['"]+|['"]+$/g, '').trim();
       const updated = TelegramAdminService.updateConfig({
         adminChatId,
         adminBotToken: adminBotToken && !String(adminBotToken).startsWith('••')

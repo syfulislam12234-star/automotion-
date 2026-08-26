@@ -87,6 +87,8 @@ export interface BroadcastLogEntry {
   }>;
 }
 
+export type CronAiSummarizer = (prompt: string) => Promise<string | null>;
+
 const DEFAULT_10_TARGETS: TelegramBroadcastTarget[] = [];
 
 const DEFAULT_YT_CHANNELS: YouTubeChannelConfig[] = [
@@ -118,6 +120,11 @@ export class CronWorkerServiceImpl {
   private seenEarthquakeIds: Set<string> = new Set();
   private seenVideoIds: Set<string> = new Set();
   private isInitialized: boolean = false;
+  private aiSummarizer: CronAiSummarizer | null = null;
+
+  public setAiSummarizer(summarizer: CronAiSummarizer | null): void {
+    this.aiSummarizer = summarizer;
+  }
 
   public init(): void {
     if (this.isInitialized) return;
@@ -626,14 +633,40 @@ export class CronWorkerServiceImpl {
         }),
       ]);
 
-      // Compose final HTML message
-      const broadcastHtml = this.composeBroadcastMessage({
+      // Compose a deterministic bulletin first so delivery remains available when AI is offline.
+      const fallbackBroadcast = this.composeBroadcastMessage({
         earthquakeSummary: eqData.summary,
         earthquakes: eqData.earthquakes,
         newsDigest: newsData.digest,
         ytSummary: ytData.summary,
         triggerType,
       });
+      let broadcastMessage = fallbackBroadcast;
+      let broadcastParseMode: 'HTML' | 'Markdown' = 'HTML';
+
+      if (this.aiSummarizer) {
+        const summarizerPrompt = [
+          'Create a concise, engaging Bengali Telegram bulletin in Markdown from this JSON.',
+          'Translate the useful content into natural Bengali, preserve factual values and links, add relevant emojis, and omit unsupported claims.',
+          'Return only the final bulletin text, with no preamble or explanation.',
+          JSON.stringify({ triggerType, earthquakes: eqData, news: newsData, youtube: ytData }),
+        ].join('\n\n');
+        try {
+          const aiBulletin = await Promise.race([
+            this.aiSummarizer(summarizerPrompt),
+            new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 9000)),
+          ]);
+          if (aiBulletin?.trim()) {
+            broadcastMessage = aiBulletin.trim();
+            broadcastParseMode = 'Markdown';
+            console.log('[Cron Broadcast] AI Bengali summarizer generated the bulletin.');
+          } else {
+            console.warn('[Cron Broadcast] AI summarizer returned no content; using standard bulletin.');
+          }
+        } catch (error) {
+          console.warn('[Cron Broadcast] AI summarizer failed; using standard bulletin:', error);
+        }
+      }
 
       // Preserve configured Telegram targets and add active tenant channel recipients.
       const activeTargets = this.config.targets.filter((t) => t.enabled);
@@ -649,8 +682,8 @@ export class CronWorkerServiceImpl {
         try {
           console.log(`📤 [CronWorker] Dispatching to [${target.label}] (Chat ID: ${target.chatId})...`);
 
-          await TelegramBotService.sendMessage(target.chatId, broadcastHtml, {
-            parse_mode: 'HTML',
+          await TelegramBotService.sendMessage(target.chatId, broadcastMessage, {
+            parse_mode: broadcastParseMode,
             throwOnError: true,
           });
 
@@ -678,7 +711,7 @@ export class CronWorkerServiceImpl {
       for (const target of channelTargets) {
         try {
           console.log(`📤 [CronWorker] Dispatching to [${target.label}] (${target.platform}, recipient: ${target.chatId})...`);
-          await this.sendChannelBroadcast(target, broadcastHtml);
+          await this.sendChannelBroadcast(target, broadcastMessage);
           recipientResults.push({ chatId: target.chatId, label: target.label, success: true });
           successfulSends++;
         } catch (sendErr: any) {
@@ -700,7 +733,7 @@ export class CronWorkerServiceImpl {
         earthquakesFound: eqData.earthquakes.length,
         newsFound: newsData.news.length,
         videosFound: ytData.videos.length,
-        messagePreview: broadcastHtml.slice(0, 300) + '...',
+        messagePreview: broadcastMessage.slice(0, 300) + '...',
         recipientResults,
       };
 

@@ -42,6 +42,26 @@ export interface TelegramBotStatus {
 class TelegramBotServiceImpl {
   private readonly STREAM_EDIT_INTERVAL_MS = 700;
   private token: string = '';
+  private sanitizeToken(value: unknown): string {
+    return String(value || '')
+      .trim()
+      .replace(/^['"]+|['"]+$/g, '')
+      .trim();
+  }
+
+  private resolveConfiguredToken(): string {
+    const storedConfigs = ServerDatabase.getAllBotConfigs();
+    const storedEntries = Object.entries(storedConfigs)
+      .sort(([leftKey, leftValue]: [string, any], [rightKey, rightValue]: [string, any]) => {
+        if (leftKey === 'global_default_user') return -1;
+        if (rightKey === 'global_default_user') return 1;
+        return String(rightValue?.updatedAt || '').localeCompare(String(leftValue?.updatedAt || ''));
+      });
+    const storedToken = storedEntries
+      .map(([, entry]) => this.sanitizeToken(entry?.config?.telegramBotToken))
+      .find(Boolean);
+    return storedToken || this.sanitizeToken(process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
+  }
   private runMode: 'polling' | 'webhook' | 'disabled' = 'disabled';
   private secretToken: string = '';
   private adminId: string = '';
@@ -76,8 +96,7 @@ class TelegramBotServiceImpl {
    * Initialize and start the Telegram Bot Service
    */
   public async init(): Promise<void> {
-    const rawToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
-    this.token = rawToken.trim();
+    this.token = this.resolveConfiguredToken();
     this.secretToken = (process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN || '').trim();
     this.adminId = (process.env.ADMIN_TELEGRAM_ID || '').trim();
 
@@ -236,8 +255,16 @@ class TelegramBotServiceImpl {
   }
 
   public async reloadFromConfig(config: any): Promise<void> {
-    const nextToken = String(config?.telegramBotToken || '').trim();
-    if (!nextToken || nextToken === this.token) return;
+    const requestedToken = this.sanitizeToken(config?.telegramBotToken ?? config?.TELEGRAM_BOT_TOKEN);
+    const nextToken = requestedToken || this.sanitizeToken(process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
+    if (nextToken === this.token) return;
+
+    if (!nextToken) {
+      await this.stop();
+      this.token = '';
+      this.runMode = 'disabled';
+      return;
+    }
 
     const previousToken = this.token;
     const previousWasRunning = this.isRunning;
