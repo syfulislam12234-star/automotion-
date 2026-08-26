@@ -110,6 +110,11 @@ export class FirestoreDataService {
     userId: string,
     callback: (messages: ChatMessage[]) => void
   ): Unsubscribe {
+    if (!db) {
+      console.warn('[Firestore] Real-time chat sync unavailable because Firebase is not configured.');
+      return () => {};
+    }
+
     const q = query(
       collection(db, 'chat_messages'),
       where('userId', '==', userId),

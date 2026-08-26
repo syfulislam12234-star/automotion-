@@ -13,6 +13,9 @@ const INITIAL_PASSWORDS: Record<string, string> = {};
 
 export class AuthService {
   public static async signInWithGoogle(): Promise<{ success: boolean; message: string; session?: AuthSession }> {
+    if (!auth) {
+      return { success: false, message: 'Google sign-in is temporarily unavailable because Firebase is not configured.' };
+    }
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     const result = await signInWithPopup(auth, provider);
