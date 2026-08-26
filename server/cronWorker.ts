@@ -590,6 +590,7 @@ export class CronWorkerServiceImpl {
 
     this.isProcessing = true;
     const runTimestamp = new Date().toISOString();
+    const performanceStart = Date.now();
 
     try {
       console.log(`📡 [CronWorker] Fetching Bangladesh news, earthquake data, and YouTube feeds...`);
@@ -673,54 +674,49 @@ export class CronWorkerServiceImpl {
       const channelTargets = this.getChannelBroadcastTargets();
       console.log(`🚀 [CronWorker] Broadcasting payload to ${activeTargets.length + channelTargets.length} configured and tenant recipients...`);
 
-      const recipientResults: Array<{ chatId: string; label: string; success: boolean; error?: string }> = [];
-      let successfulSends = 0;
-      let failedSends = 0;
+      const recipientTasks = [
+        ...activeTargets.map((target) => ({
+          chatId: target.chatId,
+          label: target.label,
+          dispatch: async () => {
+            console.log(`📤 [CronWorker] Dispatching to [${target.label}] (Chat ID: ${target.chatId})...`);
+            await TelegramBotService.sendMessage(target.chatId, broadcastMessage, {
+              parse_mode: broadcastParseMode,
+              throwOnError: true,
+            });
+          },
+        })),
+        ...channelTargets.map((target) => ({
+          chatId: target.chatId,
+          label: target.label,
+          dispatch: async () => {
+            console.log(`📤 [CronWorker] Dispatching to [${target.label}] (${target.platform}, recipient: ${target.chatId})...`);
+            await this.sendChannelBroadcast(target, broadcastMessage);
+          },
+        })),
+      ];
 
-      // Dispatch to each of the 10 Telegram Chat IDs with safe rate-limiting delay
-      for (const target of activeTargets) {
+      const settledRecipients = await Promise.allSettled(recipientTasks.map(async (target) => {
         try {
-          console.log(`📤 [CronWorker] Dispatching to [${target.label}] (Chat ID: ${target.chatId})...`);
-
-          await TelegramBotService.sendMessage(target.chatId, broadcastMessage, {
-            parse_mode: broadcastParseMode,
-            throwOnError: true,
-          });
-
-          recipientResults.push({
-            chatId: target.chatId,
-            label: target.label,
-            success: true,
-          });
-          successfulSends++;
+          await target.dispatch();
+          return { chatId: target.chatId, label: target.label, success: true };
         } catch (sendErr: any) {
-          console.error(`❌ [CronWorker] Failed to send to chat ${target.chatId} (${target.label}):`, sendErr?.message || sendErr);
-          recipientResults.push({
-            chatId: target.chatId,
-            label: target.label,
-            success: false,
-            error: sendErr?.message || 'Dispatch error',
-          });
-          failedSends++;
+          const error = sendErr?.message || String(sendErr || 'Dispatch error');
+          console.error(`❌ [CronWorker] Failed to send to ${target.label} (${target.chatId}):`, error);
+          return { chatId: target.chatId, label: target.label, success: false, error };
         }
-
-        // Small 60ms delay to prevent hitting Telegram rate limiter
-        await new Promise((r) => setTimeout(r, 60));
-      }
-
-      for (const target of channelTargets) {
-        try {
-          console.log(`📤 [CronWorker] Dispatching to [${target.label}] (${target.platform}, recipient: ${target.chatId})...`);
-          await this.sendChannelBroadcast(target, broadcastMessage);
-          recipientResults.push({ chatId: target.chatId, label: target.label, success: true });
-          successfulSends++;
-        } catch (sendErr: any) {
-          console.error(`❌ [CronWorker] Failed to send to ${target.platform} recipient ${target.chatId}:`, sendErr?.message || sendErr);
-          recipientResults.push({ chatId: target.chatId, label: target.label, success: false, error: sendErr?.message || 'Dispatch error' });
-          failedSends++;
+      }));
+      const recipientResults = settledRecipients.map((result, index) => {
+        const target = recipientTasks[index];
+        if (result.status === 'fulfilled') {
+          return result.value;
         }
-        await new Promise((r) => setTimeout(r, 60));
-      }
+        const error = result.reason?.message || String(result.reason || 'Dispatch error');
+        console.error(`❌ [CronWorker] Failed to send to ${target.label} (${target.chatId}):`, error);
+        return { chatId: target.chatId, label: target.label, success: false, error };
+      });
+      const successfulSends = recipientResults.filter((result) => result.success).length;
+      const failedSends = recipientResults.length - successfulSends;
 
       // Record log entry
       const logEntry: BroadcastLogEntry = {
@@ -755,6 +751,7 @@ export class CronWorkerServiceImpl {
       }
 
       console.log(`[Cron Broadcast] Successfully sent to ${successfulSends} chats; ${failedSends} failed.`);
+      console.log(`[Performance] AI broadcast generated & sent in ${Date.now() - performanceStart} ms`);
       console.log(`✅ [CronWorker] Broadcast completed! Success: ${successfulSends}/${activeTargets.length + channelTargets.length} recipients.`);
       return logEntry;
     } finally {

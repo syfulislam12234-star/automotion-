@@ -317,19 +317,20 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     () => generateWithPollinations(messages, 'You are a precise notification and news editor.', prompt),
   ];
 
-  for (const candidate of candidates) {
-    try {
-      const result = await Promise.race([
-        candidate(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
-      ]);
-      if (result?.text?.trim()) return result.text.trim();
-    } catch (error: any) {
-      console.warn('[AI Summarizer] Provider failed; trying next provider:', error?.message || error);
-    }
-  }
+  const providerTasks = candidates.map((candidate) => candidate().then((result) => {
+    if (!result?.text?.trim()) throw new Error('Provider returned no text.');
+    return result.text.trim();
+  }));
 
-  return null;
+  try {
+    return await Promise.any([
+      ...providerTasks,
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error('AI summarizer timeout.')), 8000)),
+    ]);
+  } catch (error: any) {
+    console.warn('[AI Summarizer] All parallel providers failed or timed out:', error?.message || error);
+    return null;
+  }
 }
 
 // Global Centralized Platform Infrastructure Registry

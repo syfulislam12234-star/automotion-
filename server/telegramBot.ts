@@ -1526,6 +1526,7 @@ class TelegramBotServiceImpl {
     const t0 = Date.now();
     const aiReply = await this.generateAiResponse(effectiveText, historyToSend);
     const latency = Date.now() - t0;
+    console.log(`[Performance] AI response generated in ${latency} ms for Telegram chat ${chatId}.`);
 
     // Record real-time telemetry from Telegram interaction
     try {
