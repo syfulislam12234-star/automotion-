@@ -326,7 +326,7 @@ export default function App() {
   const [isPortalOpen, setIsPortalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
   const [isYouTubeStudioOpen, setIsYouTubeStudioOpen] = useState(false);
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
+  const [isAiChatOpen, setIsAiChatOpen] = useState(true);
   const [portalInitialServiceId, setPortalInitialServiceId] = useState<string | undefined>(undefined);
   const [isZipping, setIsZipping] = useState(false);
   const [copiedAll, setCopiedAll] = useState(false);

@@ -236,10 +236,13 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<'gemini-3.7-flash' | 'groq-llama-3.3' | 'deepseek-r1' | 'cerebras-llama3.3'>('gemini-3.7-flash');
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const typewriterTimersRef = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
+  const dragStateRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
 
   useEffect(() => () => {
     audioRef.current?.pause();
@@ -247,6 +250,36 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     typewriterTimersRef.current.forEach((timer) => clearInterval(timer));
     typewriterTimersRef.current.clear();
   }, []);
+
+  const handleDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const panel = event.currentTarget.parentElement;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragStateRef.current = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsDragging(true);
+  };
+
+  const handleDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStateRef.current) return;
+    const panel = event.currentTarget.parentElement;
+    if (!panel) return;
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const x = Math.max(8, Math.min(window.innerWidth - width - 8, event.clientX - dragStateRef.current.offsetX));
+    const y = Math.max(8, Math.min(window.innerHeight - height - 8, event.clientY - dragStateRef.current.offsetY));
+    setPanelPosition({ x, y });
+  };
+
+  const handleDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragStateRef.current) event.currentTarget.releasePointerCapture(event.pointerId);
+    dragStateRef.current = null;
+    setIsDragging(false);
+  };
 
   // Auto scroll to bottom
   const scrollToBottom = () => {
@@ -481,19 +514,22 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   return (
     <>
       <div
-        className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-[2px]"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        className={`fixed z-50 flex flex-col transition-all duration-300 ease-out shadow-2xl bg-slate-900 border border-slate-700/80 ${
-        isExpanded
-          ? 'bottom-4 right-4 sm:bottom-6 sm:right-6 w-[calc(100vw-2rem)] sm:w-[680px] h-[calc(100vh-4rem)] max-h-[820px] rounded-3xl'
-          : 'bottom-4 right-4 sm:bottom-6 sm:right-6 w-[calc(100vw-2rem)] sm:w-[460px] h-[600px] max-h-[calc(100vh-5rem)] rounded-3xl'
+        className={`fixed z-50 flex flex-col shadow-2xl bg-slate-900 border border-slate-700/80 ${isDragging ? '' : 'transition-all duration-300 ease-out'} ${panelPosition ? '' : 'bottom-4 right-4 sm:bottom-6 sm:right-6'} ${
+          isExpanded
+            ? 'w-[calc(100vw-2rem)] sm:w-[680px] h-[calc(100vh-4rem)] max-h-[820px] rounded-3xl'
+            : 'w-[calc(100vw-2rem)] sm:w-[460px] h-[600px] max-h-[calc(100vh-5rem)] rounded-3xl'
         }`}
+        style={panelPosition ? { left: panelPosition.x, top: panelPosition.y } : undefined}
       >
       {/* Header Bar */}
-      <div className="px-5 py-3.5 bg-gradient-to-r from-slate-900 via-slate-900 to-cyan-950/60 border-b border-slate-800 rounded-t-3xl flex items-center justify-between shrink-0">
+      <div
+        className="px-5 py-3.5 bg-gradient-to-r from-slate-900 via-slate-900 to-cyan-950/60 border-b border-slate-800 rounded-t-3xl flex items-center justify-between shrink-0 cursor-grab active:cursor-grabbing touch-none"
+        onPointerDown={handleDragStart}
+        onPointerMove={handleDragMove}
+        onPointerUp={handleDragEnd}
+        onPointerCancel={handleDragEnd}
+        title="Drag to move AI Assistant"
+      >
         <div className="flex items-center gap-3">
           <div className="relative">
             <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-cyan-500 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20">
@@ -520,6 +556,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
         {/* Controls */}
         <div className="flex items-center gap-1.5">
           <button
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={handleClearHistory}
             className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 transition cursor-pointer"
             title="Clear Chat History"
@@ -528,6 +565,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           </button>
 
           <button
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={() => setIsExpanded(!isExpanded)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 transition cursor-pointer hidden sm:flex"
             title={isExpanded ? 'Minimize Window' : 'Expand Window'}
@@ -536,6 +574,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           </button>
 
           <button
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition cursor-pointer"
             title="Close Chat"
