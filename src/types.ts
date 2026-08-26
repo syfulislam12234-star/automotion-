@@ -373,6 +373,7 @@ export interface AuthSession {
   token: string;
   user: UserAccount;
   expiresAt: number;
+  adminAuthorized?: boolean;
 }
 
 export interface AIModelEntry {

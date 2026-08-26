@@ -41,9 +41,8 @@ interface NavbarProps {
   onOpenYouTubeStudio?: () => void;
   onSelectTab?: (tab: string) => void;
   isCodeStudioUnlocked?: boolean;
-  onOpenAdminPinModal?: () => void;
-  onLockCodeStudio?: () => void;
   onToggleSidebar?: () => void;
+  onOpenAdminPortal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -61,9 +60,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenYouTubeStudio,
   onSelectTab,
   isCodeStudioUnlocked = false,
-  onOpenAdminPinModal,
-  onLockCodeStudio,
   onToggleSidebar,
+  onOpenAdminPortal,
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
@@ -118,6 +116,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
+          {onOpenAdminPortal && (
+            <button onClick={onOpenAdminPortal} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-300 bg-amber-950/40 border border-amber-500/30 hover:bg-amber-900/40 transition" title="Open administrator authentication portal">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Admin Portal</span>
+            </button>
+          )}
+
           {onOpenSubscriptionModal && (
             <button
               onClick={onOpenSubscriptionModal}
@@ -156,9 +161,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                 className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-slate-800/90 border border-slate-700/80 hover:border-slate-600 text-slate-200 transition cursor-pointer"
               >
-                <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center text-xs font-bold text-white uppercase ring-1 ring-white/20">
-                  {currentUser.name.charAt(0) || 'U'}
-                </div>
+                {currentUser.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt="" className="w-6 h-6 rounded-lg object-cover ring-1 ring-white/20" />
+                ) : (
+                  <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-cyan-500 to-indigo-500 flex items-center justify-center text-xs font-bold text-white uppercase ring-1 ring-white/20">
+                    {currentUser.name.charAt(0) || 'U'}
+                  </div>
+                )}
                 <div className="hidden md:flex flex-col text-left leading-tight">
                   <span className="text-xs font-bold text-white truncate max-w-[110px]">
                     {currentUser.name}

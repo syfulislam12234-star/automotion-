@@ -4,20 +4,10 @@ import {
   Bot,
   Brain,
   Clock,
-  Database,
-  FileText,
-  Globe,
-  KeyRound,
-  Layers,
-  Lock,
   MessageSquare,
-  Radio,
   Scan,
-  Server,
-  Settings,
   ShieldCheck,
   Sliders,
-  Terminal,
   User,
   Video,
   X,
@@ -39,14 +29,8 @@ export type AppView =
 interface SidebarProps {
   isOpen: boolean;
   activeView: AppView;
-  isSecretsUnlocked: boolean;
-  isAdmin: boolean;
   onClose: () => void;
   onSelectView: (view: AppView) => void;
-  onOpenPortal: () => void;
-  onOpenSubscription: () => void;
-  onOpenYouTube: () => void;
-  onOpenDeploy: () => void;
   onOpenAuth: () => void;
   onLogOut: () => void;
   currentUser: { name: string } | null;
@@ -62,18 +46,10 @@ const publicItems = [
   { id: 'security', label: 'App information & security', icon: ShieldCheck },
 ] as const;
 
-const protectedItems = [
-  { id: 'settings', label: 'API keys & provider secrets', icon: KeyRound },
-  { id: 'gateways', label: 'Telegram bot tokens', icon: Radio },
-  { id: 'vps', label: 'Database credentials', icon: Database },
-  { id: 'admin', label: 'Environment & admin controls', icon: Terminal },
-] as const;
 
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   activeView,
-  isSecretsUnlocked,
-  isAdmin,
   onClose,
   onSelectView,
   onOpenPortal,
@@ -105,15 +81,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <nav className="space-y-6" aria-label="Application navigation">
             <SidebarGroup label="Public / open">
               {publicItems.map(({ id, label, icon: Icon }) => <SidebarItem key={id} label={label} icon={<Icon className="h-4 w-4" />} active={activeView === id} onClick={() => select(id)} />)}
-            </SidebarGroup>
-            {isAdmin && <SidebarGroup label="Protected / secret">
-              {protectedItems.map(({ id, label, icon: Icon }) => <SidebarItem key={id} label={label} icon={<Icon className="h-4 w-4" />} active={activeView === id} locked={!isSecretsUnlocked} onClick={() => select(id as AppView)} />)}
-            </SidebarGroup>}
-            <SidebarGroup label="Tools">
-              <SidebarItem label="1-Click setup portal" icon={<Globe className="h-4 w-4" />} onClick={onOpenPortal} />
-              <SidebarItem label="YouTube Studio" icon={<Video className="h-4 w-4" />} onClick={onOpenYouTube} />
-              <SidebarItem label="Pro plans & metering" icon={<Layers className="h-4 w-4" />} onClick={onOpenSubscription} />
-              <SidebarItem label="Cloud deployment guide" icon={<Server className="h-4 w-4" />} onClick={onOpenDeploy} />
             </SidebarGroup>
           </nav>
 

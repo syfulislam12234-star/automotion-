@@ -185,7 +185,7 @@ export const EnterpriseSecurity: React.FC<EnterpriseSecurityProps> = ({
 
   const handleUnlockVault = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (await AuthService.verifyAdminPassword(masterPassphrase)) {
+    if (AuthService.getCurrentSession()?.user.role === 'admin') {
       setIsVaultLocked(false);
       onShowToast('🔓 AES-256 Encrypted Credential Vault unlocked.');
     } else {

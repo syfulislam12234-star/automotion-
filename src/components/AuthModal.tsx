@@ -31,6 +31,7 @@ interface AuthModalProps {
   onAuthenticated: (session: AuthSession) => void;
   onShowToast: (msg: string) => void;
   featureProtectedName?: string; // Optional context like "Admin Control Panel" or "VPS Manager"
+  isAdminPortal?: boolean;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -41,6 +42,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onAuthenticated,
   onShowToast,
   featureProtectedName,
+  isAdminPortal = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'login' | 'signup' | 'verify'>(initialTab);
   
@@ -55,7 +57,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
-  const [signupRole, setSignupRole] = useState<'admin' | 'developer' | 'operator'>('developer');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(true);
 
@@ -70,6 +71,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   // Reset states when opening
   useEffect(() => {
@@ -127,6 +129,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
+      if (isAdminPortal && res.session.user.role !== 'admin') {
+        setErrorMessage('This portal is restricted to administrator accounts.');
+        return;
+      }
+
       setSuccessMessage(res.message);
       onShowToast(`🎉 ${res.message}`);
       onAuthenticated(res.session);
@@ -134,6 +141,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } catch (err: any) {
       setIsLoading(false);
       setErrorMessage(err.message || 'Login error occurred.');
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setErrorMessage(null);
+    setIsGoogleLoading(true);
+    try {
+      const result = await AuthService.signInWithGoogle();
+      if (!result.success || !result.session) {
+        setErrorMessage(result.message);
+        return;
+      }
+      onShowToast(`Welcome, ${result.session.user.name}.`);
+      onAuthenticated(result.session);
+      if (onClose) onClose();
+    } catch (error: any) {
+      setErrorMessage(error?.code === 'auth/popup-closed-by-user' ? 'Google sign-in was cancelled.' : 'Google sign-in failed.');
+    } finally {
+      setIsGoogleLoading(false);
     }
   };
 
@@ -166,12 +192,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setIsLoading(true);
     try {
-      const res = await AuthService.signUp({
-        name: signupName,
-        email: signupEmail,
-        password: signupPassword,
-        role: signupRole,
-      });
+      const res = isAdminPortal
+        ? await AuthService.adminSignUp({ name: signupName, email: signupEmail, password: signupPassword })
+        : await AuthService.signUp({ name: signupName, email: signupEmail, password: signupPassword });
       setIsLoading(false);
 
       if (!res.success || !res.user) {
@@ -365,7 +388,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               }`}
             >
               <User className="w-3.5 h-3.5" />
-              <span>Sign Up</span>
+                <span>{isAdminPortal ? 'Admin Sign Up' : 'Sign Up'}</span>
             </button>
             <button
               type="button"
@@ -406,6 +429,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           {/* TAB 1: LOG IN */}
           {activeTab === 'login' && (
             <form onSubmit={handleLoginSubmit} className="space-y-4">
+              <button
+                type="button"
+                onClick={() => void handleGoogleSignIn()}
+                disabled={isGoogleLoading || isLoading}
+                className="w-full flex items-center justify-center gap-3 rounded-xl border border-slate-700 bg-white px-4 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-100 disabled:opacity-60"
+              >
+                {isGoogleLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <span className="flex h-5 w-5 items-center justify-center rounded bg-white text-sm font-black text-blue-600">G</span>}
+                <span>{isGoogleLoading ? 'Connecting to Google...' : 'Sign in with Google'}</span>
+              </button>
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-widest text-slate-600"><span className="h-px flex-1 bg-slate-800" /><span>or account login</span><span className="h-px flex-1 bg-slate-800" /></div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                   <span>Email Address</span>
@@ -510,6 +543,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
+
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-300">Email Address</label>
                 <div className="relative">
@@ -554,25 +588,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-300">Default Access Role</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['developer', 'admin', 'operator'] as const).map((role) => (
-                    <button
-                      key={role}
-                      type="button"
-                      onClick={() => setSignupRole(role)}
-                      className={`py-1.5 px-2 rounded-xl text-xs font-semibold capitalize border transition cursor-pointer ${
-                        signupRole === role
-                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {role}
-                    </button>
-                  ))}
-                </div>
-              </div>
 
               <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-xs text-emerald-400">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />

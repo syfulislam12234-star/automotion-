@@ -1,5 +1,7 @@
 import { UserAccount, AuthSession, BotConfig } from '../types';
 import { FirestoreDataService } from './firestoreDataService';
+import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { auth } from './firebase';
 
 const USERS_STORAGE_KEY = 'groq_bot_users_db_v1';
 const SESSION_STORAGE_KEY = 'groq_bot_auth_session_v1';
@@ -10,20 +12,36 @@ const PASSWORDS_STORAGE_KEY = 'groq_bot_passwords_v1';
 const INITIAL_PASSWORDS: Record<string, string> = {};
 
 export class AuthService {
-  public static async verifyAdminPassword(password: string): Promise<boolean> {
-    const session = this.getCurrentSession();
-    if (!session?.token) return false;
-    try {
-      const response = await fetch('/api/auth/admin/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
-        body: JSON.stringify({ password }),
-      });
-      return response.ok;
-    } catch {
-      return false;
+  public static async signInWithGoogle(): Promise<{ success: boolean; message: string; session?: AuthSession }> {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    const idToken = await result.user.getIdToken();
+    const response = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success || !data.session) {
+      return { success: false, message: data.message || 'Google authentication failed.' };
     }
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+    return data;
   }
+  public static async adminSignUp(params: { name: string; email: string; password: string }): Promise<any> {
+    const response = await fetch('/api/auth/admin/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await response.json();
+    if (response.ok && data.success && data.session) {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+    }
+    return data;
+  }
+
   private static getStoredUsers(): UserAccount[] {
     try {
       const data = localStorage.getItem(USERS_STORAGE_KEY);
@@ -80,6 +98,11 @@ export class AuthService {
         return null;
       }
 
+      if (session.user?.role === 'admin' && session.adminAuthorized !== true) {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        return null;
+      }
+
       return session;
     } catch {
       return null;
@@ -111,6 +134,9 @@ export class AuthService {
             botConfig: data.botConfig || null,
           };
         }
+      } else {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        return { session: null, botConfig: null };
       }
     } catch (err) {
       console.warn('Backend sync unavailable, using cached local session:', err);

@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -17,13 +16,8 @@ import { EdgeTTS } from 'node-edge-tts';
 
 dotenv.config();
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-
-function safeSecretEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 const SECURITY_REFUSAL_BN = 'আমি অ্যাপের ব্যবহার ও সুবিধা সম্পর্কে সাহায্য করতে পারি, তবে নিরাপত্তাজনিত কারণে অ্যাপের অভ্যন্তরীণ প্রযুক্তিগত তথ্য শেয়ার করা সম্ভব নয়।';
 const APP_KNOWLEDGE_BASE_BN = `
@@ -1225,6 +1219,25 @@ async function startServer() {
     }
   });
 
+  app.post('/api/auth/admin/signup', (req, res) => {
+    const { name, email, password } = req.body || {};
+    const authHeader = req.headers.authorization;
+    const requestingUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+    const isFirstAdmin = !ServerDatabase.hasAdminUsers();
+    if (!isFirstAdmin && (!requestingUser || requestingUser.role !== 'admin' || !ServerDatabase.isAdminSessionAuthorized(authHeader || ''))) {
+      return res.status(403).json({ success: false, message: 'An authenticated administrator is required.' });
+    }
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Administrator registration fields are required.' });
+    }
+    const result = ServerDatabase.registerUser({ name, email, password, role: 'admin' });
+    if (result.success && result.session) {
+      ServerDatabase.authorizeAdminSession(result.session.token);
+      result.session.adminAuthorized = true;
+    }
+    return result.success ? res.status(201).json(result) : res.status(400).json(result);
+  });
+
   // User Login
   app.post('/api/auth/login', (req, res) => {
     try {
@@ -1238,9 +1251,33 @@ async function startServer() {
         return res.status(401).json(result);
       }
 
+      if (result.session?.user?.role === 'admin') {
+        ServerDatabase.authorizeAdminSession(result.session.token);
+        result.session.adminAuthorized = true;
+      }
+
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Login failed' });
+    }
+  });
+
+  app.post('/api/auth/google', async (req, res) => {
+    const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken : '';
+    if (!idToken || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      return res.status(400).json({ success: false, message: 'Google authentication is not configured.' });
+    }
+    try {
+      const tokenResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+      const claims = await tokenResponse.json() as { aud?: string; azp?: string; email?: string; email_verified?: string | boolean; name?: string; picture?: string };
+      const belongsToConfiguredClient = claims.aud === GOOGLE_CLIENT_ID || claims.azp === GOOGLE_CLIENT_ID;
+      if (!tokenResponse.ok || !belongsToConfiguredClient || !claims.email || !(claims.email_verified === true || claims.email_verified === 'true')) {
+        return res.status(401).json({ success: false, message: 'Invalid Google authentication token.' });
+      }
+      const { user, session } = ServerDatabase.findOrCreateGoogleUser({ email: claims.email, name: claims.name || claims.email, avatarUrl: claims.picture });
+      return res.json({ success: true, user, session: { token: session.token, user, expiresAt: session.expiresAt } });
+    } catch {
+      return res.status(502).json({ success: false, message: 'Google authentication service is unavailable.' });
     }
   });
 
@@ -1297,6 +1334,7 @@ async function startServer() {
       return res.json({
         success: true,
         user,
+        adminAuthorized: ServerDatabase.isAdminSessionAuthorized(authHeader),
         botConfig: savedConfig?.config || null,
         configUpdatedAt: savedConfig?.updatedAt || null,
       });
@@ -1305,22 +1343,6 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/admin/verify', (req, res) => {
-    const authHeader = req.headers.authorization;
-    const user = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!user || user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Administrator authorization required.' });
-    }
-    if (!ADMIN_PASSWORD) {
-      return res.status(503).json({ success: false, message: 'Administrator password is not configured.' });
-    }
-    if (!safeSecretEquals(password, ADMIN_PASSWORD)) {
-      return res.status(403).json({ success: false, message: 'Administrator authorization failed.' });
-    }
-    ServerDatabase.authorizeAdminSession(authHeader || '');
-    return res.json({ success: true });
-  });
 
   // Log Out
   app.post('/api/auth/logout', (req, res) => {

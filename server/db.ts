@@ -14,6 +14,7 @@ export interface DbUser {
   verificationCode?: string;
   passwordHash: string;
   passwordSalt: string;
+  passwordAlgorithm?: 'scrypt' | 'pbkdf2';
   createdAt: string;
   lastLoginAt: string;
   avatarUrl?: string;
@@ -59,19 +60,21 @@ export interface DbSchema {
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'bot_database.json');
 
-function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+function hashPassword(password: string, salt?: string): { hash: string; salt: string; algorithm: 'scrypt' } {
   const finalSalt = salt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, finalSalt, 1000, 64, 'sha512').toString('hex');
-  return { hash, salt: finalSalt };
+  const hash = crypto.scryptSync(password, finalSalt, 64).toString('hex');
+  return { hash, salt: finalSalt, algorithm: 'scrypt' };
 }
 
-function verifyPassword(password: string, hash: string, salt: string): boolean {
-  const result = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+function verifyPassword(password: string, hash: string, salt: string, algorithm?: 'scrypt' | 'pbkdf2'): boolean {
+  const result = algorithm === 'scrypt'
+    ? crypto.scryptSync(password, salt, 64).toString('hex')
+    : crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
   return result === hash;
 }
 
 const INITIAL_DB: DbSchema = {
-  version: 1,
+  version: 3,
   lastSaved: new Date().toISOString(),
   users: [],
   sessions: [],
@@ -107,6 +110,13 @@ export class ServerDatabase {
           channels: parsed.channels || {},
           backupMetadata: parsed.backupMetadata || INITIAL_DB.backupMetadata,
         };
+        if ((parsed.version || 1) < 3) {
+          const legacyAdminIds = new Set(this.memoryDb.users.filter((user) => user.role === 'admin').map((user) => user.id));
+          this.memoryDb.users = this.memoryDb.users.filter((user) => user.role !== 'admin');
+          this.memoryDb.sessions = this.memoryDb.sessions.filter((session) => !legacyAdminIds.has(session.userId));
+          this.memoryDb.version = 3;
+          this.saveToFile();
+        }
       } else {
         this.saveToFile();
       }
@@ -163,9 +173,45 @@ export class ServerDatabase {
     return this.memoryDb.users.find(u => u.email.toLowerCase() === clean);
   }
 
+  public static findOrCreateGoogleUser(profile: { email: string; name: string; avatarUrl?: string }): { user: any; session: DbSession } {
+    this.init();
+    const cleanEmail = profile.email.toLowerCase().trim();
+    let user = this.getUserByEmail(cleanEmail);
+    if (!user) {
+      user = {
+        id: `google_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`,
+        name: profile.name.trim() || cleanEmail,
+        email: cleanEmail,
+        role: 'developer' as const,
+        isVerified: true,
+        passwordHash: '',
+        passwordSalt: '',
+        passwordAlgorithm: 'scrypt' as const,
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+        avatarUrl: profile.avatarUrl,
+        bio: 'Google account',
+      };
+      this.memoryDb.users.push(user);
+    } else {
+      user.name = profile.name.trim() || user.name;
+      user.avatarUrl = profile.avatarUrl || user.avatarUrl;
+      user.isVerified = true;
+      user.lastLoginAt = new Date().toISOString();
+    }
+    const session = this.createSession(user.id);
+    this.saveToFile();
+    return { user: this.sanitizeUser(user), session };
+  }
+
   public static getUserById(id: string): DbUser | undefined {
     this.init();
     return this.memoryDb.users.find(u => u.id === id);
+  }
+
+  public static hasAdminUsers(): boolean {
+    this.init();
+    return this.memoryDb.users.some((user) => user.role === 'admin');
   }
 
   public static sanitizeUser(user: DbUser) {
@@ -195,18 +241,19 @@ export class ServerDatabase {
       };
     }
 
-    const { hash, salt } = hashPassword(params.password);
+    const { hash, salt, algorithm } = hashPassword(params.password);
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
     const newUser: DbUser = {
       id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: params.name.trim(),
       email: cleanEmail,
-      role: 'developer',
+      role: params.role || 'developer',
       isVerified: true, // Automated instant verification
       verificationCode,
       passwordHash: hash,
       passwordSalt: salt,
+      passwordAlgorithm: algorithm,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
       avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(params.name)}`,
@@ -253,7 +300,7 @@ export class ServerDatabase {
       };
     }
 
-    const isMatch = verifyPassword(params.password, user.passwordHash, user.passwordSalt);
+    const isMatch = verifyPassword(params.password, user.passwordHash, user.passwordSalt, user.passwordAlgorithm);
     if (!isMatch) {
       return {
         success: false,

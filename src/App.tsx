@@ -8,7 +8,6 @@ import { MemoryInspector } from './components/MemoryInspector';
 import { AdminControlPanel } from './components/AdminControlPanel';
 import { ApiPortalModal } from './components/ApiPortalModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
-import { AdminPinModal } from './components/AdminPinModal';
 import { AuthModal } from './components/AuthModal';
 import { VpsManager } from './components/VpsManager';
 import { AiMediaScanner } from './components/AiMediaScanner';
@@ -279,7 +278,6 @@ const DEFAULT_CONFIG: BotConfig = {
 };
 
 const CONFIG_STORAGE_KEY = 'universal_bot_config_v2';
-const SECRETS_UNLOCKED_STORAGE_KEY = 'universal_bot_secrets_unlocked';
 
 const getInitialConfig = (): BotConfig => {
   try {
@@ -302,6 +300,7 @@ export default function App() {
     return AuthService.getCurrentSession();
   });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'signup' | 'verify'>('login');
   const [authFeatureContext, setAuthFeatureContext] = useState<string | undefined>(undefined);
   const currentUser = session?.user || null;
@@ -318,15 +317,6 @@ export default function App() {
   const [portalInitialServiceId, setPortalInitialServiceId] = useState<string | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
-  const [pendingProtectedView, setPendingProtectedView] = useState<AppView | null>(null);
-  const [isSecretsUnlocked, setIsSecretsUnlocked] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem(SECRETS_UNLOCKED_STORAGE_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Sync session & load permanently saved user bot config from server database on mount
@@ -401,43 +391,11 @@ export default function App() {
   const handleLogOut = () => {
     AuthService.logOut();
     setSession(null);
-    setIsSecretsUnlocked(false);
-    try {
-      sessionStorage.removeItem(SECRETS_UNLOCKED_STORAGE_KEY);
-    } catch (e) {
-      console.error(e);
-    }
     setActiveTab('simulator');
     showToast('👋 You have been logged out.');
   };
 
-  const handleUnlockSecrets = () => {
-    setIsSecretsUnlocked(true);
-    try {
-      sessionStorage.setItem(SECRETS_UNLOCKED_STORAGE_KEY, 'true');
-    } catch (e) {
-      console.error(e);
-    }
-    setActiveTab(pendingProtectedView || 'settings');
-    setPendingProtectedView(null);
-    showToast('🔓 Secret fields unlocked for this session.');
-  };
-
-  const openSecretsPinModal = (view: AppView = 'settings') => {
-    setPendingProtectedView(view);
-    setIsPinModalOpen(true);
-  };
-
   const handleSidebarSelect = (view: AppView) => {
-    if (!currentUser || currentUser.role !== 'admin') {
-      setActiveTab('simulator');
-      showToast('Administrator access required.');
-      return;
-    }
-    if (['settings', 'gateways', 'vps', 'admin'].includes(view) && !isSecretsUnlocked) {
-      openSecretsPinModal(view);
-      return;
-    }
     if (view === 'admin') {
       handleAdminTabClick();
       return;
@@ -478,19 +436,28 @@ export default function App() {
     setIsPortalOpen(true);
   };
 
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <AuthModal
+          isOpen
+          isGateMode
+          initialTab="login"
+          onAuthenticated={handleAuthenticated}
+          onShowToast={showToast}
+          featureProtectedName="the Universal Bot workspace"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans selection:bg-cyan-500 selection:text-white">
       <Sidebar
         isOpen={isSidebarOpen}
         activeView={activeTab}
-        isSecretsUnlocked={isSecretsUnlocked}
-        isAdmin={currentUser?.role === 'admin'}
         onClose={() => setIsSidebarOpen(false)}
         onSelectView={handleSidebarSelect}
-        onOpenPortal={() => handleOpenPortal('groq')}
-        onOpenSubscription={() => setIsSubscriptionModalOpen(true)}
-        onOpenYouTube={() => setIsYouTubeStudioOpen(true)}
-        onOpenDeploy={() => setIsDeployGuideOpen(true)}
         onOpenAuth={() => { setAuthFeatureContext(undefined); setAuthModalTab('login'); setIsAuthModalOpen(true); }}
         onLogOut={handleLogOut}
         currentUser={currentUser}
@@ -511,6 +478,7 @@ export default function App() {
         onOpenYouTubeStudio={() => setIsYouTubeStudioOpen(true)}
         onOpenAiChat={() => setIsAiChatOpen(true)}
         onToggleSidebar={() => setIsSidebarOpen(true)}
+        onOpenAdminPortal={() => setIsAdminPortalOpen(true)}
       />
 
       {/* Main Container */}
@@ -773,15 +741,13 @@ export default function App() {
           </div>
         )}
 
-        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'settings' && (
+        {currentUser?.role === 'admin' && activeTab === 'settings' && (
           <ConfigPanel
             config={config}
             onChange={handleConfigChange}
             onResetToDefaults={handleResetToDefaults}
             onOpenPortal={handleOpenPortal}
             onShowToast={showToast}
-            secretsUnlocked={isSecretsUnlocked}
-            onRequestSecretAccess={openSecretsPinModal}
           />
         )}
 
@@ -793,8 +759,6 @@ export default function App() {
             onOpenPortal={handleOpenPortal}
             onShowToast={showToast}
             initialTab="model"
-            secretsUnlocked={isSecretsUnlocked}
-            onRequestSecretAccess={openSecretsPinModal}
           />
         )}
 
@@ -822,7 +786,7 @@ export default function App() {
         )}
 
         {/* View 4: Omni-Channel Gateways */}
-        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'gateways' && (
+        {currentUser?.role === 'admin' && activeTab === 'gateways' && (
           <OmniChannelGateway
             config={config}
             onChange={handleConfigChange}
@@ -832,7 +796,7 @@ export default function App() {
         )}
 
         {/* View 4: Enterprise Security & 2FA */}
-        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'security' && (
+        {currentUser?.role === 'admin' && activeTab === 'security' && (
           <EnterpriseSecurity
             config={config}
             onChange={handleConfigChange}
@@ -841,7 +805,7 @@ export default function App() {
         )}
 
         {/* View 5: VPS Server Monitor */}
-        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'vps' && (
+        {currentUser?.role === 'admin' && activeTab === 'vps' && (
           <VpsManager config={config} onChange={handleConfigChange} onShowToast={showToast} />
         )}
 
@@ -849,7 +813,7 @@ export default function App() {
         {activeTab === 'scanner' && <AiMediaScanner onShowToast={showToast} />}
 
         {/* View 7: Admin Panel */}
-        {currentUser?.role === 'admin' && isSecretsUnlocked && activeTab === 'admin' && (
+        {currentUser?.role === 'admin' && activeTab === 'admin' && (
           <AdminControlPanel
             config={config}
             onChange={handleConfigChange}
@@ -908,13 +872,6 @@ export default function App() {
       />
 
       {/* Admin PIN Verification Modal */}
-      <AdminPinModal
-        isOpen={isPinModalOpen}
-        onClose={() => setIsPinModalOpen(false)}
-        onSuccess={handleUnlockSecrets}
-        onShowToast={showToast}
-        successMessage="🔓 Administrator access verified for this session."
-      />
 
       {/* 1-Click Direct API Setup & Messaging Portal Modal */}
       <ApiPortalModal
@@ -947,11 +904,27 @@ export default function App() {
 
       {/* User Authentication & Verification Gateway Modal */}
       <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
+        isOpen={isAuthModalOpen || !currentUser}
+        onClose={currentUser ? () => setIsAuthModalOpen(false) : undefined}
+        isGateMode={!currentUser}
         initialTab={authModalTab}
         featureProtectedName={authFeatureContext}
         onAuthenticated={handleAuthenticated}
+        onShowToast={showToast}
+      />
+
+      <AuthModal
+        isOpen={isAdminPortalOpen}
+        onClose={() => setIsAdminPortalOpen(false)}
+        initialTab="login"
+        isAdminPortal
+        featureProtectedName="Administrator Portal"
+        onAuthenticated={(adminSession) => {
+          if (adminSession.user.role === 'admin') {
+            handleAuthenticated(adminSession);
+            setActiveTab('admin');
+          }
+        }}
         onShowToast={showToast}
       />
 
