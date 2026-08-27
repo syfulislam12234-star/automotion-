@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BotConfig } from '../types';
-import { GLOBAL_100_AI_MODELS } from '../data/aiModels100';
+import { AiService } from '../services/aiService';
 import { Cpu, Zap, ShieldCheck, Key, RefreshCw, CheckCircle2, AlertCircle, Sparkles, ExternalLink } from 'lucide-react';
 
 interface AiCascadeDashboardProps {
@@ -16,6 +16,18 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
   onShowToast,
   onOpenPortal,
 }) => {
+  const [freeModelCount, setFreeModelCount] = useState(0);
+
+  useEffect(() => {
+    let mounted = true;
+    void AiService.getFreeModelCatalog().then((catalog) => {
+      if (mounted) setFreeModelCount(catalog.count);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const tiers = [
     { rank: 1, provider: 'Google AI Studio', model: config.geminiModel || 'gemini-3.7-flash', enabled: config.enableGeminiFallback, key: config.geminiApiKey, portalId: 'gemini', speed: '200 tok/s' },
     { rank: 2, provider: 'Groq Cloud LPU', model: config.groqModel || 'llama-3.3-70b-versatile', enabled: true, key: config.groqApiKey, portalId: 'groq', speed: '380 tok/s' },
@@ -38,8 +50,8 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
               <Zap className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-slate-100">100-AI Auto-Failover Cascade Hierarchy</h2>
-              <p className="text-xs text-slate-400">Zero-downtime multi-model redundancy matrix with millisecond failover routing</p>
+              <h2 className="text-xl font-bold text-slate-100">{freeModelCount >= 150 ? `${freeModelCount}-AI` : 'Free AI'} Auto-Failover Cascade Hierarchy</h2>
+              <p className="text-xs text-slate-400">{freeModelCount || 'Dynamic'} free models available with sequential failover routing</p>
             </div>
           </div>
           <button

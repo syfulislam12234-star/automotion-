@@ -210,15 +210,70 @@ async function generateWithGroq(
   return null;
 }
 
+async function generateWithOpenAiCompatible(
+  messages: any[],
+  provider: 'together' | 'huggingface'
+): Promise<{ text: string; modelUsed: string } | null> {
+  const keyName = provider === 'together' ? 'TOGETHER_API_KEY' : 'HUGGINGFACE_API_KEY';
+  const apiKey = process.env[keyName];
+  if (!apiKey || apiKey.startsWith('YOUR_')) {
+    console.warn(`[${provider}] API key missing; skipping configured free-tier route.`);
+    return null;
+  }
+  const endpoint = provider === 'together' ? 'https://api.together.xyz/v1/chat/completions' : 'https://router.huggingface.co/v1/chat/completions';
+  const model = process.env[provider === 'together' ? 'TOGETHER_MODEL' : 'HUGGINGFACE_MODEL']
+    || (provider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'meta-llama/Llama-3.1-8B-Instruct');
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim()}` },
+      body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 2048 }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.warn(`[${provider}] HTTP ${response.status}; trying next free route.`);
+      return null;
+    }
+    const text = data.choices?.[0]?.message?.content;
+    return typeof text === 'string' && text.trim() ? { text: text.trim(), modelUsed: model } : null;
+  } catch (error: any) {
+    console.warn(`[${provider}] Request failed; trying next free route:`, error?.message || error);
+    return null;
+  }
+}
+
 // Resilient OpenRouter Generator
 async function generateWithOpenRouter(
   messages: any[],
   preferredModel?: string
 ): Promise<{ text: string; modelUsed: string } | null> {
   const openrouterKey = process.env.OPENROUTER_API_KEY;
-  if (!openrouterKey || openrouterKey.startsWith('YOUR_')) return null;
+  if (!openrouterKey || openrouterKey.startsWith('YOUR_')) {
+    console.warn('[OpenRouter Cascade] API key missing; skipping OpenRouter free models.');
+    return null;
+  }
 
-  const candidateModels = [preferredModel || process.env.OPENROUTER_MODEL || 'deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'];
+  let discoveredModels: string[] = [];
+  try {
+    const modelsResponse = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(4000) });
+    if (modelsResponse.ok) {
+      const modelsData = await modelsResponse.json();
+      discoveredModels = (Array.isArray(modelsData.data) ? modelsData.data : [])
+        .filter((entry: any) => typeof entry?.id === 'string' && entry.id.endsWith(':free'))
+        .map((entry: any) => entry.id)
+        .slice(0, 150);
+    }
+  } catch (error: any) {
+    console.warn('[OpenRouter Cascade] Free model discovery unavailable:', error?.message || error);
+  }
+  const candidateModels = Array.from(new Set([
+    preferredModel,
+    process.env.OPENROUTER_MODEL,
+    'deepseek/deepseek-r1:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    ...discoveredModels,
+  ].filter((model): model is string => Boolean(model && model.endsWith(':free')))));
 
   for (const model of candidateModels) {
     try {
@@ -406,6 +461,52 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
   }
 }
 
+async function generateFreeAiText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
+  const prompt = String(messages[messages.length - 1]?.content || '').trim();
+  const freeCandidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
+    () => generateWithGroq(messages, preferredModel),
+    () => generateWithOpenRouter(messages, preferredModel),
+    () => generateWithOpenAiCompatible(messages, 'together'),
+    () => generateWithOpenAiCompatible(messages, 'huggingface'),
+    () => generateWithCerebras(messages),
+    () => generateWithPollinations(messages, 'You are a helpful Telegram assistant.', prompt),
+  ];
+  for (const candidate of freeCandidates) {
+    try {
+      const result = await candidate();
+      if (result?.text?.trim()) return result;
+    } catch (error: any) {
+      console.warn('[Free AI Cascade] Provider failed; trying next:', error?.message || error);
+    }
+  }
+  return null;
+}
+
+async function getFreeModelCatalog() {
+  const localModels = GLOBAL_100_AI_MODELS.filter((model) => model.freeTier);
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(5000) });
+    const data = await response.json().catch(() => ({}));
+    const openRouterModels = (Array.isArray(data.data) ? data.data : [])
+      .filter((model: any) => typeof model?.id === 'string' && model.id.endsWith(':free'))
+      .map((model: any) => ({
+        id: `openrouter-${model.id}`,
+        name: model.name || model.id,
+        provider: 'openrouter',
+        modelId: model.id,
+        contextWindow: Number(model.context_length) || 32768,
+        speedRating: 'variable',
+        description: 'Dynamically discovered OpenRouter free model.',
+        freeTier: true,
+        category: 'balanced' as const,
+      }));
+    return Array.from(new Map([...localModels, ...openRouterModels].map((model) => [model.modelId, model])).values());
+  } catch (error: any) {
+    console.warn('[AI Catalog] Dynamic free model discovery unavailable:', error?.message || error);
+    return localModels;
+  }
+}
+
 // Global Centralized Platform Infrastructure Registry
 const CENTRAL_PLATFORM_STATUS = {
   plan: 'Hybrid Managed Pro Plan',
@@ -514,6 +615,26 @@ async function startServer() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.success || !data.text) throw new Error(data.error || 'AI generation failed.');
     return data.text;
+  });
+
+  TelegramBotService.setEnvironmentToken(process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
+  TelegramBotService.setAiGenerator(async (prompt, model) => {
+    try {
+      const response = await fetch(`http://127.0.0.1:${PORT}/api/ai/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Channel-Request': 'true' },
+        body: JSON.stringify({ prompt, model, enableEnsemble: false, platform: 'telegram' }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || typeof data.text !== 'string') {
+        throw new Error(data.message || data.error || 'Unified AI route returned no text.');
+      }
+      return data.text;
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Unified AI request failed:', error?.message || error);
+      const fallback = await generateFreeAiText([{ role: 'user', content: prompt }], model);
+      return fallback?.text || null;
+    }
   });
 
   const sanitizeDashboardConfig = (config: any): any => {
@@ -790,6 +911,16 @@ async function startServer() {
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error?.message || 'Unable to read infrastructure status.' });
+    }
+  });
+
+  app.get('/api/ai/models', async (_req, res) => {
+    try {
+      const models = await getFreeModelCatalog();
+      return res.json({ success: true, count: models.length, models });
+    } catch (error: any) {
+      console.warn('[AI Catalog] Catalog request failed:', error?.message || error);
+      return res.json({ success: true, count: GLOBAL_100_AI_MODELS.filter((model) => model.freeTier).length, models: GLOBAL_100_AI_MODELS.filter((model) => model.freeTier) });
     }
   });
 
