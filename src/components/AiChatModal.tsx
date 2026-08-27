@@ -56,6 +56,13 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           prompt: userMsg.text,
           model: config.modelName || 'llama-3.3-70b-versatile',
           systemPrompt: config.systemPrompt,
+          messages: [
+            ...messages.map((message) => ({
+              role: message.sender === 'bot' ? 'assistant' as const : 'user' as const,
+              content: message.text,
+            })),
+            { role: 'user', content: userMsg.text },
+          ],
         }),
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };

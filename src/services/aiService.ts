@@ -16,14 +16,24 @@ export interface AiTextRequest {
   prompt: string;
   model?: string;
   systemPrompt?: string;
+  messages?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
 }
 
 export class AiService {
   private static readonly DEFAULT_SYSTEM_PROMPT = 'You are a precise, helpful AI assistant. Solve technical, coding, debugging, writing, and general knowledge questions clearly. Explain assumptions, provide safe actionable steps, and return concise Markdown. Never invent unavailable facts or credentials.';
+  private static readonly MANDATORY_LANGUAGE_PROMPT = 'You are an intelligent multi-lingual AI assistant. You MUST strictly follow the user\'s language choice. If the user asks to reply in Bengali (বাংলা) or Banglish, always respond in Bengali.';
 
   public static async generateText(request: AiTextRequest): Promise<string> {
     const prompt = request.prompt.trim();
     if (!prompt) return 'Please enter a question so I can help.';
+    const systemPrompt = `${AiService.MANDATORY_LANGUAGE_PROMPT}\n${request.systemPrompt || AiService.DEFAULT_SYSTEM_PROMPT}`;
+    const messages = request.messages?.length
+      ? request.messages.map((message) => ({ ...message, content: String(message.content || '') }))
+      : [{ role: 'user' as const, content: prompt }];
+    const messagesWithSystem = [
+      { role: 'system' as const, content: systemPrompt },
+      ...messages.filter((message) => message.role !== 'system'),
+    ];
 
     try {
       const response = await fetch('/api/ai/generate', {
@@ -32,7 +42,8 @@ export class AiService {
         body: JSON.stringify({
           prompt,
           model: request.model,
-          systemPrompt: request.systemPrompt || AiService.DEFAULT_SYSTEM_PROMPT,
+          systemPrompt,
+          messages: messagesWithSystem,
           enableEnsemble: false,
           isChatAssistant: true,
         }),
@@ -46,7 +57,8 @@ export class AiService {
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        const response = await fetch(`https://text.pollinations.ai/${encodeURIComponent(prompt)}`, {
+        const fallbackPrompt = messagesWithSystem.map((message) => `${message.role}: ${message.content}`).join('\n');
+        const response = await fetch(`https://text.pollinations.ai/${encodeURIComponent(fallbackPrompt)}`, {
           signal: AbortSignal.timeout(2500),
         });
         const text = await response.text();
