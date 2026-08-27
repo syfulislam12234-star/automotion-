@@ -211,11 +211,45 @@ export class AuthService {
   }
 
   // Get currently active session from localStorage
+  public static normalizeSession(value: unknown): AuthSession | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const candidate = value as Partial<AuthSession>;
+    const rawUser = candidate.user;
+    if (typeof candidate.token !== 'string' || !candidate.token || !rawUser || typeof rawUser !== 'object'
+      || typeof rawUser.id !== 'string' || !rawUser.id || typeof rawUser.email !== 'string' || !rawUser.email) return null;
+
+    const user = rawUser as Partial<UserAccount>;
+    const sessionIsVerified = typeof candidate.isVerified === 'boolean' ? candidate.isVerified : true;
+    const userIsVerified = typeof user.isVerified === 'boolean' ? user.isVerified : sessionIsVerified;
+    const normalizedUser: UserAccount = {
+      ...user,
+      id: user.id,
+      name: typeof user.name === 'string' && user.name ? user.name : user.email.split('@')[0] || 'User',
+      email: user.email,
+      role: user.role || 'developer',
+      isVerified: userIsVerified,
+      createdAt: user.createdAt || new Date().toISOString(),
+      lastLoginAt: user.lastLoginAt || new Date().toISOString(),
+    } as UserAccount;
+
+    return {
+      ...candidate,
+      token: candidate.token,
+      user: normalizedUser,
+      expiresAt: typeof candidate.expiresAt === 'number' ? candidate.expiresAt : Date.now() + 14 * 24 * 60 * 60 * 1000,
+      isVerified: sessionIsVerified,
+    } as AuthSession;
+  }
+
   public static getCurrentSession(): AuthSession | null {
     try {
       const sessionStr = localStorage.getItem(SESSION_STORAGE_KEY);
       if (!sessionStr) return null;
-      const session: AuthSession = JSON.parse(sessionStr);
+      const session = this.normalizeSession(JSON.parse(sessionStr));
+      if (!session) {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        return null;
+      }
 
       if (session.expiresAt && Date.now() > session.expiresAt) {
         this.logOut();
@@ -248,12 +282,13 @@ export class AuthService {
       if (resp.ok) {
         const data = await resp.json();
         if (data.success && data.user) {
-          const updatedSession: AuthSession = {
+          const updatedSession = this.normalizeSession({
             ...current,
             user: data.user,
-            isVerified: data.isVerified === true && current.isVerified === true,
+            isVerified: typeof data.isVerified === 'boolean' ? data.isVerified : current.isVerified,
             adminAuthorized: data.adminAuthorized === true ? true : current.adminAuthorized,
-          };
+          });
+          if (!updatedSession) return { session: current, botConfig: data.botConfig || null };
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updatedSession));
           return {
             session: updatedSession,

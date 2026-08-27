@@ -65,6 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAdminPortal,
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const displayName = currentUser?.name || currentUser?.email?.split('@')[0] || 'User';
 
   return (
     <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur-md sticky top-0 z-50">
@@ -177,12 +178,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <img src={currentUser.avatarUrl} alt="" className="w-6 h-6 rounded-lg object-cover ring-1 ring-white/20" />
                 ) : (
                   <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-cyan-500 to-indigo-500 flex items-center justify-center text-xs font-bold text-white uppercase ring-1 ring-white/20">
-                    {currentUser.name.charAt(0) || 'U'}
+                    {displayName.charAt(0).toUpperCase() || 'U'}
                   </div>
                 )}
                 <div className="hidden md:flex flex-col text-left leading-tight">
                   <span className="text-xs font-bold text-white truncate max-w-[110px]">
-                    {currentUser.name}
+                    {displayName}
                   </span>
                 </div>
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -193,7 +194,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl p-3 text-slate-200 z-50 animate-in fade-in slide-in-from-top-2 ring-1 ring-white/10">
                   <div className="p-2 border-b border-slate-800/80 space-y-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-white">{currentUser.name}</span>
+                      <span className="text-xs font-bold text-white">{displayName}</span>
                       <span className="px-1.5 py-0.2 rounded text-[10px] font-mono uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                         {currentUser.role}
                       </span>

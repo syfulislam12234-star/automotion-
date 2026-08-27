@@ -304,9 +304,7 @@ const getInitialConfig = (): BotConfig => {
   return { ...DEFAULT_CONFIG, n8nEventTriggers: { ...DEFAULT_CONFIG.n8nEventTriggers } };
 };
 
-const isValidSession = (value: AuthSession | null | undefined): value is AuthSession => (
-  Boolean(value?.token && value?.user?.id && value?.user?.email)
-);
+const isValidSession = (value: AuthSession | null | undefined): value is AuthSession => Boolean(value);
 
 const normalizeWorkspaceConfig = (value: unknown): BotConfig => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return getInitialConfig();
@@ -331,7 +329,7 @@ function AppContent() {
   const [session, setSession] = useState<AuthSession | null>(() => {
     try {
       const storedSession = AuthService.getCurrentSession();
-      return isValidSession(storedSession) ? storedSession : null;
+      return AuthService.normalizeSession(storedSession);
     } catch (error) {
       console.error('Failed to initialize authentication session:', error);
       return null;
@@ -370,8 +368,9 @@ function AppContent() {
 
         const updatedSession = result?.session;
         const serverConfig = result?.botConfig;
-        if (isValidSession(updatedSession)) {
-          setSession(updatedSession);
+        const normalizedSession = AuthService.normalizeSession(updatedSession);
+        if (isValidSession(normalizedSession)) {
+          setSession(normalizedSession);
         } else if (updatedSession === null) {
           setSession(null);
         }
@@ -449,8 +448,14 @@ function AppContent() {
   };
 
   const handleAuthenticated = (newSession: AuthSession) => {
-    setSession(newSession);
-    showToast(`✅ Welcome, ${newSession.user?.name || 'user'}! Session active.`);
+    const normalizedSession = AuthService.normalizeSession({
+      ...newSession,
+      isVerified: true,
+      user: { ...newSession.user, isVerified: true },
+    });
+    if (!normalizedSession) return;
+    setSession(normalizedSession);
+    showToast(`✅ Welcome, ${normalizedSession.user.name || 'user'}! Session active.`);
   };
 
   const handleLogOut = () => {
@@ -512,7 +517,9 @@ function AppContent() {
     );
   }
 
-  if (!currentUser || session?.isVerified !== true) {
+  const isAuthenticated = Boolean(currentUser && session?.isVerified === true && currentUser.isVerified === true);
+
+  if (!isAuthenticated) {
     const isAdminLoginRoute = window.location.pathname === '/admin/login';
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100">
