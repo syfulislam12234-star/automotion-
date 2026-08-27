@@ -33,6 +33,22 @@ import {
   EyeOff,
 } from 'lucide-react';
 
+const HIGH_REASONING_MODEL_IDS = [
+  'openrouter/deepseek/deepseek-r1:free',
+  'openrouter/qwen/qwq-32b:free',
+  'openrouter/nvidia/llama-3.1-nemotron-ultra-253b-v1:free',
+  'github/meta-llama-3.1-405b-instruct',
+  'groq/llama-3.3-70b-versatile',
+  'cerebras/qwen-3-235b-a22b',
+];
+
+const PRIORITIZED_AI_MODELS = [
+  ...HIGH_REASONING_MODEL_IDS
+    .map((modelId) => GLOBAL_150_FREE_AI_MODELS.find((model) => model.modelId === modelId))
+    .filter((model): model is (typeof GLOBAL_150_FREE_AI_MODELS)[number] => Boolean(model)),
+  ...GLOBAL_150_FREE_AI_MODELS.filter((model) => !HIGH_REASONING_MODEL_IDS.includes(model.modelId)),
+];
+
 interface ConfigPanelProps {
   config: BotConfig;
   onChange: (newConfig: BotConfig) => void | Promise<boolean>;
@@ -426,7 +442,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono"
                 />
                 <datalist id="free-ai-model-options">
-                  {GLOBAL_150_FREE_AI_MODELS.map((model) => <option key={model.modelId} value={model.modelId}>{model.name}</option>)}
+                  {PRIORITIZED_AI_MODELS.map((model) => <option key={model.modelId} value={model.modelId}>{model.name}</option>)}
                 </datalist>
                 {modelStatuses[config.modelName] && (
                   <span className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-bold ${modelStatuses[config.modelName] === 'active' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>

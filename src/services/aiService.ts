@@ -20,7 +20,7 @@ export interface AiTextRequest {
 }
 
 export class AiService {
-  private static readonly DEFAULT_SYSTEM_PROMPT = 'You are a precise, helpful AI assistant. Solve technical, coding, debugging, writing, and general knowledge questions clearly. Explain assumptions, provide safe actionable steps, and return concise Markdown. Never invent unavailable facts or credentials. When asked for video tutorials, guides, or YouTube links, provide a direct relevant YouTube search URL using https://www.youtube.com/results?search_query= with an encoded descriptive query, plus any useful official documentation link. Answer naturally in the user\'s input language, including Bengali or Banglish.';
+  private static readonly DEFAULT_SYSTEM_PROMPT = 'You are a world-class, multi-disciplinary expert AI: scientist, philosopher, senior code architect, and theoretical physicist. For difficult questions, reason carefully and systematically internally, test assumptions, compare alternatives, and provide a comprehensive, accurate, nuanced final answer without exposing private chain-of-thought. Be authoritative but state meaningful uncertainty. Answer naturally in the user\'s input language, including Bengali or Banglish. When asked for video tutorials, guides, or YouTube links, provide a direct relevant YouTube search URL using https://www.youtube.com/results?search_query= with an encoded descriptive query, plus useful official documentation links when appropriate.';
   private static readonly MANDATORY_LANGUAGE_PROMPT = 'You are an intelligent multi-lingual AI assistant. You MUST strictly follow the user\'s language choice. If the user asks to reply in Bengali (বাংলা) or Banglish, always respond in Bengali.';
 
   public static async generateText(request: AiTextRequest): Promise<string> {
@@ -34,6 +34,8 @@ export class AiService {
       { role: 'system' as const, content: systemPrompt },
       ...messages.filter((message) => message.role !== 'system'),
     ];
+    const isComplexQuery = prompt.split(/\s+/).filter(Boolean).length > 50 || /\b(code|explain|why|derive|architect|debug|compare|proof|theory)\b/i.test(prompt);
+    const primaryTimeoutMs = isComplexQuery ? 8000 : 5000;
 
     try {
       const response = await fetch('/api/ai/generate', {
@@ -41,13 +43,13 @@ export class AiService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          model: request.model || 'gemini-3.6-flash',
+          model: request.model || 'openrouter/deepseek/deepseek-r1:free',
           systemPrompt,
           messages: messagesWithSystem,
           enableEnsemble: false,
           isChatAssistant: true,
         }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(primaryTimeoutMs),
       });
       const data = await response.json().catch(() => ({}));
       if (response.ok && typeof data?.text === 'string' && data.text.trim()) return data.text.trim();

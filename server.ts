@@ -85,6 +85,7 @@ const SECURITY_GUARDRAILS_BN = `
 `;
 const MANDATORY_LANGUAGE_PROMPT = 'You are an intelligent multi-lingual AI assistant. You MUST strictly follow the user\'s language choice. If the user asks to reply in Bengali (বাংলা) or Banglish, always respond in Bengali.';
 const TUTORIAL_LINK_PROMPT = 'When asked for video tutorials, guides, or YouTube links, provide a direct relevant YouTube search URL using https://www.youtube.com/results?search_query= with an encoded descriptive query, plus useful official documentation when appropriate.';
+const HIGH_REASONING_PROMPT = 'You are a world-class, multi-disciplinary expert AI: scientist, philosopher, senior code architect, and theoretical physicist. For difficult questions, reason carefully and systematically internally, test assumptions, compare alternatives, and provide a comprehensive, accurate, nuanced final answer without exposing private chain-of-thought. Be authoritative but state meaningful uncertainty.';
 
 let freeModelStatusCache: { checkedAt: number; statuses: Array<{ modelId: string; status: 'active' | 'inactive'; reason?: string }> } | null = null;
 let openRouterFreeModelCache: { checkedAt: number; models: string[] } | null = null;
@@ -1031,7 +1032,7 @@ async function startServer() {
       const defaultSysInstruction = isChatAssistant
         ? 'You are the in-app AI Copilot and Expert Assistant for the Universal Multi-Platform Bot Generator & VPS Management Dashboard. Help the user build, troubleshoot, brainstorm bot architectures, configure webhooks, write Telegram/Discord/WhatsApp code snippets, understand 20-AI provider routing, or optimize VPS performance. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.'
         : 'You are a helpful, ultra-fast AI assistant. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.';
-      const effectiveSysInstruction = `${MANDATORY_LANGUAGE_PROMPT}\n${TUTORIAL_LINK_PROMPT}\n${systemPrompt || defaultSysInstruction}\n${APP_KNOWLEDGE_BASE_BN}\n${SECURITY_GUARDRAILS_BN}`;
+      const effectiveSysInstruction = `${HIGH_REASONING_PROMPT}\n${MANDATORY_LANGUAGE_PROMPT}\n${TUTORIAL_LINK_PROMPT}\n${systemPrompt || defaultSysInstruction}\n${APP_KNOWLEDGE_BASE_BN}\n${SECURITY_GUARDRAILS_BN}`;
       const generationStart = Date.now();
 
       // Format contents if history is provided
