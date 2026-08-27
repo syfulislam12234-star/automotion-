@@ -30,6 +30,44 @@ export interface ChatMessage {
   isCommand?: boolean;
   imageUrl?: string;
   fileName?: string;
+  tokensCount?: number;
+  latencyMs?: number;
+}
+
+export interface ChatThread {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  model: string;
+  messages: ChatMessage[];
+  pinned?: boolean;
+}
+
+export type MessengerPlatformId =
+  | 'telegram'
+  | 'whatsapp'
+  | 'line'
+  | 'discord'
+  | 'slack'
+  | 'messenger'
+  | 'signal'
+  | 'viber'
+  | 'teams'
+  | 'webhook';
+
+export interface MessengerProtocolInfo {
+  id: MessengerPlatformId;
+  name: string;
+  iconName: string;
+  badge: string;
+  themeColor: string;
+  bubbleColor: string;
+  endpoint: string;
+  keyField: string;
+  enabledField: string;
+  formatGuide: string;
+  sampleMessage: string;
 }
 
 export interface BotConfig {

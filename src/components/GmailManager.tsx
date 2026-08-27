@@ -181,12 +181,31 @@ export const GmailManager: React.FC<GmailManagerProps> = ({ onBackToChat }) => {
       const res = await GmailService.signInWithGmail();
       if (res && res.accessToken) {
         setIsAuthenticated(true);
-        showNotice(`Connected to Gmail as ${res.user.email}`);
+        if (res.isSandbox) {
+          showNotice(`Connected to Gmail Workspace (Sandbox Mode — Full interactivity active)`);
+        } else {
+          showNotice(`Connected to Gmail as ${res.user.email || 'Google User'}`);
+        }
         await loadGmailData();
       }
     } catch (err: any) {
       console.error('Sign-in failed:', err);
       setAuthError(err?.message || 'Google authentication was cancelled or failed.');
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleEnterSandbox = async () => {
+    setIsAuthenticating(true);
+    setAuthError(null);
+    try {
+      const res = GmailService.enableSandboxMode('developer@preview.workspace');
+      setIsAuthenticated(true);
+      showNotice('Connected to Gmail Sandbox Workspace (Demo Environment active)');
+      await loadGmailData();
+    } catch (err: any) {
+      showNotice('Could not initialize sandbox mode.', 'error');
     } finally {
       setIsAuthenticating(false);
     }
@@ -433,7 +452,7 @@ export const GmailManager: React.FC<GmailManagerProps> = ({ onBackToChat }) => {
             )}
 
             {/* Official GSI Material Sign-in Button */}
-            <div className="mt-6 flex flex-col items-center">
+            <div className="mt-6 flex flex-col items-center gap-3">
               <button
                 onClick={handleSignIn}
                 disabled={isAuthenticating}
@@ -467,9 +486,18 @@ export const GmailManager: React.FC<GmailManagerProps> = ({ onBackToChat }) => {
                 <span>{isAuthenticating ? 'Connecting to Google...' : 'Sign in with Google'}</span>
               </button>
 
-              <div className="mt-4 flex items-center gap-1.5 text-[11px] text-slate-500">
+              <button
+                onClick={handleEnterSandbox}
+                disabled={isAuthenticating}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-sky-800/60 bg-sky-950/40 px-5 py-2.5 text-xs font-semibold text-sky-300 transition-all hover:bg-sky-900/50 hover:text-white"
+              >
+                <Sparkles className="h-4 w-4 text-sky-400" />
+                <span>Launch Interactive Demo Sandbox</span>
+              </button>
+
+              <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
                 <Shield className="h-3.5 w-3.5 text-emerald-400" />
-                <span>Authorized Google Workspace Gmail API integration with permission</span>
+                <span>Authorized Google Workspace Gmail API integration</span>
               </div>
             </div>
           </div>

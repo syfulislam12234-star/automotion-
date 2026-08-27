@@ -32,22 +32,23 @@ export const OmniChannelGateway: React.FC<OmniChannelGatewayProps> = ({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="p-6 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/30 to-slate-900 border border-slate-800 shadow-xl space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-              <Radio className="w-6 h-6" />
-            </div>
-            <div>
-              <h2 className="text-xl font-bold text-slate-100">10-Platform Omni-Channel Messaging Gateway</h2>
-              <p className="text-xs text-slate-400">Route single unified conversational intelligence to Telegram, Discord, Slack, and WhatsApp simultaneously</p>
-            </div>
+    <div className="space-y-4">
+      <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <Radio className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-slate-100">10-Platform Omni-Channel Messaging Gateways</h2>
+            <p className="text-xs text-slate-400">Manage connected messaging protocols & webhook credentials</p>
           </div>
         </div>
+        <span className="text-[11px] font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+          Unified AI Active
+        </span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {channels.map((ch) => {
           const isEnabled = Boolean((config as any)[ch.enabledField]);
           const hasKey = Boolean((config as any)[ch.keyField]);

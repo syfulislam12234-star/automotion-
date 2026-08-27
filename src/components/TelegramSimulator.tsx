@@ -312,7 +312,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
                 content: m.content,
               })),
               platform: activePlatform,
-              model: 'gemini-3.7-flash',
+              model: config.geminiModel || 'gemini-3.6-flash',
             }),
           });
           const aiData = await aiResp.json();

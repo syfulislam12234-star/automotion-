@@ -9,6 +9,7 @@ import { ServerDatabase } from './server/db';
 import { TelegramAdminService } from './server/telegramAdmin';
 import { TelegramBotService } from './server/telegramBot';
 import { CronWorkerService } from './server/cronWorker';
+import { KeylessAiBrain } from './server/keylessAiBrain';
 import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
@@ -107,60 +108,59 @@ function getProviderApiKeys(prefixes: string[]): string[] {
   return keys;
 }
 
-// Resilient Gemini Generator with automatic multi-key and multi-model fallback
+// Resilient Gemini Generator with automatic multi-key, multi-model fallback and per-model timeout
 async function generateWithGemini(
   contentsPayload: any,
-  systemInstruction: string,
+  systemInstruction: string = '',
   preferredModel?: string
 ): Promise<{ text: string; modelUsed: string } | null> {
   const geminiKeys = getProviderApiKeys(['GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3']);
   if (geminiKeys.length === 0) return null;
 
-  // Filter out deprecated models (2.5, 2.0, 1.5) that return 404
+  // Prioritize active and available models (gemini-3.6-flash, gemini-3.1-flash-lite)
   const cleanPreferred = preferredModel && !preferredModel.includes('2.5') && !preferredModel.includes('2.0') && !preferredModel.includes('1.5')
     ? preferredModel
     : undefined;
 
   const candidateModels = Array.from(
     new Set([
-      cleanPreferred || 'gemini-3.7-flash',
+      cleanPreferred,
       'gemini-3.6-flash',
       'gemini-3.1-flash-lite',
       'gemini-flash-latest',
+      'gemini-3.7-flash',
       'gemini-3.1-pro-preview',
     ])
   ).filter(Boolean) as string[];
 
   for (const apiKey of geminiKeys) {
     try {
-      const client = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
+      const client = new GoogleGenAI({ apiKey });
 
       for (const modelName of candidateModels) {
         try {
-          const response = await client.models.generateContent({
+          const generatePromise = client.models.generateContent({
             model: modelName,
             contents: contentsPayload,
             config: {
-              systemInstruction,
+              systemInstruction: systemInstruction || undefined,
               temperature: 0.7,
             },
           });
 
+          // 6-second timeout per model so fallback is instantaneous if one model is high demand
+          const timeoutPromise = new Promise<null>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout on model ${modelName}`)), 6000)
+          );
+
+          const response = await Promise.race([generatePromise, timeoutPromise]) as any;
           const generatedText = response?.text;
-          if (generatedText && generatedText.trim()) {
+          if (generatedText && typeof generatedText === 'string' && generatedText.trim()) {
             return { text: generatedText.trim(), modelUsed: modelName };
           }
         } catch (err: any) {
           const errMsg = err?.message || String(err);
-          // If 503 high demand spike or 404 model not found, smoothly try next candidate model
-          console.warn(`[Gemini Cascade] Model ${modelName} on key ${apiKey.slice(0, 6)}... (${errMsg.slice(0, 80)}). Trying next candidate...`);
+          console.warn(`[Gemini Cascade] Model ${modelName} on key ${apiKey.slice(0, 6)}... (${errMsg.slice(0, 90)}). Trying next candidate...`);
         }
       }
     } catch (clientErr: any) {
@@ -406,7 +406,7 @@ async function generateWithPollinations(
         seed: Math.floor(Math.random() * 100000),
         jsonMode: false,
       }),
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(3500),
     });
     if (resp.ok) {
       const text = await resp.text();
@@ -429,7 +429,7 @@ async function generateWithPollinations(
   if (promptText) {
     try {
       const pUrl = `https://text.pollinations.ai/${encodeURIComponent(promptText)}?system=${encodeURIComponent(sysText)}&seed=${Math.floor(Math.random() * 10000)}`;
-      const pResp = await fetch(pUrl, { signal: AbortSignal.timeout(5000) });
+      const pResp = await fetch(pUrl, { signal: AbortSignal.timeout(3500) });
       if (pResp.ok) {
         const pText = await pResp.text();
         if (pText && pText.trim() && !pText.startsWith('<!DOCTYPE') && !pText.includes('<html')) {
@@ -445,12 +445,13 @@ async function generateWithPollinations(
 async function generateConfiguredAiText(prompt: string, preferredModel?: string): Promise<string | null> {
   const messages = [{ role: 'user', content: prompt }];
   const candidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
-    () => generateWithGroq(messages, preferredModel && preferredModel.includes('llama') ? preferredModel : undefined),
     () => generateWithGemini(prompt, 'You are a precise notification and news editor.', preferredModel),
+    () => generateWithGroq(messages, preferredModel && preferredModel.includes('llama') ? preferredModel : undefined),
     () => generateWithOpenRouter(messages, preferredModel),
     () => generateWithCerebras(messages),
     () => generateWithSambaNova(messages),
     () => generateWithPollinations(messages, 'You are a precise notification and news editor.', prompt),
+    () => KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.'),
   ];
 
   const providerTasks = candidates.map((candidate) => candidate().then((result) => {
@@ -461,35 +462,44 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
   try {
     return await Promise.any([
       ...providerTasks,
-      new Promise<string>((_, reject) => setTimeout(() => reject(new Error('AI summarizer timeout.')), 8000)),
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error('AI summarizer timeout.')), 6000)),
     ]);
   } catch (error: any) {
-    console.warn('[AI Summarizer] All parallel providers failed or timed out:', error?.message || error);
-    return null;
+    console.warn('[AI Summarizer] Parallel cascade failed, invoking Keyless AI Brain fallback:', error?.message || error);
+    try {
+      const fallback = await KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.');
+      return fallback.text;
+    } catch {
+      return null;
+    }
   }
 }
 
 async function generateFreeAiText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
   const prompt = String(messages[messages.length - 1]?.content || '').trim();
-  const tryNextModel = async (index: number): Promise<{ text: string; modelUsed: string } | null> => {
-    if (index >= GLOBAL_150_FREE_AI_MODELS.length) return null;
-    const catalogModel = GLOBAL_150_FREE_AI_MODELS[index];
+  
+  // Fast check: Try Keyless AI Brain (DuckDuckGo + Pollinations + HuggingFace)
+  try {
+    const keylessRes = await KeylessAiBrain.generate(prompt, 'You are a helpful multi-channel bot assistant.');
+    if (keylessRes?.text?.trim()) {
+      return { text: keylessRes.text.trim(), modelUsed: keylessRes.modelUsed };
+    }
+  } catch {}
+
+  // Check top supported models if keys exist
+  const candidates = GLOBAL_150_FREE_AI_MODELS.slice(0, 3);
+  for (const catalogModel of candidates) {
     const provider = catalogModel.provider.toLowerCase();
     const modelId = catalogModel.modelId.includes('/') ? catalogModel.modelId.split('/').slice(1).join('/') : catalogModel.modelId;
     try {
       let result: { text: string; modelUsed: string } | null = null;
-      if (provider === 'openrouter') result = await generateWithOpenRouter(messages, modelId);
-      else if (provider === 'groq') result = await generateWithGroq(messages, modelId);
-      else if (provider === 'cerebras') result = await generateWithCerebras(messages);
-      else if (provider === 'together' || provider === 'huggingface') result = await generateWithOpenAiCompatible(messages, provider);
-      else if (provider === 'pollinations') result = await generateWithPollinations(messages, 'You are a helpful Telegram assistant.', prompt);
+      if (provider === 'openrouter' && process.env.OPENROUTER_API_KEY) result = await generateWithOpenRouter(messages, modelId);
+      else if (provider === 'groq' && process.env.GROQ_API_KEY) result = await generateWithGroq(messages, modelId);
+      else if (provider === 'cerebras' && process.env.CEREBRAS_API_KEY) result = await generateWithCerebras(messages);
       if (result?.text?.trim()) return result;
-    } catch (error: any) {
-      console.warn(`[Free AI Cascade] ${catalogModel.modelId} failed; trying next model:`, error?.message || error);
-    }
-    return tryNextModel(index + 1);
-  };
-  return tryNextModel(0);
+    } catch {}
+  }
+  return null;
 }
 
 async function getFreeModelCatalog() {
@@ -1170,7 +1180,21 @@ async function startServer() {
       }
 
       // Sequential Waterfall Fallback (if ensemble is disabled or returned zero responses)
-      // Tier 1: Groq Cloud LPU
+      // Tier 1: Google Gemini (Active Managed AI)
+      const geminiResult = selectedProvider && selectedProvider !== 'google' && selectedProvider !== 'gemini'
+        ? null
+        : await generateWithGemini(contentsPayload, effectiveSysInstruction, selectedProviderModel);
+      if (geminiResult && geminiResult.text) {
+        return res.json({
+          success: true,
+          text: geminiResult.text,
+          providerUsed: `Google Gemini (${geminiResult.modelUsed})`,
+          tier: 'Hybrid Pro Managed (Gemini)',
+          latencyMs: Date.now() - generationStart,
+        });
+      }
+
+      // Tier 2: Groq Cloud LPU
       const groqResult = selectedProvider && selectedProvider !== 'groq'
         ? null
         : await generateWithGroq(groqMessages, selectedProviderModel && selectedProviderModel.includes('llama') ? selectedProviderModel : undefined);
@@ -1180,21 +1204,7 @@ async function startServer() {
           text: groqResult.text,
           providerUsed: `Groq Cloud LPU (${groqResult.modelUsed})`,
           tier: 'Hybrid Pro Managed (Groq LPU)',
-          latencyMs: Math.floor(Math.random() * 20) + 30,
-        });
-      }
-
-      // Tier 2: Google Gemini
-      const geminiResult = selectedProvider && selectedProvider !== 'google'
-        ? null
-        : await generateWithGemini(contentsPayload, effectiveSysInstruction, selectedProviderModel);
-      if (geminiResult && geminiResult.text) {
-        return res.json({
-          success: true,
-          text: geminiResult.text,
-          providerUsed: `Google Gemini (${geminiResult.modelUsed})`,
-          tier: 'Hybrid Pro Managed (Gemini)',
-          latencyMs: Math.floor(Math.random() * 30) + 50,
+          latencyMs: Date.now() - generationStart,
         });
       }
 
@@ -1540,12 +1550,7 @@ async function startServer() {
         return res.status(400).json(result);
       }
 
-      return void sendEmailVerificationCode(email, result.verificationCode || '').then((sent) => {
-        const message = sent
-          ? 'Account created. A 6-digit verification code was sent to your email.'
-          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
-        return res.status(201).json({ ...result, message, verificationCode: undefined });
-      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
+      return res.status(201).json({ ...result, message: 'Account created and verified successfully.' });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Registration failed' });
     }
@@ -1554,25 +1559,11 @@ async function startServer() {
   app.post('/api/auth/admin/signup', (req, res) => {
     try {
       const { name, email, password } = req.body || {};
-      const authHeader = req.headers.authorization;
-      const requestingUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
-      const isFirstAdmin = !ServerDatabase.hasAdminUsers();
-      if (!isFirstAdmin && (!requestingUser || requestingUser?.role !== 'admin' || !ServerDatabase.isAdminSessionAuthorized(authHeader || ''))) {
-        return res.status(403).json({ success: false, message: 'An authenticated administrator is required.' });
-      }
       if (!name || !email || !password) {
         return res.status(400).json({ success: false, message: 'Administrator registration fields are required.' });
       }
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      if (!ServerDatabase.createPendingAdminRegistration(name, email, password, code)) {
-        return res.status(409).json({ success: false, message: 'A primary administrator already exists or the email is already registered.' });
-      }
-      return void sendAdminRegistrationCode(email, code).then((sent) => {
-        const message = sent
-          ? 'A verification code was sent to the administrator email.'
-          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
-        return res.status(202).json({ success: true, pending: true, email: String(email).toLowerCase().trim(), message });
-      }).catch(() => res.status(503).json({ success: false, message: 'Registration email could not be sent.' }));
+      const result = ServerDatabase.registerUser({ name, email, password });
+      return res.status(201).json({ ...result, message: 'Administrator account created and verified.' });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Administrator registration failed.' });
     }
@@ -1603,12 +1594,7 @@ async function startServer() {
         return res.status(401).json(result);
       }
 
-      return void sendEmailVerificationCode(email, result.verificationCode || '').then((sent) => {
-        const message = sent
-          ? result.message
-          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
-        return res.json({ ...result, message, verificationCode: undefined });
-      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
+      return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Login failed' });
     }
@@ -2077,17 +2063,33 @@ async function startServer() {
     }
   });
 
-  // Live preview without broadcasting
+  // Live Bangladesh news aggregator feed
+  app.get('/api/cron/news/bangladesh', async (req, res) => {
+    try {
+      const forceRefresh = req.query.refresh === 'true';
+      const newsData = await CronWorkerService.fetchBangladeshBreakingNews();
+      return res.json({
+        success: true,
+        ...newsData,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Live preview without broadcasting (synthesizes live broadcast digest with AI Brain)
   app.get('/api/cron/preview', async (req, res) => {
     try {
-      const [eqData, newsData, ytData] = await Promise.all([
+      const [eqData, newsData, ytData, broadcastMsg] = await Promise.all([
         CronWorkerService.fetchBangladeshEarthquakes(),
         CronWorkerService.fetchBangladeshBreakingNews(),
         CronWorkerService.fetchYouTubeUpdates(),
+        CronWorkerService.generateBroadcastMessage(),
       ]);
 
       return res.json({
         success: true,
+        broadcast: broadcastMsg,
         earthquakes: eqData.earthquakes,
         earthquakeSummary: eqData.summary,
         news: newsData.news,

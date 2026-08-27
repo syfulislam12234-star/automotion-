@@ -1,106 +1,375 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  Activity,
+  MessageSquare,
+  Sparkles,
   Bot,
   Brain,
-  Clock,
-  Lock,
-  Mail,
-  MessageSquare,
-  Scan,
+  Radio,
+  Globe,
+  Smartphone,
+  Hash,
+  Send,
+  Shield,
   ShieldCheck,
-  Sliders,
-  User,
+  Lock,
+  Unlock,
+  Key,
+  Activity,
+  Server,
+  Clock,
+  Scan,
   Video,
+  Sliders,
+  SlidersHorizontal,
+  Mail,
+  User,
+  LogOut,
+  ChevronLeft,
+  ChevronRight,
   X,
+  Layers,
+  Zap,
+  Terminal,
+  LayoutDashboard,
 } from 'lucide-react';
 
 export type AppView =
+  | 'chat'
   | 'simulator'
-  | 'gmail'
-  | 'preferences'
-  | 'performance'
-  | 'cascade'
-  | 'cron'
   | 'gateways'
+  | 'cascade'
+  | 'performance'
+  | 'cron'
+  | 'scanner'
+  | 'youtube'
+  | 'vault'
   | 'security'
   | 'vps'
-  | 'scanner'
   | 'admin'
-  | 'settings';
+  | 'preferences'
+  | 'settings'
+  | 'gmail'
+  | 'ch-telegram'
+  | 'ch-whatsapp'
+  | 'ch-line'
+  | 'ch-discord'
+  | 'ch-slack'
+  | 'ch-messenger'
+  | 'ch-signal'
+  | 'ch-viber'
+  | 'ch-teams'
+  | 'ch-webhook';
 
 interface SidebarProps {
   isOpen: boolean;
   activeView: AppView;
   onClose: () => void;
   onSelectView: (view: AppView) => void;
-  onOpenPortal?: () => void;
-  onOpenSubscription?: () => void;
-  onOpenYouTube?: () => void;
-  onOpenDeploy?: () => void;
   onOpenAuth: () => void;
   onLogOut: () => void;
-  currentUser: { name: string } | null;
+  onOpenVault?: () => void;
+  currentUser: { name: string; email?: string; role?: string } | null;
 }
-
-const publicItems = [
-  { id: 'simulator', label: 'Chat workspace', icon: MessageSquare },
-  { id: 'gmail', label: 'Gmail Workspace', icon: Mail },
-  { id: 'performance', label: 'Analytics & usage', icon: Activity },
-  { id: 'cascade', label: 'AI cascade', icon: Brain },
-  { id: 'cron', label: 'Chat history & broadcasts', icon: Clock },
-  { id: 'scanner', label: 'Media scanner', icon: Scan },
-  { id: 'preferences', label: 'General preferences', icon: Sliders },
-  { id: 'security', label: 'App information & security', icon: ShieldCheck },
-] as const;
-
 
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   activeView,
   onClose,
   onSelectView,
-  onOpenPortal,
-  onOpenSubscription,
-  onOpenYouTube,
-  onOpenDeploy,
   onOpenAuth,
   onLogOut,
+  onOpenVault,
   currentUser,
 }) => {
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
+
   const select = (view: AppView) => {
+    if (view === 'vault' && onOpenVault) {
+      onOpenVault();
+      return;
+    }
     onSelectView(view);
     onClose();
   };
 
   return (
     <>
-      {isOpen && <button aria-label="Close navigation" className="fixed inset-0 z-40 bg-slate-950/60 lg:hidden" onClick={onClose} />}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-800 bg-slate-950/95 backdrop-blur-xl transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="flex h-full flex-col overflow-y-auto px-4 py-5">
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/15 text-cyan-300 ring-1 ring-cyan-400/30"><Bot className="h-5 w-5" /></div>
-              <div><p className="text-sm font-bold text-white">Control center</p><p className="text-[10px] text-slate-500">Universal Bot</p></div>
+      {/* Mobile backdrop overlay */}
+      {isOpen && (
+        <button
+          aria-label="Close navigation"
+          className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm lg:hidden cursor-pointer"
+          onClick={onClose}
+        />
+      )}
+
+      {/* Sidebar container */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-slate-800/80 bg-slate-950/95 backdrop-blur-2xl transition-all duration-300 lg:sticky lg:top-0 lg:h-screen ${
+          isCollapsed ? 'lg:w-[76px]' : 'lg:w-[268px]'
+        } w-[268px] ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+      >
+        {/* Sidebar Brand Header */}
+        <div
+          className={`p-3.5 border-b border-slate-800/80 flex items-center ${
+            isCollapsed ? 'justify-center' : 'justify-between'
+          } transition-all duration-300`}
+        >
+          {/* Logo & Brand - Only displayed when sidebar is expanded */}
+          {!isCollapsed && (
+            <div className="flex items-center gap-3 overflow-hidden animate-fadeIn">
+              <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-cyan-500/20">
+                <Bot className="w-5 h-5" />
+              </div>
+
+              <div>
+                <h1 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
+                  <span>UNIVERSAL BOT</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                </h1>
+                <p className="text-[10px] text-cyan-400 font-mono whitespace-nowrap">100+ AI & Messenger Hub</p>
+              </div>
             </div>
-            <button onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-white lg:hidden" title="Close navigation"><X className="h-4 w-4" /></button>
+          )}
+
+          <div className="flex items-center">
+            {/* Desktop collapse toggle */}
+            <button
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="hidden lg:flex p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {isCollapsed ? <ChevronRight className="w-4 h-4 text-cyan-400" /> : <ChevronLeft className="w-4 h-4" />}
+            </button>
+
+            {/* Mobile close button */}
+            <button
+              onClick={onClose}
+              className="lg:hidden p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation Categories */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-5 scrollbar-thin">
+          {/* SECTION 1: WORKSPACE */}
+          <div>
+            {!isCollapsed && (
+              <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                <span>Workspace</span>
+                <span className="text-[9px] font-mono text-cyan-400">Core</span>
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <SidebarItem
+                icon={<Sparkles className="w-4 h-4 text-cyan-400" />}
+                label="Help Chat"
+                badge="AI Studio"
+                active={activeView === 'chat'}
+                collapsed={isCollapsed}
+                onClick={() => select('chat')}
+              />
+              <SidebarItem
+                icon={<Radio className="w-4 h-4 text-sky-400" />}
+                label="Messenger Hub"
+                badge="10 Channels"
+                active={activeView === 'simulator' || activeView === 'gateways' || activeView.startsWith('ch-')}
+                collapsed={isCollapsed}
+                onClick={() => select('simulator')}
+              />
+              <SidebarItem
+                icon={<Brain className="w-4 h-4 text-indigo-400" />}
+                label="150-AI Brain Core"
+                badge="Active"
+                active={activeView === 'cascade'}
+                collapsed={isCollapsed}
+                onClick={() => select('cascade')}
+              />
+              <SidebarItem
+                icon={<Sliders className="w-4 h-4 text-amber-400" />}
+                label="Bot Configurator"
+                active={activeView === 'preferences' || activeView === 'settings'}
+                collapsed={isCollapsed}
+                onClick={() => select('preferences')}
+              />
+            </div>
           </div>
 
-          <nav className="space-y-6" aria-label="Application navigation">
-            <SidebarGroup label="Public / open">
-              {publicItems.map(({ id, label, icon: Icon }) => <SidebarItem key={id} label={label} icon={<Icon className="h-4 w-4" />} active={activeView === id} onClick={() => select(id)} />)}
-            </SidebarGroup>
-          </nav>
+          {/* SECTION 2: AI MODELS & BROADCASTS */}
+          <div>
+            {!isCollapsed && (
+              <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                <span>AI Models & Intelligence</span>
+                <span className="text-[9px] font-mono text-purple-400">150 AI</span>
+              </div>
+            )}
 
-          <div className="mt-auto border-t border-slate-800 pt-4">
-            {currentUser ? <button onClick={onLogOut} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-900 hover:text-white"><User className="h-4 w-4" /> Sign out {currentUser.name}</button> : <button onClick={onOpenAuth} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-cyan-300 hover:bg-slate-900"><User className="h-4 w-4" /> Sign in</button>}
+            <div className="space-y-1">
+              <SidebarItem
+                icon={<Activity className="w-4 h-4 text-emerald-400" />}
+                label="Live Telemetry & Ping"
+                active={activeView === 'performance'}
+                collapsed={isCollapsed}
+                onClick={() => select('performance')}
+              />
+              <SidebarItem
+                icon={<Clock className="w-4 h-4 text-amber-400" />}
+                label="Emergency Broadcast"
+                badge="2H Auto"
+                active={activeView === 'cron'}
+                collapsed={isCollapsed}
+                onClick={() => select('cron')}
+              />
+              <SidebarItem
+                icon={<Scan className="w-4 h-4 text-rose-400" />}
+                label="AI Media Scanner"
+                active={activeView === 'scanner'}
+                collapsed={isCollapsed}
+                onClick={() => select('scanner')}
+              />
+              <SidebarItem
+                icon={<Video className="w-4 h-4 text-red-400" />}
+                label="YouTube Video Studio"
+                active={activeView === 'youtube'}
+                collapsed={isCollapsed}
+                onClick={() => select('youtube')}
+              />
+              <SidebarItem
+                icon={<Mail className="w-4 h-4 text-amber-400" />}
+                label="Gmail Integration"
+                active={activeView === 'gmail'}
+                collapsed={isCollapsed}
+                onClick={() => select('gmail')}
+              />
+            </div>
           </div>
+
+          {/* SECTION 4: SECURITY & CLOUD */}
+          <div>
+            {!isCollapsed && (
+              <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                <span>Security & Infrastructure</span>
+                <span className="text-[9px] font-mono text-amber-400">PIN Locked</span>
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <SidebarItem
+                icon={<Lock className="w-4 h-4 text-amber-400" />}
+                label="API Vault (Protected)"
+                badge="20 Keys"
+                active={activeView === 'vault'}
+                collapsed={isCollapsed}
+                onClick={() => select('vault')}
+              />
+              <SidebarItem
+                icon={<ShieldCheck className="w-4 h-4 text-emerald-400" />}
+                label="Enterprise Security"
+                active={activeView === 'security'}
+                collapsed={isCollapsed}
+                onClick={() => select('security')}
+              />
+              <SidebarItem
+                icon={<Server className="w-4 h-4 text-blue-400" />}
+                label="VPS Server Monitor"
+                active={activeView === 'vps'}
+                collapsed={isCollapsed}
+                onClick={() => select('vps')}
+              />
+              <SidebarItem
+                icon={<LayoutDashboard className="w-4 h-4 text-purple-400" />}
+                label="Admin Control Panel"
+                active={activeView === 'admin'}
+                collapsed={isCollapsed}
+                onClick={() => select('admin')}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Sidebar Footer User Profile */}
+        <div className="p-3 border-t border-slate-800/80 bg-slate-950/60">
+          {currentUser ? (
+            <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'} p-1.5 rounded-xl bg-slate-900/80 border border-slate-800`}>
+              <div className="flex items-center gap-2.5 truncate">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                  {currentUser.name.charAt(0).toUpperCase()}
+                </div>
+                {!isCollapsed && (
+                  <div className="truncate">
+                    <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
+                    <p className="text-[10px] text-slate-400 truncate capitalize font-mono">{currentUser.role || 'Member'}</p>
+                  </div>
+                )}
+              </div>
+
+              {!isCollapsed && (
+                <button
+                  onClick={onLogOut}
+                  className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                  title="Sign out"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={onOpenAuth}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/20 text-xs font-semibold transition cursor-pointer"
+            >
+              <User className="w-4 h-4" />
+              {!isCollapsed && <span>Sign In</span>}
+            </button>
+          )}
         </div>
       </aside>
     </>
   );
 };
 
-const SidebarGroup: React.FC<React.PropsWithChildren<{ label: string }>> = ({ label, children }) => <section><p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-600">{label}</p><div className="space-y-0.5">{children}</div></section>;
+interface SidebarItemProps {
+  icon: React.ReactNode;
+  label: string;
+  badge?: string;
+  active?: boolean;
+  collapsed?: boolean;
+  onClick: () => void;
+}
 
-const SidebarItem: React.FC<{ label: string; icon: React.ReactNode; active?: boolean; locked?: boolean; onClick: () => void }> = ({ label, icon, active, locked, onClick }) => <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs font-medium transition ${active ? 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/20' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'}`}><span className="text-current">{icon}</span><span className="flex-1">{label}</span>{locked ? <Lock className="h-3.5 w-3.5 text-amber-400" /> : null}</button>;
+const SidebarItem: React.FC<SidebarItemProps> = ({
+  icon,
+  label,
+  badge,
+  active,
+  collapsed,
+  onClick,
+}) => {
+  return (
+    <button
+      onClick={onClick}
+      title={collapsed ? label : undefined}
+      className={`w-full flex items-center ${
+        collapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-3 py-2'
+      } rounded-xl text-xs font-medium transition cursor-pointer ${
+        active
+          ? 'bg-gradient-to-r from-cyan-500/15 to-indigo-500/15 text-cyan-300 border border-cyan-500/30 shadow-sm'
+          : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'
+      }`}
+    >
+      <div className="flex items-center gap-2.5 truncate">
+        <span className="shrink-0">{icon}</span>
+        {!collapsed && <span className="truncate">{label}</span>}
+      </div>
+
+      {!collapsed && badge && (
+        <span className="px-1.5 py-0.5 rounded-md text-[9px] font-mono font-bold bg-slate-800 text-cyan-300 border border-slate-700/80">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+};

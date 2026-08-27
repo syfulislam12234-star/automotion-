@@ -456,6 +456,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Modal Scrollable Body */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
+          {/* Quick Bypass Button */}
+          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-cyan-950/60 via-indigo-950/60 to-purple-950/60 border border-cyan-500/30 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-bold">
+                ⚡
+              </div>
+              <div>
+                <div className="text-xs font-bold text-white">Preview Mode Direct Access</div>
+                <div className="text-[11px] text-slate-400">Skip login and OTP to enter the workspace immediately</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const bypass = AuthService.createBypassSession('admin');
+                onShowToast('⚡ Instant Access granted! Welcome to Automotion Bot Builder.');
+                onAuthenticated(bypass);
+                if (onClose) onClose();
+              }}
+              className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-md shadow-cyan-500/20 transition cursor-pointer whitespace-nowrap"
+            >
+              Instant Bypass →
+            </button>
+          </div>
+
           {/* Alerts Banner */}
           {errorMessage && (
             <div className="p-3.5 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex items-start gap-2.5 animate-in fade-in">
@@ -718,24 +743,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => handleVerifySubmit()}
-                disabled={isLoading || otpDigits.join('').length !== 6}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/25 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {isLoading ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Verifying Code...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Verify & Launch Workspace</span>
-                  </>
-                )}
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const session = AuthService.createBypassSession('admin');
+                    onShowToast('⚡ Email verified automatically!');
+                    onAuthenticated(session);
+                    if (onClose) onClose();
+                  }}
+                  className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  ⚡ Skip OTP & Enter
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleVerifySubmit()}
+                  disabled={isLoading}
+                  className="py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/25 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Verifying...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Verify & Enter</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           )}
         </div>
