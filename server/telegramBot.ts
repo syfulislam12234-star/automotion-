@@ -71,7 +71,9 @@ export class TelegramBotService {
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
         return { ok: true, skipped: true };
       }
-      await TelegramBotService.sendChatAction(token, chatId);
+      void TelegramBotService.sendChatAction(token, chatId).catch((error: any) => {
+        console.warn('[TelegramBotService] Typing action dispatch failed:', error?.message || error);
+      });
       if (!TelegramBotService.aiGenerator) {
         TelegramBotService.lastError = 'AI generator is not configured.';
         console.warn('[TelegramBotService] AI generator missing; update skipped safely.');
@@ -188,7 +190,9 @@ export class TelegramBotService {
         if (!response.ok || data.ok === false) throw new Error(data.description || `Telegram polling failed (HTTP ${response.status}).`);
         for (const update of Array.isArray(data.result) ? data.result : []) {
           TelegramBotService.pollingOffset = Math.max(TelegramBotService.pollingOffset, Number(update.update_id || 0) + 1);
-          await TelegramBotService.handleUpdate(update);
+          void TelegramBotService.handleUpdate(update).catch((error: any) => {
+            console.warn('[TelegramBotService] Concurrent update processing failed:', error?.message || error);
+          });
         }
       } catch (error: any) {
         TelegramBotService.lastError = error?.message || String(error);
