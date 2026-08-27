@@ -26,9 +26,6 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     },
   ]);
   const [input, setInput] = useState('');
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || `AI request failed (HTTP ${res.status}).`);
-      }
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -60,6 +57,9 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       });
 
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || `AI request failed (HTTP ${res.status}).`);
+      }
       const botResponse: ChatMessage = {
         id: Math.random().toString(36).substring(2, 9),
         sender: 'bot',
