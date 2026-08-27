@@ -304,8 +304,8 @@ export const UnifiedChatWorkspace: React.FC<UnifiedChatWorkspaceProps> = ({
         providerLabel = 'Unified AI Fallback Engine';
       } catch (fallbackErr) {
         console.warn('[UnifiedChatWorkspace] AI fallback unavailable:', fallbackErr);
-        botResponseText = 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
-        providerLabel = 'Bengali Recovery Response';
+        botResponseText = 'AI generation failed after all configured providers were tried.';
+        providerLabel = 'AI Cascade Exhausted';
       }
     } finally {
       const latency = Date.now() - startTime;

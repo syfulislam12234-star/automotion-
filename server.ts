@@ -454,50 +454,51 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     () => KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.'),
   ];
 
-  const providerTasks = candidates.map((candidate) => candidate().then((result) => {
-    if (!result?.text?.trim()) throw new Error('Provider returned no text.');
-    return result.text.trim();
-  }));
+  for (const candidate of candidates) {
+    try {
+      const result = await candidate();
+      if (result?.text?.trim()) return result.text.trim();
+    } catch (error: any) {
+      console.warn('[AI Summarizer] Provider failed; trying next provider:', error?.message || error);
+    }
+  }
 
   try {
-    return await Promise.any([
-      ...providerTasks,
-      new Promise<string>((_, reject) => setTimeout(() => reject(new Error('AI summarizer timeout.')), 6000)),
-    ]);
+    const fallback = await KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.');
+    return fallback.provider !== 'contextual_engine' && fallback.text?.trim() ? fallback.text.trim() : null;
   } catch (error: any) {
-    console.warn('[AI Summarizer] Parallel cascade failed, invoking Keyless AI Brain fallback:', error?.message || error);
-    try {
-      const fallback = await KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.');
-      return fallback.text;
-    } catch {
-      return null;
-    }
+    console.warn('[AI Summarizer] All providers exhausted:', error?.message || error);
+    return null;
   }
 }
 
 async function generateFreeAiText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
   const prompt = String(messages[messages.length - 1]?.content || '').trim();
-  
-  // Fast check: Try Keyless AI Brain (DuckDuckGo + Pollinations + HuggingFace)
+  const systemPrompt = 'You are a helpful, natural AI assistant. Answer dynamically in the user\'s input language, including Bengali or Banglish. Return only the answer.';
+  const aiMessages = [{ role: 'system' as const, content: systemPrompt }, ...messages];
+  const configuredCandidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
+    () => generateWithGroq(aiMessages, preferredModel || 'llama-3.1-8b-instant'),
+    () => generateWithOpenRouter(aiMessages, preferredModel),
+    () => generateWithCerebras(aiMessages),
+    () => generateWithGemini(prompt, systemPrompt, preferredModel),
+    () => generateWithSambaNova(aiMessages),
+  ];
+  for (const candidate of configuredCandidates) {
+    try {
+      const result = await candidate();
+      if (result?.text?.trim()) return result;
+    } catch (error: any) {
+      console.warn('[AI Cascade] Provider failed; trying next provider:', error?.message || error);
+    }
+  }
+
   try {
-    const keylessRes = await KeylessAiBrain.generate(prompt, 'You are a helpful multi-channel bot assistant.');
-    if (keylessRes?.text?.trim()) {
+    const keylessRes = await KeylessAiBrain.generate(prompt, systemPrompt);
+    if (keylessRes?.text?.trim() && keylessRes.provider !== 'contextual_engine') {
       return { text: keylessRes.text.trim(), modelUsed: keylessRes.modelUsed };
     }
-  } catch {}
-
-  // Check top supported models if keys exist
-  const candidates = GLOBAL_150_FREE_AI_MODELS.slice(0, 3);
-  for (const catalogModel of candidates) {
-    const provider = catalogModel.provider.toLowerCase();
-    const modelId = catalogModel.modelId.includes('/') ? catalogModel.modelId.split('/').slice(1).join('/') : catalogModel.modelId;
-    try {
-      let result: { text: string; modelUsed: string } | null = null;
-      if (provider === 'openrouter' && process.env.OPENROUTER_API_KEY) result = await generateWithOpenRouter(messages, modelId);
-      else if (provider === 'groq' && process.env.GROQ_API_KEY) result = await generateWithGroq(messages, modelId);
-      else if (provider === 'cerebras' && process.env.CEREBRAS_API_KEY) result = await generateWithCerebras(messages);
-      if (result?.text?.trim()) return result;
-    } catch {}
+  } catch (error: any) {
+    console.warn('[AI Cascade] Keyless providers exhausted:', error?.message || error);
   }
   return null;
 }
@@ -1293,7 +1294,7 @@ async function startServer() {
       } else if (lower.includes('thank') || lower.includes('thanks')) {
         fallbackText = `You're very welcome! Let me know if there's anything else you need.`;
       } else {
-        fallbackText = 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
+        fallbackText = 'দুঃখিত, কোনো এআই প্রদানকারী উত্তর দিতে পারেনি। অনুগ্রহ করে আবার চেষ্টা করুন।';
       }
 
       return res.json({
@@ -1635,7 +1636,7 @@ async function startServer() {
       return void sendEmailVerificationCode(user.email, verificationCode).then((sent) => {
         const message = sent
           ? 'Authentication successful. A 6-digit verification code was sent to your email.'
-          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+          : 'Email delivery failed. Use the 6-digit OTP logged by the server administrator.';
         return res.json({ success: true, message, user, session: { token: session.token, user, expiresAt: session.expiresAt, isVerified: false } });
       }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch {
@@ -1675,7 +1676,7 @@ async function startServer() {
       return void sendEmailVerificationCode(email, result.code).then((sent) => {
         const message = sent
           ? result.message
-          : 'Email service unavailable. Use the 6-digit OTP logged by the server administrator.';
+          : 'Email delivery failed. Use the 6-digit OTP logged by the server administrator.';
         return res.json({ success: true, message });
       }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
     } catch (err: any) {

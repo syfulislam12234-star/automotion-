@@ -301,7 +301,7 @@ async def generate_ai_reply(chat_id: int, prompt: str) -> str:
     except Exception as e:
         logger.warning(f"⚠️ Tier 5 (Pollinations) notice: {e}.")
 
-    return "দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।"
+    return "দুঃখিত, কোনো এআই প্রদানকারী উত্তর দিতে পারেনি। অনুগ্রহ করে আবার চেষ্টা করুন।"
 
 
 def update_chat_history(chat_id: int, user_text: str, assistant_text: str) -> None:
@@ -708,7 +708,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                 return
         await safe_reply(update, f"⚠️ Could not find weather data for <b>{city}</b>. Please check spelling.", parse_mode=ParseMode.HTML)
     except Exception as err:
-        await safe_reply(update, f"⚠️ Weather service unavailable: {err}")
+        await safe_reply(update, f"⚠️ Weather request failed: {err}")
 
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

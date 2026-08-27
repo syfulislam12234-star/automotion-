@@ -69,7 +69,7 @@ export class AiService {
       }
     }
 
-    return 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
+    throw new Error('All configured AI providers returned no usable text.');
   }
 
   public static async getFreeModelCatalog(): Promise<FreeModelCatalog> {
@@ -97,6 +97,6 @@ export class AiService {
     } catch (error) {
       console.warn('[AI Status] Dynamic status check unavailable.', error);
     }
-    return GLOBAL_150_FREE_AI_MODELS.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Status service unavailable.' }));
+    return GLOBAL_150_FREE_AI_MODELS.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Status check failed.' }));
   }
 }

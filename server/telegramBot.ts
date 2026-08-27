@@ -104,7 +104,8 @@ export class TelegramBotService {
         }
       }
       if (!reply?.trim()) {
-        reply = 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
+        console.warn('[TelegramBotService] All AI providers returned no usable text.');
+        return { ok: true, skipped: true };
       }
       await TelegramBotService.sendMessage(token, chatId, reply.trim());
       TelegramBotService.lastError = null;
