@@ -78,8 +78,39 @@ export class TelegramBotService {
         return { ok: true, skipped: true };
       }
 
-      const reply = await TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName);
-      if (!reply?.trim()) throw new Error('AI provider cascade returned no reply.');
+      let reply: string | null = null;
+      try {
+        reply = await TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName);
+        if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
+      } catch (error: any) {
+        console.warn('[TelegramBotService] Primary AI route unavailable; trying public Pollinations fallback:', error?.message || error);
+        try {
+          const fallbackResponse = await fetch('https://text.pollinations.ai/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [{ role: 'user', content: text }],
+              model: 'openai',
+              seed: Math.floor(Math.random() * 100000),
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+          const fallbackText = await fallbackResponse.text();
+          if (fallbackResponse.ok && fallbackText.trim() && !fallbackText.startsWith('<!DOCTYPE') && !fallbackText.includes('<html')) {
+            reply = fallbackText.trim();
+            try {
+              const parsed = JSON.parse(fallbackText);
+              reply = parsed.choices?.[0]?.message?.content?.trim() || reply;
+            } catch {}
+          }
+        } catch (fallbackError: any) {
+          console.warn('[TelegramBotService] Public Pollinations fallback unavailable:', fallbackError?.message || fallbackError);
+        }
+      }
+      if (!reply?.trim()) {
+        console.warn('[TelegramBotService] AI response unavailable; update skipped safely.');
+        return { ok: true, skipped: true };
+      }
       await TelegramBotService.sendMessage(token, chatId, reply.trim());
       TelegramBotService.lastError = null;
       console.log('🤖 [TelegramBotService] Replied to update:', update?.update_id);
