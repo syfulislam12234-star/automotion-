@@ -1,0 +1,320 @@
+export interface UserAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'developer' | 'operator' | 'viewer';
+  isVerified: boolean;
+  verificationCode?: string;
+  verificationCodeExpiresAt?: number;
+  createdAt: string;
+  lastLoginAt: string;
+  avatarUrl?: string;
+  bio?: string;
+}
+
+export interface AuthSession {
+  token: string;
+  user: UserAccount;
+  expiresAt: number;
+  isVerified: boolean;
+  adminAuthorized?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'bot' | 'system';
+  text: string;
+  timestamp: string;
+  platform?: string;
+  provider?: string;
+  isCommand?: boolean;
+  imageUrl?: string;
+  fileName?: string;
+}
+
+export interface BotConfig {
+  modelName: string;
+  maxMemoryTurns: number;
+  memoryTtlMinutes: number;
+  temperature: number;
+  maxOutputTokens: number;
+  systemPrompt: string;
+  botName: string;
+  enableAdminWhitelist: boolean;
+  adminUserIds: string;
+  enableStreamTyping: boolean;
+  enableMarkdownV2: boolean;
+  enableStatsCommand: boolean;
+  enableCustomPromptCommand: boolean;
+
+  // Hybrid AI Ensemble & Super-Brain System
+  enableHybridEnsemble: boolean;
+  ensembleStrategy: string;
+  ensemblePrimaryProviders: string[];
+  ensembleTimeoutMs: number;
+  enableEnsembleComparisonTelemetry: boolean;
+
+  // Multi-Provider & Key Rotation (20 AI Providers)
+  enableMultiProviderFallback: boolean;
+  groqKeysCount: number;
+  keyCooldownSeconds: number;
+
+  // 1. Google AI Studio
+  enableGeminiFallback: boolean;
+  geminiModel: string;
+  geminiApiKey: string;
+
+  // 2. Groq
+  groqModel: string;
+  groqApiKey: string;
+
+  // 3. OpenRouter
+  enableOpenRouterFallback: boolean;
+  openrouterModel: string;
+  openrouterApiKey: string;
+
+  // 4. Cerebras
+  enableCerebrasFallback: boolean;
+  cerebrasModel: string;
+  cerebrasApiKey: string;
+
+  // 5. Mistral AI
+  enableMistralFallback: boolean;
+  mistralModel: string;
+  mistralApiKey: string;
+
+  // 6. Cloudflare Workers AI
+  enableCloudflareFallback: boolean;
+  cloudflareAccountId: string;
+  cloudflareApiToken: string;
+  cloudflareModel: string;
+
+  // 7. GitHub Models
+  enableGithubModelsFallback: boolean;
+  githubToken: string;
+  githubModel: string;
+
+  // 8. Hugging Face
+  enableHuggingFaceFallback: boolean;
+  huggingfaceApiKey: string;
+  huggingfaceModel: string;
+
+  // 9. Pollinations AI (Zero key free)
+  enablePollinationsFallback: boolean;
+  pollinationsModel: string;
+
+  // 10. Cohere
+  enableCohereFallback: boolean;
+  cohereApiKey: string;
+  cohereModel: string;
+
+  // 11. NVIDIA NIM
+  enableNvidiaNimFallback: boolean;
+  nvidiaNimApiKey: string;
+  nvidiaNimModel: string;
+
+  // 12. Together AI
+  enableTogetherFallback: boolean;
+  togetherModel: string;
+  togetherApiKey: string;
+
+  // 13. SambaNova
+  enableSambaNovaFallback: boolean;
+  sambanovaApiKey: string;
+  sambanovaModel: string;
+
+  // 14. DeepInfra
+  enableDeepInfraFallback: boolean;
+  deepinfraApiKey: string;
+  deepinfraModel: string;
+
+  // 15. Chutes AI
+  enableChutesFallback: boolean;
+  chutesApiKey: string;
+  chutesModel: string;
+
+  // 16. Voyage AI
+  enableVoyageFallback: boolean;
+  voyageApiKey: string;
+  voyageModel: string;
+
+  // 17. Replicate
+  enableReplicateFallback: boolean;
+  replicateApiToken: string;
+  replicateModel: string;
+
+  // 18. Vercel AI Gateway
+  enableVercelAiFallback: boolean;
+  vercelAiToken: string;
+  vercelAiModel: string;
+
+  // 19. DeepSeek Official
+  enableDeepSeekFallback: boolean;
+  deepseekApiKey: string;
+  deepseekModel: string;
+
+  // 20. Ollama Local Server
+  enableOllamaFallback: boolean;
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+
+  // Admin Alerting & Heartbeats
+  adminTelegramId: string;
+  discordAdminWebhookUrl: string;
+  enableAdminAlerts: boolean;
+  enableHeartbeatNotifications: boolean;
+
+  // Telegram Admin Bot Controller
+  enableTelegramAdminController: boolean;
+  telegramAdminBotToken: string;
+  telegramAdminChatId: string;
+  telegramAdminStrictWhitelist: boolean;
+  telegramAdminAllowRestart: boolean;
+
+  // 10 Platform Messaging Gateways
+  enableTelegram: boolean;
+  telegramBotToken: string;
+
+  enableDiscord: boolean;
+  discordBotToken: string;
+
+  enableSlack: boolean;
+  slackBotToken: string;
+  slackAppToken: string;
+  slackSigningSecret: string;
+
+  enableWhatsApp: boolean;
+  whatsappPhoneNumberId: string;
+  whatsappAccessToken: string;
+  whatsappVerifyToken: string;
+
+  enableTwilio: boolean;
+  twilioAccountSid: string;
+  twilioAuthToken: string;
+  twilioPhoneNumber: string;
+  twilioToNumber: string;
+
+  enableLine: boolean;
+  lineChannelSecret: string;
+  lineChannelAccessToken: string;
+
+  enableMatrix: boolean;
+  matrixHomeserver: string;
+  matrixUserId: string;
+  matrixAccessToken: string;
+  matrixRoomId: string;
+
+  enablePyrogram: boolean;
+  pyrogramApiId: string;
+  pyrogramApiHash: string;
+  pyrogramSessionString: string;
+
+  enableApprise: boolean;
+  appriseUrls: string;
+
+  enablePushover: boolean;
+  pushoverUserKey: string;
+  pushoverAppToken: string;
+
+  // YouTube OAuth2 & AI SEO Automation
+  enableYouTubeAutomation: boolean;
+  youtubeApiKey: string;
+  youtubeClientId: string;
+  youtubeClientSecret: string;
+  youtubeRefreshToken: string;
+  youtubeChannelId: string;
+  youtubeDefaultCategory: string;
+  youtubeDefaultPrivacy: string;
+  enableYtAutoSeo: boolean;
+  enableYtAutoUploadQueue: boolean;
+
+  // Cloud & Deployment Settings
+  deploymentMode: string;
+  serverPort: number;
+  webhookUrl: string;
+
+  // Pro SaaS Customer Profile & Subscription Tiers
+  userProfileName: string;
+  userPlanTier: string;
+
+  // VPS / Cloud Server Management & Monitoring
+  vpsServerName: string;
+  vpsApiBaseUrl: string;
+  vpsAuthBearerToken: string;
+  vpsPollIntervalSeconds: number;
+  vpsAutoReconnect: boolean;
+
+  // n8n Webhook & Automation Integration
+  n8nWebhookUrl: string;
+  n8nAlertsEnabled: boolean;
+  n8nEventTriggers: {
+    onStatusChange: boolean;
+    onHighCpu: boolean;
+    onRestart: boolean;
+    onFailover: boolean;
+    onSecurityAlert: boolean;
+  };
+}
+
+export interface AiModelCatalogItem {
+  id: string;
+  name: string;
+  provider: string;
+  modelId: string;
+  contextWindow: number;
+  costPer1kTokens?: number;
+  speedRating: string;
+  description: string;
+  freeTier: boolean;
+  category: 'ultra_fast' | 'reasoning' | 'balanced' | 'multimodal' | 'coding';
+}
+
+export interface VpsServerStatus {
+  isOnline: boolean;
+  statusText: string;
+  uptimeSeconds: number;
+  cpuPercent: number;
+  cpuCores: number;
+  ramUsedMb: number;
+  ramTotalMb: number;
+  diskUsedGb: number;
+  diskTotalGb: number;
+  networkInKbps: number;
+  networkOutKbps: number;
+  activeProcesses: number;
+  pythonVersion: string;
+  osName: string;
+  ipAddress: string;
+  lastPingMs: number;
+  lastUpdated: string;
+}
+
+export interface VpsServerLog {
+  id: string;
+  timestamp: string;
+  level: string;
+  source: string;
+  message: string;
+}
+
+export interface MediaProvenanceScanResult {
+  id: string;
+  mediaUrl: string;
+  mediaType: 'image' | 'audio' | 'video';
+  scannedAt: string;
+  isAiGenerated: boolean;
+  aiProbability: number;
+  confidencePercentage: number;
+  verdict: string;
+  likelyModel: string;
+  modelFamily: string;
+  c2paManifestStatus: string;
+  analysisStages: {
+    metadata: { score: number; status: string; details: string };
+    spectralFrequency: { score: number; status: string; checkerboardArtifacts: boolean; details: string };
+    latentDiffusionResiduals: { score: number; status: string; details: string };
+    anatomicalTemporalCoherence: { score: number; status: string; details: string };
+  };
+  forensicIndicators: Array<{ name: string; level: string; description: string }>;
+  provenanceChain?: Array<{ step: string; status: string; details: string }>;
+}

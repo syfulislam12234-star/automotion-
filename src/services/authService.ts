@@ -30,6 +30,8 @@ export class AuthService {
         return 'The Google sign-in popup was blocked by your browser. Please allow popups for this site and try again.';
       case 'auth/unauthorized-domain':
         return 'This domain is not authorized in your Firebase Authentication settings. Add it to Authorized Domains in Firebase Console.';
+      case 'auth/configuration-not-found':
+        return 'Google Sign-in is not yet enabled or configured in this Firebase project. Please sign in with email/password or create an account.';
       case 'auth/cancelled-popup-request':
         return 'Sign-in operation was interrupted by another popup request. Please try again.';
       case 'auth/network-request-failed':
@@ -38,7 +40,7 @@ export class AuthService {
       case 'auth/app-not-authorized':
         return 'Firebase Authentication is not configured with a valid API key or domain.';
       case 'auth/operation-not-allowed':
-        return 'This sign-in method is currently disabled in the Firebase Console.';
+        return 'Google sign-in is currently disabled in the Firebase Console. Please use email/password login or enable Google sign-in in Authentication > Sign-in method.';
       case 'auth/user-disabled':
         return 'This user account has been suspended or disabled.';
       case 'auth/user-not-found':

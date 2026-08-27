@@ -184,6 +184,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setErrorMessage('Google sign-in popup was blocked by your browser. Please allow popups.');
       } else if (code === 'auth/unauthorized-domain') {
         setErrorMessage('This domain is not authorized in Firebase Authentication. Please check Firebase console.');
+      } else if (code === 'auth/configuration-not-found' || code === 'auth/operation-not-allowed') {
+        setErrorMessage('Google Sign-in is not yet enabled in this Firebase project. Please use email/password sign-in or create an account.');
       } else {
         setErrorMessage(error?.message || 'Google sign-in failed. Please try again.');
       }

@@ -1479,7 +1479,7 @@ async function startServer() {
         success: true,
         message: 'Bot configuration permanently saved to server database.',
         targetId,
-        ...result,
+        saved: result,
       });
       } catch (err: any) {
         return res.status(400).json({ success: false, message: err.message || 'Runtime configuration refresh failed.' });

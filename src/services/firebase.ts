@@ -26,14 +26,16 @@ const authDomain = (env.VITE_FIREBASE_AUTH_DOMAIN || env.VITE_FIREBASE_AUTHDOMAI
 const projectId = (env.VITE_FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECTID || firebaseConfig.projectId || '').trim();
 const storageBucket = (env.VITE_FIREBASE_STORAGE_BUCKET || env.VITE_FIREBASE_STORAGEBUCKET || firebaseConfig.storageBucket || '').trim();
 const databaseId = (env.VITE_FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || '').trim();
+const appId = (env.VITE_FIREBASE_APP_ID || firebaseConfig.appId || '').trim();
+const messagingSenderId = (env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId || '').trim();
 
-// Note: We deliberately exclude appId and messagingSenderId here unless needed by FCM/Analytics.
-// Excluding them prevents Firebase Web SDK from triggering unneeded Firebase Installations API (403) calls.
 export const runtimeFirebaseConfig = {
   apiKey,
   authDomain,
   projectId,
   storageBucket,
+  appId,
+  messagingSenderId,
 };
 
 let firebaseApp: FirebaseApp | null = null;
