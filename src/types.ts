@@ -318,3 +318,47 @@ export interface MediaProvenanceScanResult {
   forensicIndicators: Array<{ name: string; level: string; description: string }>;
   provenanceChain?: Array<{ step: string; status: string; details: string }>;
 }
+
+export interface GmailProfile {
+  emailAddress: string;
+  messagesTotal: number;
+  threadsTotal: number;
+  historyId: string;
+}
+
+export interface GmailMessageSummary {
+  id: string;
+  threadId: string;
+  labelIds: string[];
+  snippet: string;
+  subject: string;
+  from: string;
+  to: string;
+  date: string;
+  isUnread: boolean;
+  isStarred: boolean;
+  isDraft: boolean;
+}
+
+export interface GmailMessageDetail extends GmailMessageSummary {
+  cc?: string;
+  bcc?: string;
+  bodyHtml?: string;
+  bodyText?: string;
+  headers: Record<string, string>;
+  attachments?: Array<{
+    filename: string;
+    mimeType: string;
+    size: number;
+    attachmentId: string;
+  }>;
+}
+
+export interface GmailLabel {
+  id: string;
+  name: string;
+  type: 'system' | 'user';
+  messagesTotal?: number;
+  messagesUnread?: number;
+}
+

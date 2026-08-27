@@ -5,6 +5,7 @@ import {
   Brain,
   Clock,
   Lock,
+  Mail,
   MessageSquare,
   Scan,
   ShieldCheck,
@@ -16,6 +17,7 @@ import {
 
 export type AppView =
   | 'simulator'
+  | 'gmail'
   | 'preferences'
   | 'performance'
   | 'cascade'
@@ -43,6 +45,7 @@ interface SidebarProps {
 
 const publicItems = [
   { id: 'simulator', label: 'Chat workspace', icon: MessageSquare },
+  { id: 'gmail', label: 'Gmail Workspace', icon: Mail },
   { id: 'performance', label: 'Analytics & usage', icon: Activity },
   { id: 'cascade', label: 'AI cascade', icon: Brain },
   { id: 'cron', label: 'Chat history & broadcasts', icon: Clock },

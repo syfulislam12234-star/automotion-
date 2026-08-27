@@ -1237,6 +1237,53 @@ async function startServer() {
   });
 
   // ==========================================
+  // GMAIL AI ASSISTANT & AUTO-REPLY ROUTES
+  // ==========================================
+  app.post('/api/gmail/ai-assist', async (req, res) => {
+    try {
+      const { context, action, instructions, tone } = req.body || {};
+      const userTone = tone || 'professional';
+
+      let prompt = '';
+      if (action === 'reply') {
+        prompt = `You are an executive email assistant. Draft a polished, ${userTone} reply to the following email:\n\n---\n${context}\n---\nAdditional Instructions: ${instructions || 'Be clear, polite, and helpful.'}\n\nDraft only the body of the response without placeholder headers.`;
+      } else if (action === 'summarize') {
+        prompt = `Summarize the following email thread into key takeaways, sender goals, and required action items in 3-4 bullet points:\n\n---\n${context}\n---`;
+      } else if (action === 'action_items') {
+        prompt = `Extract all action items, deliverables, and deadlines from this email:\n\n---\n${context}\n---`;
+      } else {
+        prompt = `Polish and refine the following draft email to sound ${userTone}, natural, and persuasive:\n\n---\n${context}\n---`;
+      }
+
+      const messages = [{ role: 'user', content: prompt }];
+      
+      // Cascade through AI providers (Gemini -> Groq -> OpenRouter)
+      const geminiResult = await generateWithGemini(prompt).catch(() => null);
+      if (geminiResult && geminiResult.text) {
+        return res.json({ success: true, text: geminiResult.text, model: geminiResult.modelUsed });
+      }
+
+      const groqResult = await generateWithGroq(messages).catch(() => null);
+      if (groqResult && groqResult.text) {
+        return res.json({ success: true, text: groqResult.text, model: groqResult.modelUsed });
+      }
+
+      const openRouterResult = await generateWithOpenRouter(messages).catch(() => null);
+      if (openRouterResult && openRouterResult.text) {
+        return res.json({ success: true, text: openRouterResult.text, model: openRouterResult.modelUsed });
+      }
+
+      return res.json({
+        success: true,
+        text: `Thank you for reaching out.\n\nI have reviewed your message regarding "${(context || '').slice(0, 60)}..." and will follow up shortly.\n\nBest regards,`,
+        model: 'template_fallback',
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'AI Email assistance failed' });
+    }
+  });
+
+  // ==========================================
   // PERMANENT DATABASE & AUTHENTICATION ROUTES
   // ==========================================
 

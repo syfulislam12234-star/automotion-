@@ -23,6 +23,7 @@ import {
   Layers,
   Radio,
   Menu,
+  Mail,
 } from 'lucide-react';
 import { UserAccount } from '../types';
 
@@ -93,6 +94,17 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Actions: Clean, modern, minimal essential controls */}
         <div className="flex items-center gap-2 sm:gap-2.5">
+          {onSelectTab && (
+            <button
+              onClick={() => onSelectTab('gmail')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-red-300 bg-red-950/50 border border-red-500/30 hover:bg-red-900/40 transition shadow-sm cursor-pointer"
+              title="Open Gmail Workspace Hub"
+            >
+              <Mail className="w-3.5 h-3.5 text-red-400" />
+              <span className="hidden md:inline">Gmail</span>
+            </button>
+          )}
+
           {onOpenYouTubeStudio && (
             <button
               onClick={onOpenYouTubeStudio}

@@ -18,6 +18,7 @@ import { OmniChannelGateway } from './components/OmniChannelGateway';
 import { EnterpriseSecurity } from './components/EnterpriseSecurity';
 import { YouTubeStudioModal } from './components/YouTubeStudioModal';
 import { CronBroadcastManager } from './components/CronBroadcastManager';
+import { GmailManager } from './components/GmailManager';
 import { Sidebar, AppView } from './components/Sidebar';
 import { AuthService } from './services/authService';
 import {
@@ -828,6 +829,13 @@ function AppContent() {
           />
         )}
 
+        {/* View 8: Gmail Workspace Hub */}
+        {activeTab === 'gmail' && (
+          <div className="h-[calc(100vh-140px)] min-h-[600px] rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
+            <GmailManager onBackToChat={() => setActiveTab('simulator')} />
+          </div>
+        )}
+
       </main>
 
       {/* Footer */}
@@ -840,6 +848,13 @@ function AppContent() {
             </span>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setActiveTab('gmail')}
+              className="text-red-400 hover:text-red-300 transition cursor-pointer flex items-center gap-1 font-medium"
+            >
+              <span>Gmail Hub</span>
+            </button>
+            <span>•</span>
             <button
               onClick={() => setIsSubscriptionModalOpen(true)}
               className="text-amber-400 hover:text-amber-300 transition cursor-pointer flex items-center gap-1 font-medium"
