@@ -84,7 +84,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <h1 className="font-bold text-slate-100 text-sm sm:text-base tracking-tight flex items-center gap-2">
               <span>Universal Multi-Platform Bot</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-gradient-to-r from-amber-500 to-indigo-500 text-white shadow-sm">
-                100-AI SUPER-APP
+                150-AI SUPER-APP
               </span>
             </h1>
             <p className="text-[11px] text-slate-400 hidden sm:block">

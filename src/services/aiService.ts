@@ -1,5 +1,5 @@
 import { AiModelCatalogItem } from '../types';
-import { GLOBAL_100_AI_MODELS } from '../data/aiModels100';
+import { GLOBAL_150_FREE_AI_MODELS } from '../data/aiModels150';
 
 export interface FreeModelCatalog {
   count: number;
@@ -21,7 +21,6 @@ export class AiService {
       console.warn('[AI Catalog] Dynamic catalog unavailable; using bundled free models.', error);
     }
 
-    const models = GLOBAL_100_AI_MODELS.filter((model) => model.freeTier);
-    return { count: models.length, models };
+    return { count: GLOBAL_150_FREE_AI_MODELS.length, models: GLOBAL_150_FREE_AI_MODELS };
   }
 }

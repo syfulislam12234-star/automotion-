@@ -12,6 +12,7 @@ import { CronWorkerService } from './server/cronWorker';
 import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
+import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
 import { EdgeTTS } from 'node-edge-tts';
 
 dotenv.config();
@@ -463,27 +464,29 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
 
 async function generateFreeAiText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
   const prompt = String(messages[messages.length - 1]?.content || '').trim();
-  const freeCandidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
-    () => generateWithGroq(messages, preferredModel),
-    () => generateWithOpenRouter(messages, preferredModel),
-    () => generateWithOpenAiCompatible(messages, 'together'),
-    () => generateWithOpenAiCompatible(messages, 'huggingface'),
-    () => generateWithCerebras(messages),
-    () => generateWithPollinations(messages, 'You are a helpful Telegram assistant.', prompt),
-  ];
-  for (const candidate of freeCandidates) {
+  const tryNextModel = async (index: number): Promise<{ text: string; modelUsed: string } | null> => {
+    if (index >= GLOBAL_150_FREE_AI_MODELS.length) return null;
+    const catalogModel = GLOBAL_150_FREE_AI_MODELS[index];
+    const provider = catalogModel.provider.toLowerCase();
+    const modelId = catalogModel.modelId.includes('/') ? catalogModel.modelId.split('/').slice(1).join('/') : catalogModel.modelId;
     try {
-      const result = await candidate();
+      let result: { text: string; modelUsed: string } | null = null;
+      if (provider === 'openrouter') result = await generateWithOpenRouter(messages, modelId);
+      else if (provider === 'groq') result = await generateWithGroq(messages, modelId);
+      else if (provider === 'cerebras') result = await generateWithCerebras(messages);
+      else if (provider === 'together' || provider === 'huggingface') result = await generateWithOpenAiCompatible(messages, provider);
+      else if (provider === 'pollinations') result = await generateWithPollinations(messages, 'You are a helpful Telegram assistant.', prompt);
       if (result?.text?.trim()) return result;
     } catch (error: any) {
-      console.warn('[Free AI Cascade] Provider failed; trying next:', error?.message || error);
+      console.warn(`[Free AI Cascade] ${catalogModel.modelId} failed; trying next model:`, error?.message || error);
     }
-  }
-  return null;
+    return tryNextModel(index + 1);
+  };
+  return tryNextModel(0);
 }
 
 async function getFreeModelCatalog() {
-  const localModels = GLOBAL_100_AI_MODELS.filter((model) => model.freeTier);
+  const localModels = GLOBAL_150_FREE_AI_MODELS;
   try {
     const response = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(5000) });
     const data = await response.json().catch(() => ({}));
@@ -825,6 +828,20 @@ async function startServer() {
   app.post('/api/webhook', webhookHandler);
   app.post('/api/telegram/webhook', webhookHandler);
   app.post('/api/telegram-admin/webhook', webhookHandler);
+  const channelWebhookHandler = async (req: express.Request, res: express.Response) => {
+    try {
+      const platform = req.params.platform || req.path.split('/').pop() || '';
+      const result = await multiChannelGateway.handleWebhook(platform, req.body, String(req.headers['x-signature'] || ''), (req as express.Request & { rawBody?: string }).rawBody);
+      return res.status(200).json(result);
+    } catch (error: any) {
+      console.warn(`[Channel Webhook ${req.params.platform}] ignored safely:`, error?.message || error);
+      return res.status(200).json({ ok: false, processed: false });
+    }
+  };
+  app.post('/api/webhooks/:platform', channelWebhookHandler);
+  for (const platform of ['whatsapp', 'line', 'facebook', 'discord', 'slack', 'viber', 'signal', 'wechat', 'teams']) {
+    app.post(`/webhook/${platform}`, channelWebhookHandler);
+  }
 
   app.get('/api/webhook/whatsapp/:channelId', (req, res) => {
     try {
@@ -920,7 +937,7 @@ async function startServer() {
       return res.json({ success: true, count: models.length, models });
     } catch (error: any) {
       console.warn('[AI Catalog] Catalog request failed:', error?.message || error);
-      return res.json({ success: true, count: GLOBAL_100_AI_MODELS.filter((model) => model.freeTier).length, models: GLOBAL_100_AI_MODELS.filter((model) => model.freeTier) });
+      return res.json({ success: true, count: GLOBAL_150_FREE_AI_MODELS.length, models: GLOBAL_150_FREE_AI_MODELS });
     }
   });
 
@@ -943,6 +960,7 @@ async function startServer() {
         ? 'You are the in-app AI Copilot and Expert Assistant for the Universal Multi-Platform Bot Generator & VPS Management Dashboard. Help the user build, troubleshoot, brainstorm bot architectures, configure webhooks, write Telegram/Discord/WhatsApp code snippets, understand 20-AI provider routing, or optimize VPS performance. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.'
         : 'You are a helpful, ultra-fast AI assistant. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.';
       const effectiveSysInstruction = `${systemPrompt || defaultSysInstruction}\n${APP_KNOWLEDGE_BASE_BN}\n${SECURITY_GUARDRAILS_BN}`;
+      const generationStart = Date.now();
 
       // Format contents if history is provided
       let contentsPayload: any = prompt || 'Hello';
@@ -1164,6 +1182,17 @@ async function startServer() {
           providerUsed: `Pollinations AI (${pollinationsResult.modelUsed})`,
           tier: 'Universal Free Tier',
           latencyMs: Math.floor(Math.random() * 30) + 50,
+        });
+      }
+
+      const freeCascadeResult = await generateFreeAiText(groqMessages, selectedProviderModel);
+      if (freeCascadeResult?.text) {
+        return res.json({
+          success: true,
+          text: freeCascadeResult.text,
+          providerUsed: `150-Model Free Cascade (${freeCascadeResult.modelUsed})`,
+          tier: 'Universal Free Model Cascade',
+          latencyMs: Date.now() - generationStart,
         });
       }
 

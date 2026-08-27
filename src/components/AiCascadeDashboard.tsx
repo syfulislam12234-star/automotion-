@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BotConfig } from '../types';
+import { AiModelCatalogItem, BotConfig } from '../types';
 import { AiService } from '../services/aiService';
 import { Cpu, Zap, ShieldCheck, Key, RefreshCw, CheckCircle2, AlertCircle, Sparkles, ExternalLink } from 'lucide-react';
 
@@ -17,11 +17,15 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
   onOpenPortal,
 }) => {
   const [freeModelCount, setFreeModelCount] = useState(0);
+  const [freeModels, setFreeModels] = useState<AiModelCatalogItem[]>([]);
 
   useEffect(() => {
     let mounted = true;
     void AiService.getFreeModelCatalog().then((catalog) => {
-      if (mounted) setFreeModelCount(catalog.count);
+      if (mounted) {
+        setFreeModelCount(catalog.count);
+        setFreeModels(catalog.models);
+      }
     });
     return () => {
       mounted = false;
@@ -105,6 +109,21 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
           </div>
         ))}
       </div>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-bold text-slate-100">Available free models ({freeModels.length || 150})</h3>
+          <span className="text-[10px] uppercase tracking-widest text-emerald-400">Automatic fallback order</span>
+        </div>
+        <div className="grid max-h-[34rem] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
+          {freeModels.map((model, index) => (
+            <div key={`${model.provider}-${model.modelId}-${index}`} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-900/70 px-3 py-2">
+              <span className="w-6 shrink-0 text-[10px] font-mono text-cyan-400">{index + 1}</span>
+              <span className="min-w-0 truncate text-[11px] text-slate-300" title={model.modelId}>{model.name}</span>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 };

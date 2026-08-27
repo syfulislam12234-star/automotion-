@@ -21,7 +21,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     {
       id: '1',
       sender: 'bot',
-      text: `Hello! I am your 100-AI Super-Brain Assistant powered by **${config.botName || 'Universal Bot'}**. How can I assist you with bot deployments, multi-channel gateways, or Python scripts today?`,
+      text: `Hello! I am your 150-AI Super-Brain Assistant powered by **${config.botName || 'Universal Bot'}**. How can I assist you with bot deployments, multi-channel gateways, or Python scripts today?`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -63,7 +63,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       const botResponse: ChatMessage = {
         id: Math.random().toString(36).substring(2, 9),
         sender: 'bot',
-        text: typeof data?.text === 'string' ? data.text : typeof data?.response === 'string' ? data.response : 'I received your query and processed it across the 100-AI failover cascade.',
+        text: typeof data?.text === 'string' ? data.text : typeof data?.response === 'string' ? data.response : 'I received your query and processed it across the 150-AI failover cascade.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, botResponse]);
@@ -94,7 +94,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-slate-100 text-sm">AI Copilot & Multi-Tier Assistant</h3>
-              <p className="text-xs text-slate-400">100-AI Redundancy Cascade • Live Failover</p>
+              <p className="text-xs text-slate-400">150-AI Redundancy Cascade • Live Failover</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-200 rounded-xl transition cursor-pointer">
