@@ -61,16 +61,8 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       };
       setMessages((prev) => [...prev, botResponse]);
     } catch (err: any) {
-      onShowToast(`⚠️ AI assistant fallback active: ${err?.message || 'A local response was used.'}`);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Math.random().toString(36).substring(2, 9),
-          sender: 'bot',
-          text: 'The AI assistant is temporarily unavailable. Your request was received; please try again shortly.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
+      console.error('[AiChatModal] Live AI response failed after public fallback retries:', err);
+      onShowToast('⚠️ Live AI providers did not return a response.');
     } finally {
       setLoading(false);
       setIsThinking(false);

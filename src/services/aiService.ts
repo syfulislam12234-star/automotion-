@@ -44,17 +44,20 @@ export class AiService {
       console.warn('[AI Chat] Primary route unavailable; switching to public fallback.', error);
     }
 
-    try {
-      const response = await fetch(`https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(request.systemPrompt || AiService.DEFAULT_SYSTEM_PROMPT)}&model=openai`, {
-        signal: AbortSignal.timeout(2500),
-      });
-      const text = await response.text();
-      if (response.ok && text.trim() && !text.includes('<html')) return text.trim();
-    } catch (error) {
-      console.warn('[AI Chat] Public fallback unavailable; using local response.', error);
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const response = await fetch(`https://text.pollinations.ai/${encodeURIComponent(prompt)}`, {
+          signal: AbortSignal.timeout(2500),
+        });
+        const text = await response.text();
+        if (response.ok && text.trim() && !text.includes('<html') && !text.startsWith('<!DOCTYPE')) return text.trim();
+        console.warn(`[AI Chat] Public Pollinations fallback returned no usable text (attempt ${attempt}).`);
+      } catch (error) {
+        console.warn(`[AI Chat] Public Pollinations fallback unavailable (attempt ${attempt}).`, error);
+      }
     }
 
-    return `I received your question: "${prompt.slice(0, 160)}${prompt.length > 160 ? '...' : ''}". The AI routes are temporarily busy; please try again in a moment.`;
+    throw new Error('No live AI response was returned by the configured or public provider routes.');
   }
 
   public static async getFreeModelCatalog(): Promise<FreeModelCatalog> {
