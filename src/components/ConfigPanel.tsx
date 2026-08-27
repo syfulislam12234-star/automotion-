@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AuthService } from '../services/authService';
 import { BotConfig } from '../types';
+import { GLOBAL_150_FREE_AI_MODELS } from '../data/aiModels150';
+import { AiService, FreeModelStatus } from '../services/aiService';
 import {
   Sliders,
   Sparkles,
@@ -74,6 +76,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   const [testResults, setTestResults] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid' | 'idle'; latency?: number }>>({});
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
+  const [modelStatuses, setModelStatuses] = useState<Record<string, FreeModelStatus['status']>>({});
   const channelSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const toggleReveal = (field: string) => {
@@ -181,6 +184,16 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
       mounted = false;
       clearInterval(refreshTimer);
       Object.values(channelSyncTimers.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void AiService.getFreeModelStatuses().then((statuses) => {
+      if (mounted) setModelStatuses(Object.fromEntries(statuses.map((status) => [status.modelId, status.status])));
+    });
+    return () => {
+      mounted = false;
     };
   }, []);
 
@@ -406,10 +419,19 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <label className="text-[10px] text-slate-400">Model:</label>
                 <input
                   type="text"
+                  list="free-ai-model-options"
                   value={config.modelName}
                   onChange={(e) => updateField('modelName', e.target.value)}
                   className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono"
                 />
+                <datalist id="free-ai-model-options">
+                  {GLOBAL_150_FREE_AI_MODELS.map((model) => <option key={model.modelId} value={model.modelId}>{model.name}</option>)}
+                </datalist>
+                {modelStatuses[config.modelName] && (
+                  <span className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-bold ${modelStatuses[config.modelName] === 'active' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                    {modelStatuses[config.modelName] === 'active' ? 'Active model' : 'Inactive model'}
+                  </span>
+                )}
               </div>
               <div>
                 <label className="text-[10px] text-slate-400">Key Pool Count:</label>

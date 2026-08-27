@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AiModelCatalogItem, BotConfig } from '../types';
-import { AiService } from '../services/aiService';
+import { AiService, FreeModelStatus } from '../services/aiService';
 import { Cpu, Zap, ShieldCheck, Key, RefreshCw, CheckCircle2, AlertCircle, Sparkles, ExternalLink } from 'lucide-react';
 
 interface AiCascadeDashboardProps {
@@ -18,6 +18,7 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
 }) => {
   const [freeModelCount, setFreeModelCount] = useState(0);
   const [freeModels, setFreeModels] = useState<AiModelCatalogItem[]>([]);
+  const [modelStatuses, setModelStatuses] = useState<Record<string, FreeModelStatus['status']>>({});
 
   useEffect(() => {
     let mounted = true;
@@ -26,6 +27,9 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
         setFreeModelCount(catalog.count);
         setFreeModels(catalog.models);
       }
+    });
+    void AiService.getFreeModelStatuses().then((statuses) => {
+      if (mounted) setModelStatuses(Object.fromEntries(statuses.map((status) => [status.modelId, status.status])));
     });
     return () => {
       mounted = false;
@@ -120,6 +124,9 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
             <div key={`${model.provider}-${model.modelId}-${index}`} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-900/70 px-3 py-2">
               <span className="w-6 shrink-0 text-[10px] font-mono text-cyan-400">{index + 1}</span>
               <span className="min-w-0 truncate text-[11px] text-slate-300" title={model.modelId}>{model.name}</span>
+              <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${modelStatuses[model.modelId] === 'active' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                {modelStatuses[model.modelId] === 'active' ? 'Active' : 'Inactive'}
+              </span>
             </div>
           ))}
         </div>
