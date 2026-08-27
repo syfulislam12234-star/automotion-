@@ -660,6 +660,7 @@ async function startServer() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Internal-Channel-Request': 'true' },
         body: JSON.stringify({ prompt, model: preferredModel, enableEnsemble: false, platform: 'telegram' }),
+        signal: AbortSignal.timeout(2500),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || typeof data.text !== 'string') {

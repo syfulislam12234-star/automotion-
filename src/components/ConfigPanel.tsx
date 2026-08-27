@@ -183,7 +183,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
     return () => {
       mounted = false;
       clearInterval(refreshTimer);
-      Object.values(channelSyncTimers.current).forEach(clearTimeout);
+      Object.values(channelSyncTimers.current as Record<string, ReturnType<typeof setTimeout> | undefined>)
+        .forEach((timer) => clearTimeout(timer));
     };
   }, []);
 
@@ -295,7 +296,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           <Cpu className="w-3.5 h-3.5" />
           <span>20 AI APIs</span>
         </button>
-          {Object.values(channelStatuses).some((entry: { status?: string }) => entry?.status === 'connected' || entry?.status === 'running') && (
+          {Object.values(channelStatuses as Record<string, { status?: string }>).some((entry) => entry?.status === 'connected' || entry?.status === 'running') && (
             <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold flex items-center gap-1">
               <Check className="w-3 h-3" /> Live & Active
             </span>
