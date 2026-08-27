@@ -12,6 +12,12 @@ export class TelegramBotService {
   private static pollingActive = false;
   private static environmentToken = '';
 
+  private static ensureYouTubeLink(reply: string, userQuery: string): string {
+    const videoIntentKeywords = ['video', 'tutorial', 'youtube', 'ভিডিও', 'টিউটোরিয়াল', 'লিংক', 'link'];
+    if (!videoIntentKeywords.some((keyword) => userQuery.toLowerCase().includes(keyword.toLowerCase())) || /youtube\.com\//i.test(reply)) return reply;
+    return `${reply}\n\n📺 **সরাসরি ইউটিউব টিউটোরিয়াল দেখতে পারেন:**\nhttps://www.youtube.com/results?search_query=${encodeURIComponent(userQuery)}`;
+  }
+
   public static setAiGenerator(generator: (prompt: string, model?: string) => Promise<string | null>) {
     TelegramBotService.aiGenerator = generator;
   }
@@ -109,7 +115,7 @@ export class TelegramBotService {
         console.warn('[TelegramBotService] All AI providers returned no usable text.');
         return { ok: true, skipped: true };
       }
-      await TelegramBotService.sendMessage(token, chatId, reply.trim());
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text));
       TelegramBotService.lastError = null;
       console.log('🤖 [TelegramBotService] Replied to update:', update?.update_id);
       return { ok: true };

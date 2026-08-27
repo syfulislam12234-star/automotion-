@@ -20,8 +20,16 @@ export interface AiTextRequest {
 }
 
 export class AiService {
-  private static readonly DEFAULT_SYSTEM_PROMPT = 'You are a world-class, multi-disciplinary expert AI: scientist, philosopher, senior code architect, and theoretical physicist. For difficult questions, reason carefully and systematically internally, test assumptions, compare alternatives, and provide a comprehensive, accurate, nuanced final answer without exposing private chain-of-thought. Be authoritative but state meaningful uncertainty. Answer naturally in the user\'s input language, including Bengali or Banglish. When asked for video tutorials, guides, or YouTube links, provide a direct relevant YouTube search URL using https://www.youtube.com/results?search_query= with an encoded descriptive query, plus useful official documentation links when appropriate.';
+  private static readonly DEFAULT_SYSTEM_PROMPT = 'You are a world-class, multi-disciplinary expert AI: scientist, philosopher, senior code architect, and theoretical physicist. For difficult questions, reason carefully and systematically internally, test assumptions, compare alternatives, and provide a comprehensive, accurate, nuanced final answer without exposing private chain-of-thought. Be authoritative but state meaningful uncertainty. Answer naturally in the user\'s input language, including Bengali or Banglish. Whenever the user asks for a tutorial, video, course, or video link (for example React tutorial, Python video, ভিডিও দাও, or টিউটোরিয়াল লিংক), you MUST construct and return a direct, clickable Markdown link using this format: [📺 টিউটোরিয়াল ভিডিও দেখতে এখানে ক্লিক করুন](https://www.youtube.com/results?search_query=SEARCH_TERMS).';
   private static readonly MANDATORY_LANGUAGE_PROMPT = 'You are an intelligent multi-lingual AI assistant. You MUST strictly follow the user\'s language choice. If the user asks to reply in Bengali (বাংলা) or Banglish, always respond in Bengali.';
+
+  private static withYouTubeLink(response: string, userQuery: string): string {
+    const videoIntentKeywords = ['video', 'tutorial', 'youtube', 'ভিডিও', 'টিউটোরিয়াল', 'লিংক', 'link'];
+    const hasVideoIntent = videoIntentKeywords.some((keyword) => userQuery.toLowerCase().includes(keyword.toLowerCase()));
+    if (!hasVideoIntent || /youtube\.com\//i.test(response)) return response;
+    const youtubeUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(userQuery)}`;
+    return `${response}\n\n📺 **সরাসরি ইউটিউব টিউটোরিয়াল দেখতে পারেন:**\n${youtubeUrl}`;
+  }
 
   public static async generateText(request: AiTextRequest): Promise<string> {
     const prompt = request.prompt.trim();
@@ -52,7 +60,7 @@ export class AiService {
         signal: AbortSignal.timeout(primaryTimeoutMs),
       });
       const data = await response.json().catch(() => ({}));
-      if (response.ok && typeof data?.text === 'string' && data.text.trim()) return data.text.trim();
+      if (response.ok && typeof data?.text === 'string' && data.text.trim()) return this.withYouTubeLink(data.text.trim(), prompt);
     } catch (error) {
       console.warn('[AI Chat] Primary route unavailable; switching to public fallback.', error);
     }
@@ -64,7 +72,7 @@ export class AiService {
           signal: AbortSignal.timeout(5000),
         });
         const text = await response.text();
-        if (response.ok && text.trim() && !text.includes('<html') && !text.startsWith('<!DOCTYPE')) return text.trim();
+        if (response.ok && text.trim() && !text.includes('<html') && !text.startsWith('<!DOCTYPE')) return this.withYouTubeLink(text.trim(), prompt);
         console.warn(`[AI Chat] Public Pollinations fallback returned no usable text (attempt ${attempt}).`);
       } catch (error) {
         console.warn(`[AI Chat] Public Pollinations fallback unavailable (attempt ${attempt}).`, error);
