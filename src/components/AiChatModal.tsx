@@ -27,6 +27,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
 
   if (!isOpen) return null;
 
@@ -44,6 +45,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setLoading(true);
+    setIsThinking(true);
 
     try {
       const res = await fetch('/api/chat', {
@@ -80,6 +82,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       ]);
     } finally {
       setLoading(false);
+      setIsThinking(false);
     }
   };
 
@@ -101,6 +104,17 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {isThinking && (
+          <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/40 px-4 py-3 text-xs text-slate-400" role="status" aria-live="polite">
+            <span>AI is thinking...</span>
+            <span className="flex items-center gap-1" aria-hidden="true">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-400 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-400 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-400" />
+            </span>
+          </div>
+        )}
 
         {/* Message history */}
         <div className="flex-1 p-4 overflow-y-auto space-y-4">
@@ -132,7 +146,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                 <Sparkles className="w-4 h-4" />
               </div>
               <div className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800 text-xs text-cyan-400 italic">
-                Cascading across 100 AI providers...
+                Cascading across 150 AI models...
               </div>
             </div>
           )}

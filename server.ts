@@ -653,10 +653,13 @@ async function startServer() {
   TelegramBotService.setEnvironmentToken(process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
   TelegramBotService.setAiGenerator(async (prompt, model) => {
     try {
+      const preferredModel = model && /groq|cerebras|llama|instant/i.test(model)
+        ? model
+        : 'llama-3.1-8b-instant';
       const response = await fetch(`http://127.0.0.1:${PORT}/api/ai/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Internal-Channel-Request': 'true' },
-        body: JSON.stringify({ prompt, model, enableEnsemble: false, platform: 'telegram' }),
+        body: JSON.stringify({ prompt, model: preferredModel, enableEnsemble: false, platform: 'telegram' }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || typeof data.text !== 'string') {

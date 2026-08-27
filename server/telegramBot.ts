@@ -71,6 +71,7 @@ export class TelegramBotService {
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
         return { ok: true, skipped: true };
       }
+      await TelegramBotService.sendChatAction(token, chatId);
       if (!TelegramBotService.aiGenerator) {
         TelegramBotService.lastError = 'AI generator is not configured.';
         console.warn('[TelegramBotService] AI generator missing; update skipped safely.');
@@ -122,6 +123,20 @@ export class TelegramBotService {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok === false) throw new Error(data.description || `Telegram sendMessage failed (HTTP ${response.status}).`);
+    }
+  }
+
+  private static async sendChatAction(token: string, chatId: string | number): Promise<void> {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!response.ok) console.warn(`[TelegramBotService] Typing indicator failed with HTTP ${response.status}.`);
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Typing indicator unavailable; continuing with AI reply:', error?.message || error);
     }
   }
 
