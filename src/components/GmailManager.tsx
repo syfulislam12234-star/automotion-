@@ -193,13 +193,17 @@ export const GmailManager: React.FC<GmailManagerProps> = ({ onBackToChat }) => {
   };
 
   const handleSignOut = async () => {
-    await GmailService.signOut();
-    setIsAuthenticated(false);
-    setProfile(null);
-    setMessages([]);
-    setMessageDetail(null);
-    setSelectedMessageId(null);
-    showNotice('Disconnected from Gmail account.');
+    try {
+      await GmailService.signOut();
+      setIsAuthenticated(false);
+      setProfile(null);
+      setMessages([]);
+      setMessageDetail(null);
+      setSelectedMessageId(null);
+      showNotice('Disconnected from Gmail account.');
+    } catch (err: any) {
+      showNotice(err?.message || 'Unable to disconnect from Gmail.', 'error');
+    }
   };
 
   // View a specific message
@@ -760,7 +764,20 @@ export const GmailManager: React.FC<GmailManagerProps> = ({ onBackToChat }) => {
                         )}
                       </div>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 p-6 text-center">
+                      <p className="text-sm font-medium text-amber-200">Unable to load this message.</p>
+                      <p className="mt-1 text-xs text-slate-400">Select another message or try again.</p>
+                      <button
+                        type="button"
+                        onClick={() => selectedMessageId && handleSelectMessage(selectedMessageId)}
+                        disabled={!selectedMessageId || isLoadingDetail}
+                        className="mt-4 rounded-lg border border-amber-500/40 px-3 py-2 text-xs text-amber-200 hover:bg-amber-500/10 disabled:opacity-50"
+                      >
+                        {isLoadingDetail ? 'Loading...' : 'Retry'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

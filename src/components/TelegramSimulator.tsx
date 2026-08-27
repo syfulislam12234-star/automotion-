@@ -154,7 +154,10 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               }),
             });
             const adminData = await adminRes.json();
-            if (adminData && adminData.response) {
+            if (!adminRes.ok) {
+              throw new Error(adminData?.message || adminData?.error || `Admin command failed (HTTP ${adminRes.status}).`);
+            }
+            if (typeof adminData?.response === 'string') {
               // Convert HTML tags to readable formatting for simulator
               botResponse = adminData.response
                 .replace(/<b>(.*?)<\/b>/gi, '*$1*')
@@ -313,9 +316,12 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
             }),
           });
           const aiData = await aiResp.json();
-          if (aiData && aiData.text) {
+          if (!aiResp.ok) {
+            throw new Error(aiData?.message || aiData?.error || `AI generation failed (HTTP ${aiResp.status}).`);
+          }
+          if (typeof aiData?.text === 'string') {
             botResponse = aiData.text;
-            providerName = aiData.providerUsed || `Groq (${config.modelName || 'Llama 3.3 70B'})`;
+            providerName = typeof aiData?.providerUsed === 'string' ? aiData.providerUsed : `Groq (${config.modelName || 'Llama 3.3 70B'})`;
           }
         } catch (aiErr) {
           console.warn('Simulator AI generation fallback triggered:', aiErr);

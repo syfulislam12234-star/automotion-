@@ -19,15 +19,15 @@ if (typeof window !== 'undefined') {
 }
 
 // Safely resolve Firebase configuration from Vite environment variables or fallback JSON
-const env = import.meta.env;
+const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 
-const apiKey = (env.VITE_FIREBASE_API_KEY || env.VITE_FIREBASE_APIKEY || firebaseConfig.apiKey || '').trim();
-const authDomain = (env.VITE_FIREBASE_AUTH_DOMAIN || env.VITE_FIREBASE_AUTHDOMAIN || firebaseConfig.authDomain || '').trim();
-const projectId = (env.VITE_FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECTID || firebaseConfig.projectId || '').trim();
-const storageBucket = (env.VITE_FIREBASE_STORAGE_BUCKET || env.VITE_FIREBASE_STORAGEBUCKET || firebaseConfig.storageBucket || '').trim();
-const databaseId = (env.VITE_FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || '').trim();
-const appId = (env.VITE_FIREBASE_APP_ID || firebaseConfig.appId || '').trim();
-const messagingSenderId = (env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId || '').trim();
+const apiKey = (env?.VITE_FIREBASE_API_KEY || env?.VITE_FIREBASE_APIKEY || firebaseConfig?.apiKey || '').trim();
+const authDomain = (env?.VITE_FIREBASE_AUTH_DOMAIN || env?.VITE_FIREBASE_AUTHDOMAIN || firebaseConfig?.authDomain || '').trim();
+const projectId = (env?.VITE_FIREBASE_PROJECT_ID || env?.VITE_FIREBASE_PROJECTID || firebaseConfig?.projectId || '').trim();
+const storageBucket = (env?.VITE_FIREBASE_STORAGE_BUCKET || env?.VITE_FIREBASE_STORAGEBUCKET || firebaseConfig?.storageBucket || '').trim();
+const databaseId = (env?.VITE_FIREBASE_DATABASE_ID || (firebaseConfig as { firestoreDatabaseId?: string })?.firestoreDatabaseId || '').trim();
+const appId = (env?.VITE_FIREBASE_APP_ID || firebaseConfig?.appId || '').trim();
+const messagingSenderId = (env?.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig?.messagingSenderId || '').trim();
 
 export const runtimeFirebaseConfig = {
   apiKey,

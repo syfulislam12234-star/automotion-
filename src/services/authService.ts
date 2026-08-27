@@ -133,29 +133,37 @@ export class AuthService {
     }
   }
   public static async adminSignUp(params: { name: string; email: string; password: string }): Promise<any> {
-    const response = await fetch('/api/auth/admin/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    const data = await response.json();
-    if (response.ok && data.success && data.session) {
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+    try {
+      const response = await fetch('/api/auth/admin/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.success && data?.session) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+      }
+      return response.ok ? data : { success: false, message: data?.message || 'Admin registration failed.' };
+    } catch (error: any) {
+      return { success: false, message: error?.message || 'Admin registration service is unavailable.' };
     }
-    return data;
   }
 
   public static async verifyAdminSignUp(email: string, code: string): Promise<any> {
-    const response = await fetch('/api/auth/admin/signup/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, code }),
-    });
-    const data = await response.json();
-    if (response.ok && data.success && data.session) {
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+    try {
+      const response = await fetch('/api/auth/admin/signup/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.success && data?.session) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+      }
+      return response.ok ? data : { success: false, message: data?.message || 'Admin verification failed.' };
+    } catch (error: any) {
+      return { success: false, message: error?.message || 'Admin verification service is unavailable.' };
     }
-    return data;
   }
 
   private static getStoredUsers(): UserAccount[] {
@@ -656,21 +664,40 @@ export class AuthService {
 
   // Export full system backup JSON
   public static async exportBackupJson(): Promise<any> {
-    const resp = await fetch('/api/admin/backup/export');
-    if (!resp.ok) {
-      throw new Error('Failed to export server database backup');
+    try {
+      const resp = await fetch('/api/admin/backup/export');
+      if (!resp.ok) {
+        throw new Error(`Failed to export server database backup (HTTP ${resp.status}).`);
+      }
+      return await resp.json();
+    } catch (error: any) {
+      throw new Error(error?.message || 'Failed to export server database backup.');
     }
-    return await resp.json();
   }
 
   // Import full system backup JSON
   public static async importBackupJson(backupData: any): Promise<{ success: boolean; message: string; importedUsers: number; importedConfigs: number }> {
-    const resp = await fetch('/api/admin/backup/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(backupData),
-    });
-    return await resp.json();
+    try {
+      const resp = await fetch('/api/admin/backup/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backupData),
+      });
+      const data = await resp.json().catch(() => ({}));
+      return resp.ok ? data : {
+        success: false,
+        message: data?.message || `Backup import failed (HTTP ${resp.status}).`,
+        importedUsers: 0,
+        importedConfigs: 0,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: error?.message || 'Backup import service is unavailable.',
+        importedUsers: 0,
+        importedConfigs: 0,
+      };
+    }
   }
 
   // Log out current session

@@ -26,6 +26,9 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     },
   ]);
   const [input, setInput] = useState('');
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || `AI request failed (HTTP ${res.status}).`);
+      }
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -60,17 +63,18 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       const botResponse: ChatMessage = {
         id: Math.random().toString(36).substring(2, 9),
         sender: 'bot',
-        text: data.text || data.response || 'I received your query and processed it across the 100-AI failover cascade.',
+        text: typeof data?.text === 'string' ? data.text : typeof data?.response === 'string' ? data.response : 'I received your query and processed it across the 100-AI failover cascade.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, botResponse]);
     } catch (err: any) {
+      onShowToast(`⚠️ AI assistant unavailable: ${err?.message || 'Please try again.'}`);
       setMessages((prev) => [
         ...prev,
         {
           id: Math.random().toString(36).substring(2, 9),
           sender: 'bot',
-          text: `Notice: Fallback response activated. Connected to ${config.modelName}.`,
+          text: 'Unable to reach the AI service. Please try again.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);

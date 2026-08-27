@@ -27,10 +27,13 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({ onSh
     setBenchmarking(true);
     try {
       const res = await fetch('/api/telemetry/benchmark', { method: 'POST' });
-      const resData = await res.json().catch(() => ({}));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || data?.error || `Benchmark failed (HTTP ${res.status}).`);
+      }
       onShowToast('⚡ Multi-model live benchmark completed successfully!');
-    } catch (e) {
-      onShowToast('Benchmark completed on local edge cluster.');
+    } catch (e: any) {
+      onShowToast(`⚠️ Benchmark failed: ${e?.message || 'Unable to reach the telemetry service.'}`);
     } finally {
       setBenchmarking(false);
     }

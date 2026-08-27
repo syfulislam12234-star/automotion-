@@ -37,18 +37,17 @@ export const YouTubeStudioModal: React.FC<YouTubeStudioModalProps> = ({
         }),
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || `SEO generation failed (HTTP ${res.status}).`);
+      }
       setGeneratedSeo({
         title: `🔥 Master ${topic}: Complete Zero to Production Guide`,
-        description: data.text || `Comprehensive step-by-step breakdown covering ${topic} with live architecture blueprints and code walkthroughs.`,
+        description: typeof data?.text === 'string' ? data.text : `Comprehensive step-by-step breakdown covering ${topic} with live architecture blueprints and code walkthroughs.`,
         tags: [topic.toLowerCase(), 'tutorial', 'ai bot', 'python', 'groq', 'failover', 'cloud deployment'],
       });
       onShowToast('✨ AI SEO metadata generated successfully!');
-    } catch (e) {
-      setGeneratedSeo({
-        title: `Complete Guide to ${topic}`,
-        description: `Learn everything about ${topic} in this in-depth walkthrough tutorial.`,
-        tags: [topic.toLowerCase(), 'programming', 'ai', 'tech'],
-      });
+    } catch (e: any) {
+      onShowToast(`⚠️ SEO generation failed: ${e?.message || 'Please try again.'}`);
     } finally {
       setIsGenerating(false);
     }

@@ -359,7 +359,13 @@ function AppContent() {
       console.error('Failed to persist config to localStorage:', e);
     }
     // Permanently sync with server database
-    const saved = await AuthService.saveUserBotConfig(newConfig, currentUser?.id);
+    let saved = false;
+    try {
+      saved = await AuthService.saveUserBotConfig(newConfig, currentUser?.id);
+    } catch (error: any) {
+      console.error('Failed to persist bot configuration:', error);
+      showToast(`⚠️ Configuration save failed: ${error?.message || 'Please try again.'}`);
+    }
     if (!saved) {
       setConfig(previousConfig);
       try {
@@ -1023,7 +1029,7 @@ class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundary
               onClick={() => window.location.reload()}
               className="mt-5 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
             >
-              Refresh workspace
+              Reload Page
             </button>
           </div>
         </div>

@@ -233,8 +233,8 @@ export const VpsManager: React.FC<VpsManagerProps> = ({
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
-      } catch (err) {
-        // Safe fallback - browser preview or offline agent
+      } catch (err: any) {
+        onShowToast(`⚠️ VPS n8n mode sync failed: ${err?.message || 'The remote agent is unavailable.'}`);
       }
     }
 
@@ -581,20 +581,15 @@ export const VpsManager: React.FC<VpsManagerProps> = ({
       onShowToast(isSuccess ? '🚀 n8n Webhook dispatched successfully!' : '⚠️ n8n returned non-200 status');
     } catch (err: any) {
       const elapsed = Math.round(performance.now() - startTime);
-      // If browser CORS restrictions or offline test, provide comprehensive verification output
-      const isUrlValid = n8nUrl.startsWith('http://') || n8nUrl.startsWith('https://');
-
       setN8nTestResult({
-        success: isUrlValid,
-        latencyMs: Math.max(24, elapsed < 100 ? elapsed : 38),
-        statusCode: isUrlValid ? 200 : 503,
-        message: isUrlValid
-          ? `Webhook payload generated & dispatched to ${n8nUrl}. (In live production backend, server-side HTTP POST transmits without browser CORS boundaries).`
-          : `Invalid URL format. Please ensure URL begins with http:// or https://.`,
+        success: false,
+        latencyMs: elapsed,
+        statusCode: 503,
+        message: `Webhook request could not be verified. Check the URL, CORS policy, and that the n8n workflow is active.`,
         timestamp: new Date().toLocaleTimeString(),
         payloadPreview: payload,
       });
-      onShowToast('🚀 n8n Webhook test payload generated and verified!');
+      onShowToast(`⚠️ n8n Webhook test failed: ${err?.message || 'Request could not be verified.'}`);
     } finally {
       setIsDispatchingN8nTest(false);
     }
@@ -654,17 +649,14 @@ export const VpsManager: React.FC<VpsManagerProps> = ({
       });
     } catch (err: any) {
       const elapsed = Math.round(performance.now() - startTime);
-      const isSimulatedOk = apiBaseUrl.includes('194.') || apiBaseUrl.includes('localhost') || apiBaseUrl.includes('http');
-      
       setPingResult({
-        success: isSimulatedOk,
-        latencyMs: Math.max(18, elapsed < 100 ? elapsed : 34),
-        statusCode: isSimulatedOk ? 200 : 503,
-        message: isSimulatedOk
-          ? `Host reachable at ${apiBaseUrl} (Handshake verified / simulated).`
-          : `Connection timeout. Ensure ${apiBaseUrl} exposes /health with CORS headers or use the Python VPS Agent.`,
+        success: false,
+        latencyMs: elapsed,
+        statusCode: 503,
+        message: `Connection could not be verified. Ensure ${apiBaseUrl} exposes /health with CORS headers.`,
         timestamp: new Date().toLocaleTimeString(),
       });
+      onShowToast(`⚠️ VPS connection failed: ${err?.message || 'The server is unavailable.'}`);
     } finally {
       setIsTestingConnection(false);
     }

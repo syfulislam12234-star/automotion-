@@ -42,13 +42,18 @@ export const AdminControlPanel: React.FC<AdminControlPanelProps> = ({
         body: JSON.stringify({ command: cmd }),
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || `Command failed (HTTP ${res.status}).`);
+      }
       setCommandOutput((prev) => [
         `> ${cmd}`,
-        data.output || data.message || 'Executed successfully.',
+        typeof data?.output === 'string' ? data.output : typeof data?.message === 'string' ? data.message : 'Executed successfully.',
         ...prev.slice(0, 20),
       ]);
     } catch (err: any) {
-      setCommandOutput((prev) => [`> ${cmd}`, `Error: ${err.message}`, ...prev.slice(0, 20)]);
+      const message = err?.message || 'Unable to execute command.';
+      setCommandOutput((prev) => [`> ${cmd}`, `Error: ${message}`, ...prev.slice(0, 20)]);
+      onShowToast(`⚠️ Admin command failed: ${message}`);
     } finally {
       setIsExecuting(false);
     }

@@ -29,6 +29,9 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
     try {
       const res = await fetch('/api/cron/trigger', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || data?.error || `Broadcast failed (HTTP ${res.status}).`);
+      }
       setHistory((prev) => [
         {
           id: Math.random().toString(36).substring(2, 9),
@@ -40,8 +43,8 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
         ...prev,
       ]);
       onShowToast('📡 Automated broadcast dispatched across all active channels!');
-    } catch (e) {
-      onShowToast('Dispatched to local channel listeners.');
+    } catch (e: any) {
+      onShowToast(`⚠️ Broadcast failed: ${e?.message || 'Unable to reach the broadcast service.'}`);
     } finally {
       setIsRunning(false);
     }
