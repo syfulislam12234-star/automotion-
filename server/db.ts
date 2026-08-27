@@ -97,6 +97,9 @@ export class ServerDatabase {
     const email = data.email.toLowerCase().trim();
     const existing = ServerDatabase.db.users.find(u => u.email === email);
     if (existing) {
+      if (!existing.isVerified) {
+        return { success: false, message: 'Account exists but has not been verified.', user: existing };
+      }
       existing.isVerified = true;
       const token = 'tok_' + crypto.randomBytes(24).toString('hex');
       const session: AuthSession = {
@@ -110,7 +113,7 @@ export class ServerDatabase {
       ServerDatabase.save();
       return {
         success: true,
-        message: 'Account active and instantly verified.',
+        message: 'Account is already verified and active.',
         user: existing,
         session,
       };
@@ -122,7 +125,9 @@ export class ServerDatabase {
       name: data.name.trim() || 'Developer',
       email,
       role: 'admin',
-      isVerified: true,
+      isVerified: false,
+      verificationCode: String(crypto.randomInt(100000, 1000000)),
+      verificationCodeExpiresAt: Date.now() + 10 * 60 * 1000,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
       avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
@@ -137,7 +142,7 @@ export class ServerDatabase {
       token,
       user: newUser,
       expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-      isVerified: true,
+      isVerified: false,
       adminAuthorized: true,
     };
     ServerDatabase.db.sessions[token] = session;
@@ -145,9 +150,10 @@ export class ServerDatabase {
 
     return {
       success: true,
-      message: 'Account created and verified instantly.',
+      message: 'Account created. A 6-digit verification code is required.',
       user: newUser,
       session,
+      verificationCode: newUser.verificationCode,
     };
   }
 
@@ -229,6 +235,10 @@ export class ServerDatabase {
       };
       ServerDatabase.db.users.push(user);
       ServerDatabase.db.passwords[user.id] = crypto.createHash('sha256').update(data.password).digest('hex');
+    }
+
+    if (!user.isVerified) {
+      return { success: false, message: 'Please verify your account before logging in.', requiresVerification: true, unverifiedUser: user };
     }
 
     user.isVerified = true;

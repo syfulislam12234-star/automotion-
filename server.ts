@@ -670,7 +670,13 @@ async function startServer() {
       const response = await fetch(`http://127.0.0.1:${PORT}/api/ai/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Internal-Channel-Request': 'true' },
-        body: JSON.stringify({ prompt, model: preferredModel, enableEnsemble: false, platform: 'telegram' }),
+        body: JSON.stringify({
+          prompt,
+          model: preferredModel,
+          systemPrompt: `${MANDATORY_LANGUAGE_PROMPT} Respond naturally in the user's input language, including Bengali or Banglish. Return only the answer to the user's message.`,
+          enableEnsemble: false,
+          platform: 'telegram',
+        }),
         signal: AbortSignal.timeout(2500),
       });
       const data = await response.json().catch(() => ({}));
@@ -1287,7 +1293,7 @@ async function startServer() {
       } else if (lower.includes('thank') || lower.includes('thanks')) {
         fallbackText = `You're very welcome! Let me know if there's anything else you need.`;
       } else {
-        fallbackText = `I have received your inquiry: **"${userQuery.length > 80 ? userQuery.slice(0, 80) + '...' : userQuery}"**.\n\nPlease let me know if you would like me to elaborate or take specific action!`;
+        fallbackText = 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
       }
 
       return res.json({
@@ -1550,7 +1556,14 @@ async function startServer() {
         return res.status(400).json(result);
       }
 
-      return res.status(201).json({ ...result, message: 'Account created and verified successfully.' });
+      if (result.verificationCode) {
+        return void sendEmailVerificationCode(email, result.verificationCode).then((sent) => res.status(201).json({
+          ...result,
+          message: sent ? 'Account created. Check your email for the one-time verification code.' : 'Account created. Use the verification code logged by the server administrator.',
+          session: result.session ? { ...result.session, isVerified: false } : undefined,
+        })).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
+      }
+      return res.status(201).json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Registration failed' });
     }
@@ -1575,7 +1588,9 @@ async function startServer() {
       const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
       if (!email || code.length !== 6) return res.status(400).json({ success: false, message: 'A valid email and 6-digit verification code are required.' });
       const result = ServerDatabase.completePendingAdminRegistration(email, code);
-      return result.success ? res.status(201).json(result) : res.status(400).json(result);
+      if (result.success) return res.status(201).json(result);
+      const standardResult = ServerDatabase.verifyOtp(email, code, req.headers.authorization);
+      return standardResult.success ? res.status(201).json(standardResult) : res.status(400).json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Administrator verification failed.' });
     }
@@ -1591,6 +1606,10 @@ async function startServer() {
 
       const result = ServerDatabase.verifyPasswordAndLogin({ email, password });
       if (!result.success) {
+        if (result.requiresVerification && result.unverifiedUser) {
+          const { verificationCode: _verificationCode, verificationCodeExpiresAt: _expiresAt, ...safeUser } = result.unverifiedUser;
+          return res.status(403).json({ ...result, unverifiedUser: safeUser });
+        }
         return res.status(401).json(result);
       }
 

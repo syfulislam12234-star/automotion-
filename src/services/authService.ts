@@ -318,8 +318,8 @@ export class AuthService {
       || typeof rawUser.id !== 'string' || !rawUser.id || typeof rawUser.email !== 'string' || !rawUser.email) return null;
 
     const user = rawUser as Partial<UserAccount>;
-    const sessionIsVerified = true;
-    const userIsVerified = true;
+    const sessionIsVerified = candidate.isVerified === true;
+    const userIsVerified = user.isVerified === true;
     const normalizedUser: UserAccount = {
       ...user,
       id: user.id,
@@ -336,8 +336,8 @@ export class AuthService {
       token: candidate.token,
       user: normalizedUser,
       expiresAt: typeof candidate.expiresAt === 'number' ? candidate.expiresAt : Date.now() + 365 * 24 * 60 * 60 * 1000,
-      isVerified: true,
-      adminAuthorized: true,
+      isVerified: sessionIsVerified,
+      adminAuthorized: candidate.adminAuthorized === true && sessionIsVerified,
     } as AuthSession;
   }
 
@@ -413,24 +413,25 @@ export class AuthService {
         body: JSON.stringify(params),
       });
       const data = await resp.json();
-      if (resp.ok && data.success) {
+      if (resp.ok && data.success && data.user) {
         const verifiedUser: UserAccount = {
           ...data.user,
-          isVerified: true,
+          isVerified: data.session?.isVerified === true,
         };
-        const verifiedSession: AuthSession = {
-          token: data.session?.token || `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+        const signupSession: AuthSession = {
+          token: data.session?.token || `signup_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
           user: verifiedUser,
           expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-          isVerified: true,
-          adminAuthorized: true,
+          isVerified: verifiedUser.isVerified,
+          adminAuthorized: verifiedUser.isVerified && verifiedUser.role === 'admin',
         };
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(verifiedSession));
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(signupSession));
         return {
           success: true,
-          message: `Welcome, ${verifiedUser.name}! Account created & instantly verified.`,
+          message: data.message || `Account created for ${verifiedUser.name}.`,
           user: verifiedUser,
-          session: verifiedSession,
+          session: signupSession,
+          verificationCode: data.verificationCode,
         };
       }
     } catch (err) {
@@ -478,27 +479,38 @@ export class AuthService {
     };
   }
 
-  // Verify OTP and issue session token (Direct auto-success)
+  // Verify OTP once and issue the persisted verified session.
   public static async verifyEmailCode(email: string, code: string): Promise<{ success: boolean; message: string; session?: AuthSession }> {
-    const cleanEmail = email.toLowerCase().trim();
-    const session = this.createBypassSession('admin');
-    session.user.email = cleanEmail || session.user.email;
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-
-    return {
-      success: true,
-      message: 'Access verified successfully! Welcome to the workspace.',
-      session,
-    };
+    try {
+      const response = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success && data.session) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
+        return data;
+      }
+      return { success: false, message: data.message || 'Verification failed.' };
+    } catch (error: any) {
+      return { success: false, message: error?.message || 'Verification service is unavailable.' };
+    }
   }
 
   // Resend OTP code
   public static async resendVerificationCode(email: string): Promise<{ success: boolean; message: string; code?: string }> {
-    return {
-      success: true,
-      message: 'OTP requirement bypassed for instant preview.',
-      code: '888888',
-    };
+    try {
+      const response = await fetch('/api/auth/resend-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json().catch(() => ({}));
+      return response.ok ? data : { success: false, message: data.message || 'Unable to resend verification code.' };
+    } catch (error: any) {
+      return { success: false, message: error?.message || 'Verification service is unavailable.' };
+    }
   }
 
   // Log in existing user (Instant verification, bypasses OTP)
@@ -539,6 +551,15 @@ export class AuthService {
           message: data.message || `Welcome back!`,
           session: verifiedSession,
           requiresVerification: false,
+        };
+      }
+      if (data.requiresVerification || data.unverifiedUser) {
+        return {
+          success: false,
+          message: data.message || 'Please verify your account before logging in.',
+          requiresVerification: true,
+          unverifiedUser: data.unverifiedUser,
+          verificationCode: data.verificationCode,
         };
       }
     } catch (err) {
