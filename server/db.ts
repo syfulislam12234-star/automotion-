@@ -127,7 +127,7 @@ export class ServerDatabase {
       role: 'admin',
       isVerified: false,
       verificationCode: String(crypto.randomInt(100000, 1000000)),
-      verificationCodeExpiresAt: Date.now() + 10 * 60 * 1000,
+      verificationCodeExpiresAt: Date.now() + 5 * 60 * 1000,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
       avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
@@ -337,7 +337,7 @@ export class ServerDatabase {
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     user.verificationCode = code;
-    user.verificationCodeExpiresAt = Date.now() + 10 * 60 * 1000;
+    user.verificationCodeExpiresAt = Date.now() + 5 * 60 * 1000;
     ServerDatabase.save();
 
     return { success: true, message: 'Verification code resent.', code, verificationCode: code };

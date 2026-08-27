@@ -15,6 +15,7 @@ import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
 import { EdgeTTS } from 'node-edge-tts';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -22,6 +23,14 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM;
+const GMAIL_USER = String(process.env.GMAIL_USER || '').trim();
+const GMAIL_APP_PASSWORD = String(process.env.GMAIL_APP_PASSWORD || '').trim();
+const gmailTransporter = GMAIL_USER && GMAIL_APP_PASSWORD
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+    })
+  : null;
 
 async function sendAdminRegistrationCode(email: string, code: string): Promise<boolean> {
   if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) {
@@ -48,25 +57,21 @@ async function sendAdminRegistrationCode(email: string, code: string): Promise<b
 }
 
 async function sendEmailVerificationCode(email: string, code: string): Promise<boolean> {
-  if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) {
-    console.warn(`[Auth OTP FALLBACK] Code for ${email}: ${code}`);
+  if (!gmailTransporter || !GMAIL_USER) {
+    console.warn('[Auth OTP] Gmail SMTP is not configured; verification email was not sent.');
     return false;
   }
   try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: AUTH_EMAIL_FROM,
-        to: [email],
-        subject: 'Your email verification code',
-        text: `Your 6-digit verification code is ${code}. It expires in 10 minutes.`,
-      }),
+    await gmailTransporter.sendMail({
+      from: GMAIL_USER,
+      to: email,
+      subject: 'Your Automotion verification code',
+      text: `Your 6-digit verification code is ${code}. It expires in 5 minutes.`,
+      html: `<div style="font-family:Arial,sans-serif;line-height:1.6"><h2>Verify your Automotion account</h2><p>Use this one-time verification code:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">${code}</p><p>This code expires in 5 minutes and can only be used once.</p></div>`,
     });
-    return response.ok;
+    return true;
   } catch (error) {
-    console.warn('[Auth] Verification email unavailable:', error);
-    console.warn(`[Auth OTP FALLBACK] Code for ${email}: ${code}`);
+    console.warn('[Auth OTP] Gmail SMTP delivery failed:', error);
     return false;
   }
 }
