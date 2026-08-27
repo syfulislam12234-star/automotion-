@@ -301,15 +301,7 @@ async def generate_ai_reply(chat_id: int, prompt: str) -> str:
     except Exception as e:
         logger.warning(f"⚠️ Tier 5 (Pollinations) notice: {e}.")
 
-    # Deterministic fallback
-    return (
-        f"🤖 **Universal AI Response**\n\n"
-        f"I received your request: **\"{prompt}\"**\n\n"
-        f"⚡ **AI Cascade Status:**\n"
-        f"• The bot service is online and active.\n"
-        f"• Add `GROQ_API_KEY_1` or `GEMINI_API_KEY` to your environment variables for continuous high-speed LLM reasoning.\n\n"
-        f"Try commands like `/image`, `/weather`, `/translate`, `/summarize`, or `/search`!"
-    )
+    return ""
 
 
 def update_chat_history(chat_id: int, user_text: str, assistant_text: str) -> None:
@@ -853,6 +845,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Generate response
     reply_text = await generate_ai_reply(chat_id, user_text)
+    if not reply_text.strip():
+        logger.warning("No AI response was available for Telegram message from %s.", chat_id)
+        return
 
     # Save to sliding window history
     update_chat_history(chat_id, user_text, reply_text)

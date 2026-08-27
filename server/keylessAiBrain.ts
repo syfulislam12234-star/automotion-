@@ -72,14 +72,7 @@ export class KeylessAiBrain {
       console.warn('[KeylessBrain] HuggingFace Free fallback:', e?.message || e);
     }
 
-    // 4. Intelligent Contextual Synthesizer (Zero-Network Fallback Guarantee)
-    const contextualText = KeylessAiBrain.generateContextualResponse(prompt, systemInstruction);
-    return {
-      text: contextualText,
-      modelUsed: 'Contextual-Emergency-Synthesizer',
-      provider: 'contextual_engine',
-      latencyMs: Date.now() - startTime,
-    };
+    throw new Error('All keyless AI providers returned no usable response.');
   }
 
   /**
@@ -239,27 +232,8 @@ export class KeylessAiBrain {
    * Intelligent Contextual Synthesizer (Instant local fallback)
    */
   private static generateContextualResponse(prompt: string, systemPrompt: string): string {
-    const isBengali = /[\u0980-\u09FF]/.test(prompt + ' ' + systemPrompt);
-    const isEmergency = /emergency|জরুরি|বন্যা|ঘূর্ণিঝড়|আবহাওয়া|alert|help|police|fire/i.test(prompt);
-
-    if (isBengali) {
-      if (isEmergency) {
-        return `🚨 **বাংলাদেশ জাতীয় জরুরি বুলেটিন**
-• আবহাওয়া অধিদপ্তর ও দুর্যোগ ব্যবস্থাপনা কেন্দ্র সার্বক্ষণিক পরিস্থিতি পর্যবেক্ষণ করছে।
-• উপকূলীয় ও নদী বন্দরসমূহে সতর্কতা সংকেত বহাল রাখা হয়েছে।
-• জরুরি প্রয়োজনে ডায়াল করুন: ৯৯৯ (জাতীয় জরুরি সেবা) অথবা ১০৯০ (দুর্যোগ সতর্কতা)।`;
-      }
-      return `🇧🇩 **সার্বক্ষণিক স্বয়ংক্রিয় বার্তা**
-আপনার বার্তাটি সফলভাবে গৃহীত হয়েছে। সার্বক্ষণিক মাল্টি-চ্যানেল বট ইঞ্জিন এবং ব্যাকগ্রাউন্ড নোটিফিকেশন সার্ভিস সচল রয়েছে। কোনো জরুরি জিজ্ঞাসা থাকলে জানান।`;
-    }
-
-    if (isEmergency) {
-      return `🚨 **Emergency Alert Broadcast Summary**
-• National weather and disaster monitoring centers are actively observing maritime and river basins.
-• All coastal ports are advised to maintain standard safety advisories.
-• National Helplines: 999 (National Emergency) | 1090 (Disaster Advisory) | 333 (Govt Services).`;
-    }
-
-    return `I have processed your request. The Universal Multi-Platform Bot Engine is running online with automated 24/7 channel monitoring and failover protection.`;
+    void prompt;
+    void systemPrompt;
+    throw new Error('No contextual AI response is available.');
   }
 }

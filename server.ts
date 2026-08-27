@@ -681,7 +681,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[TelegramBotService] Unified AI request failed:', error?.message || error);
       const fallback = await generateFreeAiText([{ role: 'user', content: prompt }], model);
-      return fallback?.text || null;
+      return fallback && fallback.modelUsed !== 'Contextual-Emergency-Synthesizer' ? fallback.text : null;
     }
   });
 
