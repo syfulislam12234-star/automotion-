@@ -80,19 +80,15 @@ export class TelegramBotService {
 
       let reply: string | null = null;
       try {
-        reply = await TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName);
+        reply = await Promise.race([
+          TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Primary Telegram AI response timed out.')), 5000)),
+        ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
       } catch (error: any) {
         console.warn('[TelegramBotService] Primary AI route unavailable; trying public Pollinations fallback:', error?.message || error);
         try {
-          const fallbackResponse = await fetch('https://text.pollinations.ai/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              messages: [{ role: 'user', content: text }],
-              model: 'openai',
-              seed: Math.floor(Math.random() * 100000),
-            }),
+          const fallbackResponse = await fetch(`https://text.pollinations.ai/${encodeURIComponent(text)}`, {
             signal: AbortSignal.timeout(5000),
           });
           const fallbackText = await fallbackResponse.text();
@@ -108,8 +104,7 @@ export class TelegramBotService {
         }
       }
       if (!reply?.trim()) {
-        console.warn('[TelegramBotService] AI response unavailable; update skipped safely.');
-        return { ok: true, skipped: true };
+        reply = 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
       }
       await TelegramBotService.sendMessage(token, chatId, reply.trim());
       TelegramBotService.lastError = null;

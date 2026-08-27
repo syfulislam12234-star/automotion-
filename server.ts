@@ -858,7 +858,7 @@ async function startServer() {
 
       // Process update asynchronously so Telegram receives 200 OK fast
       res.status(200).json({ ok: true });
-      void TelegramBotService.handleUpdate(update, secretHeader).catch((err) => {
+      TelegramBotService.handleUpdate(update, secretHeader).catch((err) => {
         console.error('❌ [Webhook Handler] Async update processing error:', err);
       });
       return;

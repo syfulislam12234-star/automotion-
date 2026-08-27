@@ -47,7 +47,7 @@ export class AiService {
           enableEnsemble: false,
           isChatAssistant: true,
         }),
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(5000),
       });
       const data = await response.json().catch(() => ({}));
       if (response.ok && typeof data?.text === 'string' && data.text.trim()) return data.text.trim();
@@ -69,12 +69,7 @@ export class AiService {
       }
     }
 
-    // Direct conversational fallback so UI never breaks
-    const lower = prompt.toLowerCase();
-    if (lower.includes('hello') || lower.includes('hi') || lower.includes('hey')) {
-      return `👋 **Hello!** I am your Universal Bot AI Copilot.\n\nI can help you build bots, configure multi-channel gateways, troubleshoot webhooks, or test automation scripts. What would you like to work on?`;
-    }
-    return `🤖 **AI Assistant Response**\n\nI received your message: *"**${prompt.slice(0, 100)}**"*\n\nHere are some quick actions you can perform:\n- **Test Commands**: Try typing \`/help\`, \`/stats\`, or \`/ai\` in the Telegram Simulator.\n- **Configure AI**: Customize your system prompt or provider keys in the **AI Super-Brain** panel.\n- **Cloud Deployment**: Launch background polling or webhook workers in the **VPS Cloud Engine**.`;
+    return 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
   }
 
   public static async getFreeModelCatalog(): Promise<FreeModelCatalog> {

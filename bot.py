@@ -301,7 +301,7 @@ async def generate_ai_reply(chat_id: int, prompt: str) -> str:
     except Exception as e:
         logger.warning(f"⚠️ Tier 5 (Pollinations) notice: {e}.")
 
-    return ""
+    return "দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।"
 
 
 def update_chat_history(chat_id: int, user_text: str, assistant_text: str) -> None:
@@ -999,7 +999,15 @@ def create_web_application(tg_app: Optional[Application] = None) -> web.Applicat
             # Parse and dispatch update into python-telegram-bot application
             update = Update.de_json(data=body, bot=tg_app.bot)
             if update:
-                asyncio.create_task(tg_app.process_update(update))
+                task = asyncio.create_task(tg_app.process_update(update))
+                task.add_done_callback(
+                    lambda completed_task: logger.error(
+                        "❌ Webhook update processing error: %s",
+                        completed_task.exception(),
+                    )
+                    if not completed_task.cancelled() and completed_task.exception()
+                    else None
+                )
             return web.json_response({"ok": True}, status=200)
         except Exception as err:
             logger.error(f"❌ Webhook update processing error: {err}")

@@ -303,8 +303,9 @@ export const UnifiedChatWorkspace: React.FC<UnifiedChatWorkspaceProps> = ({
         });
         providerLabel = 'Unified AI Fallback Engine';
       } catch (fallbackErr) {
-        botResponseText = `🤖 **AI Assistant Response**\n\nI processed your request: *"**${textToSend}**"*\n\nHere is how you can proceed:\n1. **Telegram & Discord:** Test sending commands using the **10-Channel Simulator**.\n2. **API Keys:** Unlock the **API Vault** to manage keys for 20+ providers.\n3. **Cloud VPS:** Monitor live server health and background workers.`;
-        providerLabel = 'Universal Local Core';
+        console.warn('[UnifiedChatWorkspace] AI fallback unavailable:', fallbackErr);
+        botResponseText = 'দুঃখিত, এই মুহূর্তে এআই সেবা সাময়িকভাবে unavailable। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
+        providerLabel = 'Bengali Recovery Response';
       }
     } finally {
       const latency = Date.now() - startTime;
