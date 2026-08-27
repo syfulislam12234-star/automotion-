@@ -361,7 +361,7 @@ export class AuthService {
       name: params.name.trim(),
       email: cleanEmail,
       role: params.role || (cleanEmail.includes('admin') ? 'admin' : 'developer'),
-      isVerified: true,
+      isVerified: false,
       verificationCode,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
@@ -560,6 +560,26 @@ export class AuthService {
     }
 
     user.lastLoginAt = new Date().toISOString();
+    if (user.isVerified !== false) {
+      user.isVerified = true;
+      this.saveUsers(users);
+
+      const session: AuthSession = {
+        token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+        user,
+        expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+        isVerified: true,
+        adminAuthorized: user.role === 'admin',
+      };
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+
+      return {
+        success: true,
+        message: `Welcome back, ${user.name}!`,
+        session,
+      };
+    }
+
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
     user.verificationCode = verificationCode;
     this.saveUsers(users);
