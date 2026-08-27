@@ -285,12 +285,42 @@ const getInitialConfig = (): BotConfig => {
     const saved = localStorage.getItem(CONFIG_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      return { ...DEFAULT_CONFIG, ...parsed };
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return {
+          ...DEFAULT_CONFIG,
+          ...parsed,
+          n8nEventTriggers: {
+            ...DEFAULT_CONFIG.n8nEventTriggers,
+            ...(parsed.n8nEventTriggers && typeof parsed.n8nEventTriggers === 'object'
+              ? parsed.n8nEventTriggers
+              : {}),
+          },
+        };
+      }
     }
   } catch (e) {
     console.error('Failed to load config from localStorage:', e);
   }
-  return DEFAULT_CONFIG;
+  return { ...DEFAULT_CONFIG, n8nEventTriggers: { ...DEFAULT_CONFIG.n8nEventTriggers } };
+};
+
+const isValidSession = (value: AuthSession | null | undefined): value is AuthSession => (
+  Boolean(value?.token && value?.user?.id && value?.user?.email)
+);
+
+const normalizeWorkspaceConfig = (value: unknown): BotConfig => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return getInitialConfig();
+  const candidate = value as Partial<BotConfig>;
+  return {
+    ...getInitialConfig(),
+    ...candidate,
+    n8nEventTriggers: {
+      ...DEFAULT_CONFIG.n8nEventTriggers,
+      ...(candidate.n8nEventTriggers && typeof candidate.n8nEventTriggers === 'object'
+        ? candidate.n8nEventTriggers
+        : {}),
+    },
+  };
 };
 
 function AppContent() {
@@ -299,7 +329,13 @@ function AppContent() {
 
   // User Authentication & Session State
   const [session, setSession] = useState<AuthSession | null>(() => {
-    return AuthService.getCurrentSession();
+    try {
+      const storedSession = AuthService.getCurrentSession();
+      return isValidSession(storedSession) ? storedSession : null;
+    } catch (error) {
+      console.error('Failed to initialize authentication session:', error);
+      return null;
+    }
   });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
@@ -327,23 +363,32 @@ function AppContent() {
     const fallbackTimer = setTimeout(() => {
       if (isMounted) setLoading(false);
     }, 2000);
-    AuthService.syncSessionWithServer()
-      .then(({ session: updatedSession, botConfig: serverConfig }) => {
+    const initializeWorkspace = async () => {
+      try {
+        const result = await AuthService.syncSessionWithServer();
         if (!isMounted) return;
-        if (updatedSession) {
+
+        const updatedSession = result?.session;
+        const serverConfig = result?.botConfig;
+        if (isValidSession(updatedSession)) {
           setSession(updatedSession);
+        } else if (updatedSession === null) {
+          setSession(null);
         }
         if (serverConfig) {
-          setConfig((prev) => ({ ...prev, ...serverConfig }));
+          setConfig((previous) => normalizeWorkspaceConfig({ ...previous, ...serverConfig }));
         }
-        setLoading(false);
-      })
-      .catch((error) => {
+      } catch (error) {
+        console.warn('Workspace initialization unavailable; opening the authentication view.', error);
         if (isMounted) {
-          console.warn('Session check unavailable; continuing with the local authentication state.', error);
-          setLoading(false);
+          setSession(null);
+          setConfig(getInitialConfig());
         }
-      });
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    void initializeWorkspace();
     return () => {
       isMounted = false;
       clearTimeout(fallbackTimer);
