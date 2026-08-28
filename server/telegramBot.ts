@@ -1,5 +1,7 @@
 import { BotConfig } from '../src/types';
 import { uploadYouTubeVideo } from './youtubeService';
+import { GlobalApiKeyStore } from './keyStore';
+import { FailoverEngine } from './aiFailoverEngine';
 
 interface TelegramUploadState {
   step: 'file' | 'privacy' | 'kids';
@@ -68,6 +70,8 @@ export class TelegramBotService {
       aiCascade: {
         primary: TelegramBotService.currentConfig?.modelName || 'llama-3.3-70b-versatile',
         failoverEnabled: true,
+        activeProviders: GlobalApiKeyStore.getActiveProviderIds().length,
+        activeKeys: GlobalApiKeyStore.getStats().keys,
       },
     };
   }
@@ -181,14 +185,23 @@ export class TelegramBotService {
       try {
         reply = await Promise.race([
           TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Shared Telegram AI route timed out.')), 3500)),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Shared Telegram AI route timed out.')), 20000)),
         ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
       } catch (error: any) {
         console.warn('[TelegramBotService] Configured API provider cascade unavailable:', error?.message || error);
       }
+      if (!reply?.trim() && TelegramBotService.aiGenerator) {
+        // ⚡ Millisecond failover: rapid sequential retries across the entire active provider pool
+        const direct = await FailoverEngine.generate([{ role: 'user', content: text }], {
+          preferredModel: TelegramBotService.currentConfig?.modelName || undefined,
+        }).catch(() => null);
+        if (direct?.text?.trim()) reply = direct.text.trim();
+      }
       if (!reply?.trim()) {
-        reply = 'Please add at least one API key in the API Portal to enable AI features.';
+        reply = GlobalApiKeyStore.hasAnyKeys()
+          ? '⚡ All active AI routes are momentarily busy. Please resend your message in a few seconds — the failover engine will route it to the next available provider.'
+          : 'Please add at least one API key in the API Portal to enable AI features.';
       }
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text));
       TelegramBotService.lastError = null;

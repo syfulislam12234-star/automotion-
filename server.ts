@@ -13,6 +13,8 @@ import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { AI_PROVIDER_GATEWAYS_100 } from './src/data/aiProviders100';
+import { GlobalApiKeyStore } from './server/keyStore';
+import { FailoverEngine } from './server/aiFailoverEngine';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
@@ -129,16 +131,38 @@ function requestsSensitiveInternals(prompt: unknown): boolean {
 // Initialize permanent database storage
 ServerDatabase.init();
 
-// Helper to retrieve all active keys for a provider from env
+// Bootstrap the global server-side key store (environment + persistent database + runtime saves)
+GlobalApiKeyStore.bootstrap();
+
+// Helper to retrieve all active keys for a provider from environment AND the global store
+// (persistent database botConfigs + live runtime saves), so keys saved in the API Portal
+// are instantly visible to every backend AI generator (Telegram, channels, cron, proxy).
 function getProviderApiKeys(prefixes: string[]): string[] {
   const keys: string[] = [];
+  const pushKey = (candidate: unknown) => {
+    if (typeof candidate !== 'string') return;
+    const trimmed = candidate.trim();
+    if (trimmed && !trimmed.startsWith('YOUR_') && !keys.includes(trimmed)) keys.push(trimmed);
+  };
   for (const prefix of prefixes) {
-    const val = process.env[prefix];
-    if (val && typeof val === 'string' && val.trim() && !val.startsWith('YOUR_') && !keys.includes(val.trim())) {
-      keys.push(val.trim());
-    }
+    pushKey(process.env[prefix]);
+    GlobalApiKeyStore.lookupByName(prefix).forEach(pushKey);
+  }
+  for (const prefix of prefixes) {
+    const providerId = GlobalApiKeyStore.resolveProviderFromName(prefix);
+    if (providerId) GlobalApiKeyStore.getKeysForProvider(providerId).forEach(pushKey);
   }
   return keys;
+}
+
+// ⚡ Millisecond failover engine bridge used across all configured provider routes
+async function runMillisecondFailover(messages: any[], preferredProvider?: string, preferredModel?: string) {
+  try {
+    return await FailoverEngine.generate(messages, { preferredProvider, preferredModel });
+  } catch (error: any) {
+    console.warn('[FailoverEngine] Cascade exhausted:', error?.message || error);
+    return null;
+  }
 }
 
 // Resilient Gemini Generator with automatic multi-key, multi-model fallback and per-model timeout
@@ -438,6 +462,10 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     }
   }
 
+  // ⚡ Millisecond failover across the entire active provider pool before giving up
+  const failoverResult = await runMillisecondFailover(messages, undefined, preferredModel);
+  if (failoverResult?.text?.trim()) return failoverResult.text.trim();
+
   return null;
 }
 
@@ -566,6 +594,12 @@ async function generateConfiguredProviderText(messages: any[], preferredModel?: 
     } catch (error: any) {
       console.warn('[AI Cascade] Provider failed; trying next provider:', error?.message || error);
     }
+  }
+
+  // ⚡ Millisecond failover across the entire active provider pool before giving up
+  const failoverResult = await runMillisecondFailover(aiMessages, undefined, preferredModel);
+  if (failoverResult?.text?.trim()) {
+    return { text: failoverResult.text.trim(), modelUsed: `${failoverResult.providerName} (${failoverResult.model})` };
   }
 
   return null;
@@ -719,7 +753,8 @@ async function startServer() {
           enableEnsemble: false,
           platform: 'telegram',
         }),
-        signal: AbortSignal.timeout(3500),
+        // Generous deadline: the centralized route now runs the millisecond failover engine internally.
+        signal: AbortSignal.timeout(15000),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || typeof data.text !== 'string') {
@@ -1100,6 +1135,15 @@ async function startServer() {
     }
   });
 
+  // Active provider pool diagnostics (no key material is ever returned)
+  app.get('/api/ai/pool', (_req, res) => {
+    try {
+      return res.json({ success: true, pool: FailoverEngine.getPoolSnapshot(), store: GlobalApiKeyStore.getStats() });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error?.message || 'Pool diagnostics unavailable.' });
+    }
+  });
+
   app.post('/api/ai/save-key', (req, res) => {
     void (async () => {
       try {
@@ -1108,6 +1152,10 @@ async function startServer() {
         const token = typeof req.body?.token === 'string' ? req.body.token.trim() : typeof req.body?.key === 'string' ? req.body.key.trim() : '';
         if (!provider || !token) return res.status(200).json({ success: true, message: 'Configuration persisted' });
         if (!AI_PROVIDER_GATEWAYS_100.some((entry) => entry.id === provider)) return res.status(200).json({ success: true, message: 'Configuration persisted' });
+
+        // Register instantly into the global active key pool so every backend service
+        // (Telegram bot, multi-channel gateway, cron workers) can use it right away.
+        GlobalApiKeyStore.register(provider, token, 'runtime');
 
         const targetId = user?.id || 'guest_api_key_user';
         const existingConfig = ServerDatabase.getBotConfig(targetId)?.config || {};
@@ -1387,6 +1435,26 @@ async function startServer() {
           providerUsed: `Configured API Provider (${configuredCascadeResult.modelUsed})`,
           tier: 'Configured API Provider Cascade',
           latencyMs: Date.now() - generationStart,
+        });
+      }
+
+      // ⚡ Millisecond Multi-Model Failover Engine — rapid sequential retries across the
+      // ENTIRE active provider pool (OpenAI, Claude, Gemini, Groq, OpenRouter, Cerebras,
+      // SambaNova, Mistral, DeepSeek, Together, NVIDIA NIM, ...) with a 3s deadline per
+      // attempt. The user never receives an error while at least one valid key is active.
+      const failoverResult = await runMillisecondFailover(groqMessages, selectedProvider || undefined, selectedProviderModel || model);
+      if (failoverResult?.text) {
+        return res.json({
+          success: true,
+          text: failoverResult.text,
+          providerUsed: `⚡ Millisecond Failover Engine (${failoverResult.providerName} · ${failoverResult.model})`,
+          tier: 'Millisecond Multi-Model Failover Cascade',
+          latencyMs: Date.now() - generationStart,
+          failoverTelemetry: {
+            attempts: failoverResult.attempts,
+            cascadeTrail: failoverResult.trail,
+            activeProviders: failoverResult.activeProviders,
+          },
         });
       }
 
@@ -1881,6 +1949,7 @@ async function startServer() {
           ...(legacyKeyByProvider[provider] && token ? { [legacyKeyByProvider[provider]]: token } : {}),
         });
         ServerDatabase.saveBotConfig(targetId, config);
+        GlobalApiKeyStore.syncFromDatabase();
         try {
           await refreshRuntimeConfig(targetId, config, existingConfig);
         } catch (error: any) {
@@ -1899,6 +1968,7 @@ async function startServer() {
 
       const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
       const result = ServerDatabase.saveBotConfig(targetId, config);
+      GlobalApiKeyStore.syncFromDatabase();
       try {
         await refreshRuntimeConfig(targetId, config, previousConfig);
       } catch (error: any) {
@@ -1978,6 +2048,7 @@ async function startServer() {
 
       const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
       ServerDatabase.saveBotConfig(targetId, config);
+      GlobalApiKeyStore.syncFromDatabase();
       try {
         await refreshRuntimeConfig(targetId, config, previousConfig);
       } catch (error: any) {

@@ -64,26 +64,40 @@ export class AiService {
       { role: 'system' as const, content: systemPrompt },
       ...messages.filter((message) => message.role !== 'system'),
     ];
-    const primaryTimeoutMs = 450;
+    const primaryTimeoutMs = 20000;
 
-    try {
-      const response = await fetch('/api/ai/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          model: request.model || 'openrouter/deepseek/deepseek-r1',
-          systemPrompt,
-          messages: messagesWithSystem,
-          enableEnsemble: false,
-          isChatAssistant: true,
-        }),
-        signal: AbortSignal.timeout(primaryTimeoutMs),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && typeof data?.text === 'string' && data.text.trim()) return this.withYouTubeLink(data.text.trim(), prompt);
-    } catch (error) {
-      console.warn('[AI Chat] Primary route unavailable; switching to public fallback.', error);
+    // ⚡ Millisecond multi-model failover: cycle through model routes with generous
+    // deadlines while the backend Millisecond Failover Engine cycles the entire
+    // active provider pool internally on every attempt.
+    const modelCandidates = Array.from(new Set([
+      request.model || 'openrouter/deepseek/deepseek-r1',
+      'llama-3.1-8b-instant',
+      'gemini-2.5-flash',
+    ]));
+
+    for (const model of modelCandidates) {
+      try {
+        const response = await fetch('/api/ai/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            model,
+            systemPrompt,
+            messages: messagesWithSystem,
+            enableEnsemble: false,
+            isChatAssistant: true,
+          }),
+          signal: AbortSignal.timeout(primaryTimeoutMs),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && typeof data?.text === 'string' && data.text.trim()) {
+          return this.withYouTubeLink(data.text.trim(), prompt);
+        }
+        console.warn(`[AI Chat] Route (${model}) returned no text; instant failover to next route.`);
+      } catch (error) {
+        console.warn(`[AI Chat] Route (${model}) unavailable; instant failover to next route.`, error);
+      }
     }
 
     throw new Error('No configured AI provider returned a usable response. Please add at least one API key in the API Portal to enable AI features.');

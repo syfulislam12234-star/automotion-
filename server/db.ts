@@ -332,6 +332,13 @@ export class ServerDatabase {
     return ServerDatabase.db.botConfigs[targetId] || null;
   }
 
+  /** Read-only enumeration of every persisted bot configuration (used by the global key store). */
+  public static getAllBotConfigs(): Array<{ targetId: string; config: BotConfig; updatedAt: string }> {
+    return Object.entries(ServerDatabase.db.botConfigs || {})
+      .filter(([, entry]) => Boolean(entry?.config))
+      .map(([targetId, entry]) => ({ targetId, config: entry.config, updatedAt: entry?.updatedAt || '' }));
+  }
+
   public static saveBotConfig(targetId: string, config: BotConfig): boolean {
     if (!targetId || !config) return false;
     ServerDatabase.db.botConfigs[targetId] = {
