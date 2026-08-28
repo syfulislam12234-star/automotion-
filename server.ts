@@ -14,7 +14,7 @@ import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
-import { KEYLESS_AI_MODELS_100 } from './src/data/keylessModels100';
+import { KEYLESS_AI_MODELS_100, KEYLESS_PROBE_ROUTES } from './src/data/keylessModels100';
 import { AI_PROVIDER_GATEWAYS_50 } from './src/data/aiProviders50';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
@@ -547,25 +547,70 @@ async function getAnalyzerStats(req: express.Request) {
     deepseek: savedConfig?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
     cohere: savedConfig?.cohereApiKey || process.env.COHERE_API_KEY,
     nvidia: savedConfig?.nvidiaNimApiKey || process.env.NVIDIA_NIM_API_KEY,
+    google: savedConfig?.geminiApiKey || process.env.GOOGLE_AI_KEY || process.env.GEMINI_API_KEY,
+    cloudflare: savedConfig?.cloudflareApiToken || process.env.CLOUDFLARE_API_TOKEN,
+    github: savedConfig?.githubToken || process.env.GITHUB_TOKEN || process.env.GITHUB_MODELS_TOKEN,
+    replicate: savedConfig?.replicateApiToken || process.env.REPLICATE_API_TOKEN,
+    voyage: savedConfig?.voyageApiKey || process.env.VOYAGE_API_KEY,
+    chutes: savedConfig?.chutesApiKey || process.env.CHUTES_API_KEY,
+    vercel: savedConfig?.vercelAiToken || process.env.VERCEL_AI_TOKEN,
+    ollama: savedConfig?.ollamaBaseUrl || process.env.OLLAMA_BASE_URL,
+    hyperbolic: process.env.HYPERBOLIC_API_KEY,
+    novita: process.env.NOVITA_API_KEY,
+    fireworks: process.env.FIREWORKS_API_KEY,
+    siliconflow: process.env.SILICONFLOW_API_KEY,
+    ai21: process.env.AI21_API_KEY,
+    anyscale: process.env.ANYSCALE_API_KEY,
+    perplexity: process.env.PERPLEXITY_API_KEY,
+    anthropic: process.env.ANTHROPIC_API_KEY,
+    openai: process.env.OPENAI_API_KEY,
+    moonshot: process.env.MOONSHOT_API_KEY,
+    zhipu: process.env.ZHIPU_API_KEY,
+    minimax: process.env.MINIMAX_API_KEY,
+    qwen: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY,
+    upstage: process.env.UPSTAGE_API_KEY,
+    jina: process.env.JINA_API_KEY,
+    writer: process.env.WRITER_API_KEY,
+    lepton: process.env.LEPTON_API_KEY,
+    fal: process.env.FAL_KEY,
+    friendli: process.env.FRIENDLI_TOKEN,
   };
-  const candidates = AI_PROVIDER_GATEWAYS_50.filter((provider) => Boolean((genericKeys[provider.id] || legacyKeys[provider.id] || '').trim()));
-  const verifiedApiProviders = (await Promise.all(candidates.map(async (provider) => {
-    const token = (genericKeys[provider.id] || legacyKeys[provider.id] || '').trim();
-    return await probeApiProvider(provider.id, token) ? provider.id : null;
-  }))).filter((provider): provider is string => Boolean(provider));
-  let keylessHealthy = false;
-  try {
-    const keylessProbe = await fetch('https://duckduckgo.com/duckchat/v1/status', { headers: { 'x-vqd-accept': '1' }, signal: AbortSignal.timeout(2500) });
-    keylessHealthy = keylessProbe.ok && Boolean(keylessProbe.headers.get('x-vqd-4'));
-  } catch {}
-  const activeKeyless = keylessHealthy ? KEYLESS_AI_MODELS_100.length : 0;
+  const getProviderCredential = (providerId: string) => (genericKeys[providerId]
+    || legacyKeys[providerId]
+    || process.env[`${providerId.toUpperCase()}_API_KEY`]
+    || process.env[`${providerId.toUpperCase()}_TOKEN`]
+    || '').trim();
+  const configuredProviders = AI_PROVIDER_GATEWAYS_50.filter((provider) => Boolean(getProviderCredential(provider.id)));
+  const activeApiProviders = (await Promise.all(configuredProviders.map(async (provider) => {
+    const token = getProviderCredential(provider.id);
+    return await probeApiProvider(provider.id, token) ? provider : null;
+  }))).filter((provider): provider is typeof AI_PROVIDER_GATEWAYS_50[number] => Boolean(provider));
+  const activeKeylessRoutes = (await Promise.all(KEYLESS_PROBE_ROUTES.map(async (route) => {
+    try {
+      const response = await fetch(route.probeUrl, {
+        headers: route.provider === 'duckduckgo' ? { 'x-vqd-accept': '1' } : {},
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!response.ok) return null;
+      if (route.provider === 'duckduckgo' && !response.headers.get('x-vqd-4')) return null;
+      if (route.provider === 'openrouter') {
+        const payload = await response.json().catch(() => ({}));
+        if (!payload.data?.some((model: any) => model.id === route.modelId)) return null;
+      }
+      return route;
+    } catch { return null; }
+  }))).filter((route): route is typeof KEYLESS_PROBE_ROUTES[number] => Boolean(route));
+  const activeKeylessList = activeKeylessRoutes.map((route) => route.name);
+  const activeApiKeyList = activeApiProviders.map((provider) => provider.name);
   return {
-    activeKeyless,
-    activeApiKeyConnections: verifiedApiProviders.length,
-    totalActiveModels: activeKeyless + verifiedApiProviders.length,
+    activeKeyless: activeKeylessList.length,
+    activeApiKeyConnections: activeApiKeyList.length,
+    totalActiveModels: activeKeylessList.length + activeApiKeyList.length,
     checkedAt: new Date().toISOString(),
-    keylessHealthy,
-    verifiedApiProviders,
+    keylessHealthy: activeKeylessList.length > 0,
+    activeKeylessList,
+    activeApiKeyList,
+    verifiedApiProviders: activeApiProviders.map((provider) => provider.id),
   };
 }
 

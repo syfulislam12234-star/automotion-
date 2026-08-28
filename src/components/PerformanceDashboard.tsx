@@ -6,22 +6,50 @@ interface PerformanceDashboardProps {
   onOpenAiChat: () => void;
 }
 
+interface AnalyzerStats {
+  activeKeyless: number;
+  activeApiKeyConnections: number;
+  totalActiveModels: number;
+  activeKeylessList: string[];
+  activeApiKeyList: string[];
+}
+
 export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({ onShowToast, onOpenAiChat }) => {
-  const [data, setData] = useState({
-    totalRequests: 1420,
-    successfulFailovers: 87,
-    averageLatencyMs: 145,
-    tokenCount: 920450,
-    providerHealth: [
-      { provider: 'Google Gemini', status: 'optimal', latency: '210ms', uptime: '99.98%' },
-      { provider: 'Groq LPU', status: 'blazing', latency: '120ms', uptime: '99.99%' },
-      { provider: 'Cerebras CS-3', status: 'ultra', latency: '80ms', uptime: '99.95%' },
-      { provider: 'OpenRouter', status: 'healthy', latency: '380ms', uptime: '99.85%' },
-      { provider: 'Mistral AI', status: 'optimal', latency: '290ms', uptime: '99.90%' },
-    ],
-  });
+  const [data, setData] = useState({ totalRequests: 0, successfulFailovers: 0, averageLatencyMs: 0, tokenCount: 0, providerHealth: [] as Array<{ provider: string; status: string; latency: string; uptime: string }> });
+  const [analyzer, setAnalyzer] = useState<AnalyzerStats | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   const [benchmarking, setBenchmarking] = useState(false);
+
+  const scanSystem = async () => {
+    setScanning(true);
+    try {
+      const response = await fetch('/api/ai/analyzer-stats', { signal: AbortSignal.timeout(15000) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) throw new Error(payload.error || payload.message || 'Live analyzer unavailable.');
+      setAnalyzer(payload.stats);
+    } catch (error: any) {
+      onShowToast(`Analyzer scan failed: ${error?.message || 'Live analyzer unavailable.'}`);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  useEffect(() => {
+    const loadTelemetry = async () => {
+      try {
+        const response = await fetch('/api/telemetry/performance', { signal: AbortSignal.timeout(10000) });
+        const payload = await response.json().catch(() => ({}));
+        if (response.ok && payload.success && payload.data) setData(payload.data);
+      } catch (error) {
+        console.warn('[Telemetry] Live metrics unavailable:', error);
+      }
+    };
+    void loadTelemetry();
+    void scanSystem();
+    const timer = window.setInterval(() => { void loadTelemetry(); void scanSystem(); }, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const handleRunBenchmark = async () => {
     setBenchmarking(true);
@@ -90,6 +118,11 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({ onSh
           <span className="text-xs text-slate-400">Tokens Processed</span>
           <div className="text-2xl font-extrabold text-indigo-400 font-mono">{data.tokenCount.toLocaleString()}</div>
         </div>
+      </div>
+
+      <div className="p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/20 space-y-4">
+        <div className="flex items-center justify-between"><h3 className="font-semibold text-slate-200 text-sm">Real-Time AI System Analyzer</h3><button onClick={() => void scanSystem()} disabled={scanning} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} />{scanning ? 'Scanning...' : 'Re-Scan System'}</button></div>
+        {analyzer ? <><div className="grid grid-cols-1 sm:grid-cols-3 gap-3">{[['Total Active AI Models', analyzer.totalActiveModels], ['Keyless Active', analyzer.activeKeyless], ['API Keys Active', analyzer.activeApiKeyConnections]].map(([label, value]) => <div key={String(label)} className="p-3 rounded-xl bg-slate-950 border border-slate-800"><div className="text-2xl font-bold text-white">{value}</div><div className="text-xs text-slate-400">{label}</div></div>)}</div><div className="max-h-52 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-1.5"><h4 className="text-xs font-semibold text-white mb-2">Active AI Infrastructure</h4>{[...analyzer.activeKeylessList, ...analyzer.activeApiKeyList].map((name) => <div key={name} className="flex items-center gap-2 text-xs text-slate-300"><span className="text-emerald-400">●</span><span>{name}</span><span className="ml-auto text-emerald-400">Operational</span></div>)}{analyzer.totalActiveModels === 0 && <p className="text-xs text-slate-500">No live connections verified.</p>}</div><p className="text-sm font-semibold text-emerald-400">{analyzer.totalActiveModels >= 15 ? 'Verified 15+ Keyless & API Providers operational' : `Verified ${analyzer.totalActiveModels} Keyless & API Providers operational`}</p></> : <p className="text-xs text-slate-500">Scanning live AI infrastructure...</p>}
       </div>
 
       {/* Provider Health Table */}
