@@ -15,6 +15,7 @@ import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
 import { KEYLESS_AI_MODELS_100 } from './src/data/keylessModels100';
+import { AI_PROVIDER_GATEWAYS_50 } from './src/data/aiProviders50';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
@@ -505,6 +506,67 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     console.warn('[AI Summarizer] All providers exhausted:', error?.message || error);
     return null;
   }
+}
+
+async function probeApiProvider(providerId: string, token: string): Promise<boolean> {
+  const endpoints: Record<string, string> = {
+    groq: 'https://api.groq.com/openai/v1/models',
+    cerebras: 'https://api.cerebras.ai/v1/models',
+    openrouter: 'https://openrouter.ai/api/v1/models',
+    mistral: 'https://api.mistral.ai/v1/models',
+    together: 'https://api.together.xyz/v1/models',
+    huggingface: 'https://huggingface.co/api/whoami-v2',
+    deepseek: 'https://api.deepseek.com/models',
+    cohere: 'https://api.cohere.com/v1/check-api-key',
+    nvidia: 'https://integrate.api.nvidia.com/v1/models',
+  };
+  const endpoint = endpoints[providerId];
+  if (!endpoint) return false;
+  try {
+    const response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(2500),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function getAnalyzerStats(req: express.Request) {
+  const sessionUser = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+  const savedConfig = sessionUser ? ServerDatabase.getBotConfig(sessionUser.id)?.config : undefined;
+  const genericKeys = savedConfig?.apiGatewayKeys || {};
+  const legacyKeys: Record<string, string | undefined> = {
+    groq: savedConfig?.groqApiKey || process.env.GROQ_API_KEY,
+    cerebras: savedConfig?.cerebrasApiKey || process.env.CEREBRAS_API_KEY,
+    openrouter: savedConfig?.openrouterApiKey || process.env.OPENROUTER_API_KEY,
+    mistral: savedConfig?.mistralApiKey || process.env.MISTRAL_API_KEY,
+    together: savedConfig?.togetherApiKey || process.env.TOGETHER_API_KEY,
+    huggingface: savedConfig?.huggingfaceApiKey || process.env.HUGGINGFACE_API_KEY,
+    deepseek: savedConfig?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
+    cohere: savedConfig?.cohereApiKey || process.env.COHERE_API_KEY,
+    nvidia: savedConfig?.nvidiaNimApiKey || process.env.NVIDIA_NIM_API_KEY,
+  };
+  const candidates = AI_PROVIDER_GATEWAYS_50.filter((provider) => Boolean((genericKeys[provider.id] || legacyKeys[provider.id] || '').trim()));
+  const verifiedApiProviders = (await Promise.all(candidates.map(async (provider) => {
+    const token = (genericKeys[provider.id] || legacyKeys[provider.id] || '').trim();
+    return await probeApiProvider(provider.id, token) ? provider.id : null;
+  }))).filter((provider): provider is string => Boolean(provider));
+  let keylessHealthy = false;
+  try {
+    const keylessProbe = await fetch('https://duckduckgo.com/duckchat/v1/status', { headers: { 'x-vqd-accept': '1' }, signal: AbortSignal.timeout(2500) });
+    keylessHealthy = keylessProbe.ok && Boolean(keylessProbe.headers.get('x-vqd-4'));
+  } catch {}
+  const activeKeyless = keylessHealthy ? KEYLESS_AI_MODELS_100.length : 0;
+  return {
+    activeKeyless,
+    activeApiKeyConnections: verifiedApiProviders.length,
+    totalActiveModels: activeKeyless + verifiedApiProviders.length,
+    checkedAt: new Date().toISOString(),
+    keylessHealthy,
+    verifiedApiProviders,
+  };
 }
 
 async function generateFreeAiText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
@@ -1042,6 +1104,15 @@ async function startServer() {
         count: GLOBAL_150_FREE_AI_MODELS.length,
         statuses: GLOBAL_150_FREE_AI_MODELS.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Health check unavailable.' })),
       });
+    }
+  });
+
+  app.get('/api/ai/analyzer-stats', async (req, res) => {
+    try {
+      const stats = await getAnalyzerStats(req);
+      return res.json({ success: true, stats });
+    } catch (error: any) {
+      return res.status(503).json({ success: false, error: error?.message || 'Live analyzer unavailable.' });
     }
   });
 

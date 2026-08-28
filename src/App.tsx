@@ -23,6 +23,7 @@ import { Sidebar, AppView } from './components/Sidebar';
 import { UnifiedChatWorkspace } from './components/UnifiedChatWorkspace';
 import { MultiChannelStudio } from './components/MultiChannelStudio';
 import { AiBrainVisualizer } from './components/AiBrainVisualizer';
+import { AiAnalyzerModal } from './components/AiAnalyzerModal';
 import { ApiVaultModal } from './components/ApiVaultModal';
 import { AuthService } from './services/authService';
 import {
@@ -346,6 +347,7 @@ function AppContent() {
   const [isPortalOpen, setIsPortalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
   const [isYouTubeStudioOpen, setIsYouTubeStudioOpen] = useState(false);
+  const [isAiAnalyzerOpen, setIsAiAnalyzerOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(true);
   const [portalInitialServiceId, setPortalInitialServiceId] = useState<string | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -815,6 +817,14 @@ function AppContent() {
         {/* View 6: AI Media Scanner */}
         {activeTab === 'scanner' && <AiMediaScanner onShowToast={showToast} />}
 
+        {activeTab === 'analyzer' && (
+          <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 text-center space-y-4">
+            <h3 className="text-lg font-bold text-white">Real-Time AI System Analyzer</h3>
+            <p className="text-xs text-slate-400">Inspect verified live model and gateway connections.</p>
+            <button onClick={() => setIsAiAnalyzerOpen(true)} className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs cursor-pointer">Open Live Analyzer</button>
+          </div>
+        )}
+
         {/* View 7: YouTube Studio */}
         {activeTab === 'youtube' && (
           <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 text-center space-y-4">
@@ -901,6 +911,8 @@ function AppContent() {
         onUpdateConfig={handleConfigChange}
         onShowToast={showToast}
       />
+
+      <AiAnalyzerModal isOpen={isAiAnalyzerOpen} onClose={() => setIsAiAnalyzerOpen(false)} />
 
       {/* Encrypted API & Token Vault (Password Protected) */}
       <ApiVaultModal

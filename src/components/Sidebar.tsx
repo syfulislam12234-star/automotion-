@@ -39,6 +39,7 @@ export type AppView =
   | 'gateways'
   | 'cascade'
   | 'performance'
+  | 'analyzer'
   | 'cron'
   | 'scanner'
   | 'youtube'
@@ -214,6 +215,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 active={activeView === 'performance'}
                 collapsed={isCollapsed}
                 onClick={() => select('performance')}
+              />
+              <SidebarItem
+                icon={<Activity className="w-4 h-4 text-cyan-400" />}
+                label="AI System Analyzer"
+                active={activeView === 'analyzer'}
+                collapsed={isCollapsed}
+                onClick={() => select('analyzer')}
               />
               <SidebarItem
                 icon={<Clock className="w-4 h-4 text-amber-400" />}
