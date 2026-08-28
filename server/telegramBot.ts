@@ -1,5 +1,6 @@
 import { BotConfig } from '../src/types';
 import { uploadYouTubeVideo } from './youtubeService';
+import { KeylessAiBrain } from './keylessAiBrain';
 
 interface TelegramUploadState {
   step: 'file' | 'privacy' | 'kids';
@@ -142,30 +143,20 @@ export class TelegramBotService {
       try {
         reply = await Promise.race([
           TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Primary Telegram AI response timed out.')), 450)),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Shared Telegram AI route timed out.')), 3500)),
         ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
       } catch (error: any) {
         console.warn('[TelegramBotService] Primary AI route unavailable; trying public Pollinations fallback:', error?.message || error);
         try {
-          const fallbackResponse = await fetch(`https://text.pollinations.ai/${encodeURIComponent(text)}`, {
-            signal: AbortSignal.timeout(450),
-          });
-          const fallbackText = await fallbackResponse.text();
-          if (fallbackResponse.ok && fallbackText.trim() && !fallbackText.startsWith('<!DOCTYPE') && !fallbackText.includes('<html')) {
-            reply = fallbackText.trim();
-            try {
-              const parsed = JSON.parse(fallbackText);
-              reply = parsed.choices?.[0]?.message?.content?.trim() || reply;
-            } catch {}
-          }
+          const keylessResult = await KeylessAiBrain.generate(text, 'You are a helpful Telegram assistant. Answer in the user\'s language and return only the answer.');
+          reply = keylessResult.text?.trim() || null;
         } catch (fallbackError: any) {
           console.warn('[TelegramBotService] Public Pollinations fallback unavailable:', fallbackError?.message || fallbackError);
         }
       }
       if (!reply?.trim()) {
-        console.warn('[TelegramBotService] All AI providers returned no usable text.');
-        return { ok: true, skipped: true };
+        reply = 'The live AI providers are temporarily unavailable. Please try again shortly.';
       }
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text));
       TelegramBotService.lastError = null;
@@ -200,12 +191,22 @@ export class TelegramBotService {
       .trim().replace(/^['"]+|['"]+$/g, '');
   }
 
+  private static formatTelegramHtml(text: string): string {
+    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/__(.+?)__/g, '<b>$1</b>')
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+  }
+
   private static async sendMessage(token: string, chatId: string | number, text: string): Promise<void> {
-    for (let index = 0; index < text.length; index += 3900) {
+    const formattedText = TelegramBotService.formatTelegramHtml(text);
+    for (let index = 0; index < formattedText.length; index += 3900) {
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: text.slice(index, index + 3900), disable_web_page_preview: true }),
+        body: JSON.stringify({ chat_id: chatId, text: formattedText.slice(index, index + 3900), parse_mode: 'HTML', disable_web_page_preview: true }),
         signal: AbortSignal.timeout(10000),
       });
       const data = await response.json().catch(() => ({}));

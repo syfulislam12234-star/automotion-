@@ -519,13 +519,31 @@ async function probeApiProvider(providerId: string, token: string): Promise<bool
     deepseek: 'https://api.deepseek.com/models',
     cohere: 'https://api.cohere.com/v1/check-api-key',
     nvidia: 'https://integrate.api.nvidia.com/v1/models',
+    sambanova: 'https://api.sambanova.ai/v1/models',
+    github: 'https://models.inference.ai.azure.com/models',
+    replicate: 'https://api.replicate.com/v1/models',
+    fireworks: 'https://api.fireworks.ai/inference/v1/models',
+    hyperbolic: 'https://api.hyperbolic.xyz/v1/models',
+    novita: 'https://api.novita.ai/v3/openai/models',
+    siliconflow: 'https://api.siliconflow.cn/v1/models',
+    perplexity: 'https://api.perplexity.ai/models',
+    anthropic: 'https://api.anthropic.com/v1/models',
+    openai: 'https://api.openai.com/v1/models',
+    moonshot: 'https://api.moonshot.cn/v1/models',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1/models',
+    upstage: 'https://api.upstage.ai/v1/models',
+    jina: 'https://api.jina.ai/v1/models',
+    writer: 'https://api.writer.com/v1/models',
+    friendli: 'https://api.friendli.ai/v1/models',
   };
-  const endpoint = endpoints[providerId];
+  const endpoint = providerId === 'google'
+    ? `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(token)}`
+    : endpoints[providerId];
   if (!endpoint) return false;
   try {
     const response = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(2500),
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'User-Agent': 'Automotion-AI-Analyzer/1.0', 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(3500),
     });
     return response.ok;
   } catch {
@@ -588,8 +606,8 @@ async function getAnalyzerStats(req: express.Request) {
   const activeKeylessRoutes = (await Promise.all(KEYLESS_PROBE_ROUTES.map(async (route) => {
     try {
       const response = await fetch(route.probeUrl, {
-        headers: route.provider === 'duckduckgo' ? { 'x-vqd-accept': '1' } : {},
-        signal: AbortSignal.timeout(2500),
+        headers: { Accept: 'application/json', 'User-Agent': 'Automotion-AI-Analyzer/1.0', ...(route.provider === 'duckduckgo' ? { 'x-vqd-accept': '1' } : {}) },
+        signal: AbortSignal.timeout(3500),
       });
       if (!response.ok) return null;
       if (route.provider === 'duckduckgo' && !response.headers.get('x-vqd-4')) return null;
@@ -821,7 +839,7 @@ async function startServer() {
           enableEnsemble: false,
           platform: 'telegram',
         }),
-        signal: AbortSignal.timeout(450),
+        signal: AbortSignal.timeout(3500),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || typeof data.text !== 'string') {

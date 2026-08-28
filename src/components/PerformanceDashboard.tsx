@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Zap, Cpu, TrendingUp, RefreshCw, Sparkles, Server, MessageSquare } from 'lucide-react';
+import { AuthService } from '../services/authService';
 
 interface PerformanceDashboardProps {
   onShowToast: (msg: string) => void;
@@ -24,7 +25,8 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({ onSh
   const scanSystem = async () => {
     setScanning(true);
     try {
-      const response = await fetch('/api/ai/analyzer-stats', { signal: AbortSignal.timeout(15000) });
+      const session = AuthService.getCurrentSession();
+      const response = await fetch('/api/ai/analyzer-stats', { headers: { Authorization: `Bearer ${session?.token || ''}` }, signal: AbortSignal.timeout(15000) });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload.success) throw new Error(payload.error || payload.message || 'Live analyzer unavailable.');
       setAnalyzer(payload.stats);
