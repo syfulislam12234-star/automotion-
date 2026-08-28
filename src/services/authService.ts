@@ -412,7 +412,10 @@ export class AuthService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-      const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        return { success: false, message: data?.message || 'Registration failed.' };
+      }
       if (resp.ok && data.success && data.user) {
         const verifiedUser: UserAccount = {
           ...data.user,

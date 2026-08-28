@@ -25,12 +25,31 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM;
 const GMAIL_USER = String(process.env.GMAIL_USER || '').trim();
 const GMAIL_APP_PASSWORD = String(process.env.GMAIL_APP_PASSWORD || '').trim();
+const EMAIL_DELIVERY_TIMEOUT_MS = 8000;
 const gmailTransporter = GMAIL_USER && GMAIL_APP_PASSWORD
   ? nodemailer.createTransport({
       service: 'gmail',
+      connectionTimeout: 8000,
+      greetingTimeout: 5000,
+      socketTimeout: 10000,
+      pool: false,
       auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
     })
   : null;
+
+async function sendEmailVerificationCodeWithDeadline(email: string, code: string): Promise<boolean> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      sendEmailVerificationCode(email, code),
+      new Promise<boolean>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('EMAIL_DELIVERY_TIMEOUT')), EMAIL_DELIVERY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
 
 async function sendAdminRegistrationCode(email: string, code: string): Promise<boolean> {
   if (!RESEND_API_KEY || !AUTH_EMAIL_FROM) {
@@ -1545,7 +1564,7 @@ async function startServer() {
   });
 
   // User Sign Up
-  app.post('/api/auth/signup', (req, res) => {
+  app.post('/api/auth/signup', async (req, res) => {
     try {
       const { name, email, password } = req.body;
       if (!name || !email || !password) {
@@ -1558,11 +1577,20 @@ async function startServer() {
       }
 
       if (result.verificationCode) {
-        return void sendEmailVerificationCode(email, result.verificationCode).then((sent) => res.status(201).json({
-          ...result,
-          message: sent ? 'Account created. Check your email for the one-time verification code.' : 'Account created. Use the verification code logged by the server administrator.',
-          session: result.session ? { ...result.session, isVerified: false } : undefined,
-        })).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
+        try {
+          const sent = await sendEmailVerificationCodeWithDeadline(email, result.verificationCode);
+          if (!sent) return res.status(503).json({ success: false, message: 'Email delivery failed. Please verify Railway GMAIL_USER and GMAIL_APP_PASSWORD.' });
+          return res.status(201).json({
+            ...result,
+            message: 'Account created. Check your email for the one-time verification code.',
+            session: result.session ? { ...result.session, isVerified: false } : undefined,
+          });
+        } catch (err: any) {
+          const message = err?.message === 'EMAIL_DELIVERY_TIMEOUT'
+            ? 'Email delivery timed out. Please verify Railway GMAIL_USER and GMAIL_APP_PASSWORD.'
+            : 'Email delivery failed. Please verify Railway GMAIL_USER and GMAIL_APP_PASSWORD.';
+          return res.status(503).json({ success: false, message });
+        }
       }
       return res.status(201).json(result);
     } catch (err: any) {
@@ -1645,7 +1673,7 @@ async function startServer() {
   });
 
   // Verify OTP
-  app.post('/api/auth/verify-otp', (req, res) => {
+  app.post('/api/auth/verify-otp', async (req, res) => {
     try {
       const { email, code } = req.body;
       if (!email || !code) {
@@ -1664,7 +1692,7 @@ async function startServer() {
   });
 
   // Resend OTP
-  app.post('/api/auth/resend-otp', (req, res) => {
+  app.post('/api/auth/resend-otp', async (req, res) => {
     try {
       const { email } = req.body;
       if (!email) {
@@ -1673,12 +1701,16 @@ async function startServer() {
 
       const result = ServerDatabase.resendOtp(email);
       if (!result.success || !result.code) return res.json(result);
-      return void sendEmailVerificationCode(email, result.code).then((sent) => {
-        const message = sent
-          ? result.message
-          : 'Email delivery failed. Use the 6-digit OTP logged by the server administrator.';
-        return res.json({ success: true, message });
-      }).catch(() => res.status(503).json({ success: false, message: 'Verification email could not be sent.' }));
+      try {
+        const sent = await sendEmailVerificationCodeWithDeadline(email, result.code);
+        if (!sent) return res.status(503).json({ success: false, message: 'Email delivery failed. Please verify Railway GMAIL_USER and GMAIL_APP_PASSWORD.' });
+        return res.json({ success: true, message: result.message });
+      } catch (err: any) {
+        const message = err?.message === 'EMAIL_DELIVERY_TIMEOUT'
+          ? 'Email delivery timed out. Please verify Railway GMAIL_USER and GMAIL_APP_PASSWORD.'
+          : 'Email delivery failed. Please verify Railway GMAIL_USER and GMAIL_APP_PASSWORD.';
+        return res.status(503).json({ success: false, message });
+      }
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });
     }

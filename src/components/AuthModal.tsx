@@ -340,7 +340,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Resend verification code handler
   const handleResendCode = async () => {
-    if (resendCooldown > 0) return;
+    if (resendCooldown > 0 || isLoading) return;
+    setIsLoading(true);
     try {
       if (isAdminSignupPending) {
         setErrorMessage('Please start a new administrator registration to request another code.');
@@ -357,6 +358,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Failed to resend code');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -735,7 +738,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <span>Didn't get the code?</span>
                 <button
                   type="button"
-                  disabled={resendCooldown > 0}
+                  disabled={resendCooldown > 0 || isLoading}
                   onClick={handleResendCode}
                   className="text-cyan-400 hover:text-cyan-300 font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
