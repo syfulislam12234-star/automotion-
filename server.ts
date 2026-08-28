@@ -16,6 +16,7 @@ import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
+import { uploadYouTubeVideo } from './server/youtubeService';
 
 dotenv.config();
 
@@ -635,6 +636,7 @@ async function startServer() {
   }));
 
   app.use(express.json({
+    limit: '512mb',
     verify: (req, _res, buffer) => {
       (req as express.Request & { rawBody?: string }).rawBody = buffer.toString('utf8');
     },
@@ -1326,6 +1328,33 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error in /api/ai/generate:', err);
       return res.status(500).json({ success: false, message: err.message || 'Internal server error in centralized AI engine' });
+    }
+  });
+
+  app.post('/api/youtube/upload', async (req, res) => {
+    const user = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+    if (!user) return res.status(401).json({ success: false, message: 'Authentication is required for YouTube uploads.' });
+    try {
+      const { videoBase64, mimeType, titlePrompt, privacyStatus, madeForKids, youtube } = req.body || {};
+      if (typeof videoBase64 !== 'string' || !videoBase64) return res.status(400).json({ success: false, message: 'A video file is required.' });
+      if (!['public', 'private', 'unlisted'].includes(privacyStatus)) return res.status(400).json({ success: false, message: 'Privacy status must be public, private, or unlisted.' });
+      if (typeof madeForKids !== 'boolean') return res.status(400).json({ success: false, message: 'Made for Kids selection is required.' });
+      const result = await uploadYouTubeVideo({
+        video: Buffer.from(videoBase64, 'base64'),
+        mimeType: typeof mimeType === 'string' ? mimeType : 'video/mp4',
+        titlePrompt: typeof titlePrompt === 'string' ? titlePrompt : '',
+        privacyStatus,
+        madeForKids,
+        clientId: String(youtube?.clientId || '').trim(),
+        clientSecret: String(youtube?.clientSecret || '').trim(),
+        refreshToken: String(youtube?.refreshToken || '').trim(),
+        channelId: String(youtube?.channelId || '').trim() || undefined,
+        categoryId: String(youtube?.categoryId || '').trim() || undefined,
+      }, (prompt) => generateConfiguredAiText(prompt, youtube?.model));
+      return res.status(201).json({ success: true, ...result });
+    } catch (error: any) {
+      console.error('[YouTube] Upload failed:', error?.message || error);
+      return res.status(502).json({ success: false, message: error?.message || 'YouTube upload failed.' });
     }
   });
 

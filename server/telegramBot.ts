@@ -1,4 +1,12 @@
 import { BotConfig } from '../src/types';
+import { uploadYouTubeVideo } from './youtubeService';
+
+interface TelegramUploadState {
+  step: 'file' | 'privacy' | 'kids';
+  fileId?: string;
+  topic?: string;
+  privacyStatus?: 'public' | 'private' | 'unlisted';
+}
 
 export class TelegramBotService {
   private static isRunning = false;
@@ -11,6 +19,7 @@ export class TelegramBotService {
   private static pollingOffset = 0;
   private static pollingActive = false;
   private static environmentToken = '';
+  private static uploadStates = new Map<string, TelegramUploadState>();
 
   private static ensureYouTubeLink(reply: string, userQuery: string): string {
     const videoIntentKeywords = ['video', 'tutorial', 'youtube', 'ভিডিও', 'টিউটোরিয়াল', 'লিংক', 'link'];
@@ -68,7 +77,7 @@ export class TelegramBotService {
       const message = update?.message || update?.edited_message || update?.channel_post;
       const chatId = message?.chat?.id;
       const text = typeof message?.text === 'string' ? message.text.trim() : '';
-      if (!chatId || !text) return { ok: true, ignored: true };
+      if (!chatId) return { ok: true, ignored: true };
 
       TelegramBotService.processedUpdates++;
       const token = TelegramBotService.getBotToken();
@@ -76,6 +85,49 @@ export class TelegramBotService {
         TelegramBotService.lastError = 'Telegram bot token is not configured.';
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
         return { ok: true, skipped: true };
+      }
+      const chatKey = String(chatId);
+      const uploadState = TelegramBotService.uploadStates.get(chatKey);
+      if (message?.video?.file_id && uploadState?.step === 'file') {
+        uploadState.fileId = message.video.file_id;
+        uploadState.topic = uploadState.topic || message.video.file_name || 'Uploaded YouTube video';
+        uploadState.step = 'privacy';
+        await TelegramBotService.sendMessage(token, chatId, 'ভিডিওটি কি Public, Private নাকি Unlisted করতে চান? উত্তর দিন: public, private অথবা unlisted');
+        return { ok: true };
+      }
+      if (!text) return { ok: true, ignored: true };
+      if (text.toLowerCase() === '/yt_upload' || text.toLowerCase().startsWith('/yt_upload ')) {
+        TelegramBotService.uploadStates.set(chatKey, { step: 'file', topic: text.slice('/yt_upload'.length).trim() || undefined });
+        await TelegramBotService.sendMessage(token, chatId, 'ধাপ ১/৩: ভিডিও ফাইলটি এখন Telegram-এ attach করে পাঠান।');
+        return { ok: true };
+      }
+      if (uploadState?.step === 'privacy') {
+        const privacy = text.toLowerCase();
+        if (!['public', 'private', 'unlisted'].includes(privacy)) {
+          await TelegramBotService.sendMessage(token, chatId, 'দয়া করে public, private অথবা unlisted লিখুন।');
+          return { ok: true };
+        }
+        uploadState.privacyStatus = privacy as NonNullable<TelegramUploadState['privacyStatus']>;
+        uploadState.step = 'kids';
+        await TelegramBotService.sendMessage(token, chatId, 'ধাপ ৩/৩: ভিডিওটি কি Made for Kids নাকি Not Made for Kids? উত্তর দিন: kids অথবা not kids');
+        return { ok: true };
+      }
+      if (uploadState?.step === 'kids') {
+        const normalized = text.toLowerCase();
+        if (!['kids', 'not kids', 'notkids', 'no'].includes(normalized)) {
+          await TelegramBotService.sendMessage(token, chatId, 'দয়া করে kids অথবা not kids লিখুন।');
+          return { ok: true };
+        }
+        try {
+          await TelegramBotService.sendMessage(token, chatId, 'AI SEO metadata তৈরি করে YouTube-এ আপলোড করা হচ্ছে...');
+          const result = await TelegramBotService.uploadTelegramVideo(token, uploadState, normalized === 'kids', chatId);
+          TelegramBotService.uploadStates.delete(chatKey);
+          await TelegramBotService.sendMessage(token, chatId, `আপলোড সম্পন্ন: ${result.url}`);
+        } catch (error: any) {
+          TelegramBotService.uploadStates.delete(chatKey);
+          await TelegramBotService.sendMessage(token, chatId, `YouTube আপলোড ব্যর্থ: ${error?.message || 'OAuth configuration পরীক্ষা করুন।'}`);
+        }
+        return { ok: true };
       }
       void TelegramBotService.sendChatAction(token, chatId).catch((error: any) => {
         console.warn('[TelegramBotService] Typing action dispatch failed:', error?.message || error);
@@ -159,6 +211,29 @@ export class TelegramBotService {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok === false) throw new Error(data.description || `Telegram sendMessage failed (HTTP ${response.status}).`);
     }
+  }
+
+  private static async uploadTelegramVideo(token: string, state: TelegramUploadState, madeForKids: boolean, chatId: string | number) {
+    if (!state.fileId || !state.topic || !state.privacyStatus || !TelegramBotService.currentConfig) throw new Error('ভিডিও, topic এবং তিনটি upload setting প্রয়োজন।');
+    const fileResponse = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(state.fileId)}`, { signal: AbortSignal.timeout(10000) });
+    const filePayload = await fileResponse.json().catch(() => ({}));
+    if (!fileResponse.ok || !filePayload.ok || !filePayload.result?.file_path) throw new Error('Telegram video file পাওয়া যায়নি।');
+    const downloadResponse = await fetch(`https://api.telegram.org/file/bot${token}/${filePayload.result.file_path}`, { signal: AbortSignal.timeout(120000) });
+    if (!downloadResponse.ok) throw new Error('Telegram video download ব্যর্থ হয়েছে।');
+    const video = new Uint8Array(await downloadResponse.arrayBuffer());
+    const config = TelegramBotService.currentConfig;
+    return uploadYouTubeVideo({
+      video,
+      mimeType: 'video/mp4',
+      titlePrompt: state.topic,
+      privacyStatus: state.privacyStatus,
+      madeForKids,
+      clientId: config.youtubeClientId,
+      clientSecret: config.youtubeClientSecret,
+      refreshToken: config.youtubeRefreshToken,
+      channelId: config.youtubeChannelId,
+      categoryId: config.youtubeDefaultCategory,
+    }, (prompt) => TelegramBotService.aiGenerator!(prompt, config.modelName));
   }
 
   private static async sendChatAction(token: string, chatId: string | number): Promise<void> {

@@ -504,12 +504,22 @@ ${helplinesText}
   }
 
   public static async fetchYouTubeUpdates() {
-    const list = [
-      { title: 'Deploying High-Concurrency AI Bots with Zero Downtime', channel: 'Syful DevStudio', views: '12.4K', status: 'Live' },
-    ];
+    const apiKey = String(process.env.YOUTUBE_API_KEY || '').trim();
+    const channelId = String(process.env.YOUTUBE_CHANNEL_ID || '').trim();
+    if (!apiKey || !channelId) return { videos: [], summary: 'YouTube Data API credentials are not configured.' };
+    const response = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${encodeURIComponent(channelId)}&order=date&maxResults=10&type=video&key=${encodeURIComponent(apiKey)}`, { signal: AbortSignal.timeout(10000) });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error?.message || `YouTube feed failed (HTTP ${response.status}).`);
+    const list = Array.isArray(payload.items) ? payload.items.map((item: any) => ({
+      title: item.snippet?.title || 'Untitled video',
+      channel: item.snippet?.channelTitle || channelId,
+      videoId: item.id?.videoId || '',
+      publishedAt: item.snippet?.publishedAt || '',
+      status: 'Live',
+    })).filter((item: { videoId: string }) => item.videoId) : [];
     return {
       videos: list,
-      summary: 'Latest technical guides synced with YouTube Channel.',
+      summary: `Latest videos synced from YouTube channel ${channelId}.`,
     };
   }
 }

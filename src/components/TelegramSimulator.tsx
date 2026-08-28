@@ -212,28 +212,22 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               break;
 
             case 'yt_seo':
-              providerName = `Google Gemini (${config.geminiModel || '2.5 Flash'})`;
-              botResponse = `🎬 *YouTube Viral SEO Intelligence Suite (Data API v3 Ready)*\n\n` +
-                `🎯 **5 High-CTR Title Formulas for "${args || 'AI Bot Tutorial'}":**\n` +
-                `1. \`🔥 How I Built a 20-AI-Provider Bot in 10 Minutes! (Groq + Gemini)\`\n` +
-                `2. \`Stop Paying for AI APIs! 20 Free Providers in One Python Bot\`\n` +
-                `3. \`Zero-Downtime Multi-Platform AI Bot: Telegram, Discord & Slack\`\n` +
-                `4. \`Ultimate Free AI Cloud Deploy Guide (Render, Koyeb & Fly.io)\`\n` +
-                `5. \`How to Automate YouTube Video Uploads with Python OAuth 2.0\`\n\n` +
-                `🏷️ **High-Volume YouTube Tags:**\n` +
-                `\`telegram bot, groq lpu, gemini 2.5 flash, discord bot python, free ai api, youtube automation\`\n\n` +
-                `🎨 **AI Thumbnail Prompt (Midjourney / Pollinations):**\n` +
-                `_"Photorealistic glowing robotic terminal running 20 AI providers with zero latency, neon cyan lighting, 8k render, high contrast."_\n\n` +
-                `💡 *Ready for 1-click execution via \`/yt_upload\`.*`;
+              providerName = `Live AI (${config.modelName || 'configured model'})`;
+              {
+                const seoResponse = await fetch('/api/ai/generate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ prompt: `Generate YouTube SEO metadata for: ${args || 'the attached video'}`, model: config.modelName }),
+                });
+                const seoData = await seoResponse.json().catch(() => ({}));
+                botResponse = seoResponse.ok && typeof seoData?.text === 'string'
+                  ? seoData.text
+                  : (seoData?.message || 'Live AI SEO generation failed.');
+              }
               break;
 
             case 'yt_upload':
-              botResponse = `📤 *YouTube OAuth 2.0 Upload Controller:*\n\n` +
-                `• **OAuth2 State:** \`AUTHENTICATED (Token Active)\`\n` +
-                `• **Target Channel:** \`${config.youtubeChannelId || 'Default Authorized Channel'}\`\n` +
-                `• **Privacy Mode:** \`${config.youtubeDefaultPrivacy?.toUpperCase() || 'PUBLIC'}\`\n` +
-                `• **Chunk Size:** \`4MB Resumable Upload Chunks\`\n\n` +
-                `💡 *Use \`/yt_upload <path_to_video> [optional_title]\` to queue automatic upload.*`;
+              botResponse = 'Live Telegram upload flow started. Send /yt_upload in Telegram and attach the video when prompted.';
               break;
 
             case 'image':
