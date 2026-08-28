@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BotConfig } from '../types';
 import { X, Key, ExternalLink, ShieldCheck, Check, Sparkles, Zap, Bot, Lock } from 'lucide-react';
 import { AI_PROVIDER_GATEWAYS_50 } from '../data/aiProviders50';
@@ -39,6 +39,10 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
     openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', telegram: 'telegramBotToken',
   };
   const currentKey = (config.apiGatewayKeys?.[currentProvider.id] || (legacyKeys[currentProvider.id] ? config[legacyKeys[currentProvider.id]] : '')) as string;
+
+  useEffect(() => {
+    setKeyInput((previous) => previous || currentKey);
+  }, [selectedProvider]);
 
   const handleSave = async () => {
     const value = keyInput.trim();
@@ -126,7 +130,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
           </div>
           <input
             type="password"
-            value={keyInput || currentKey}
+            value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
             placeholder={`Enter ${currentProvider.name} key...`}
             className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"

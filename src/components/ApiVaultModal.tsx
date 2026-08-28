@@ -54,6 +54,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
   const [showKeyMap, setShowKeyMap] = useState<Record<string, boolean>>({});
   const [testingKeyId, setTestingKeyId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; latency: number }>>({});
+  const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
   
   // Custom PIN Management
   const [newPin, setNewPin] = useState<string>('');
@@ -137,6 +138,11 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
     void AiService.saveApiKey(providerId, token);
     const providerConfigKey = AI_PROVIDERS.find((provider) => provider.id === providerId)?.configKey;
     if (providerConfigKey) onUpdateConfig({ [providerConfigKey]: token } as Partial<BotConfig>);
+    if (providerConfigKey) setDraftKeys((previous) => {
+      const next = { ...previous };
+      delete next[providerConfigKey];
+      return next;
+    });
     onShowToast('🟢 API Key saved and activated successfully!');
     const start = Date.now();
     try {
@@ -320,7 +326,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                   </div>
 
                   {AI_PROVIDERS.map((provider) => {
-                    const val = String((config as any)[provider.configKey] || '');
+                    const val = draftKeys[provider.configKey] ?? String((config as any)[provider.configKey] || '');
                     const isVisible = Boolean(showKeyMap[provider.id]);
                     const isTesting = testingKeyId === provider.id;
                     const testRes = testResults[provider.id];
@@ -357,11 +363,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                             <input
                               type={isVisible ? 'text' : 'password'}
                               value={val}
-                              onChange={(e) =>
-                                onUpdateConfig({
-                                  [provider.configKey]: e.target.value,
-                                } as Partial<BotConfig>)
-                              }
+                              onChange={(e) => setDraftKeys((previous) => ({ ...previous, [provider.configKey]: e.target.value }))}
                               placeholder={`Enter ${provider.name} Key...`}
                               className="w-full pl-3 pr-20 py-2 rounded-xl bg-slate-900 border border-slate-700/80 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                             />
@@ -412,7 +414,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                   </div>
 
                   {MESSENGER_PROTOCOLS.map((ch) => {
-                    const val = String((config as any)[ch.configKey] || '');
+                    const val = draftKeys[ch.configKey] ?? String((config as any)[ch.configKey] || '');
                     const isVisible = Boolean(showKeyMap[ch.id]);
                     const isTesting = testingKeyId === ch.id;
                     const testRes = testResults[ch.id];
@@ -451,11 +453,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                             <input
                               type={isVisible ? 'text' : 'password'}
                               value={val}
-                              onChange={(e) =>
-                                onUpdateConfig({
-                                  [ch.configKey]: e.target.value,
-                                } as Partial<BotConfig>)
-                              }
+                              onChange={(e) => setDraftKeys((previous) => ({ ...previous, [ch.configKey]: e.target.value }))}
                               placeholder={`Paste ${ch.name}...`}
                               className="w-full pl-3 pr-20 py-2 rounded-xl bg-slate-900 border border-slate-700/80 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                             />

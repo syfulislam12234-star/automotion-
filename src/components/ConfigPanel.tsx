@@ -92,11 +92,21 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   const [testResults, setTestResults] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid' | 'idle'; latency?: number }>>({});
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
+  const [draftKeys, setDraftKeys] = useState<Partial<Record<keyof BotConfig, string>>>({});
   const [modelStatuses, setModelStatuses] = useState<Record<string, FreeModelStatus['status']>>({});
   const channelSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const toggleReveal = (field: string) => {
     setRevealedFields((prev) => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const getKeyDraft = (field: keyof BotConfig): string => {
+    const draft = draftKeys[field];
+    return draft !== undefined ? draft : String(config[field] || '');
+  };
+
+  const updateKeyDraft = (field: keyof BotConfig, value: string) => {
+    setDraftKeys((previous) => ({ ...previous, [field]: value }));
   };
 
   const selectTab = (tab: 'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model') => {
@@ -217,7 +227,9 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         onShowToast('⚠️ Clipboard is empty');
         return;
       }
-      updateField(field, text.trim() as any);
+      const usesDraft = ['groqApiKey', 'geminiApiKey', 'cerebrasApiKey', 'openrouterApiKey', 'sambanovaApiKey', 'mistralApiKey', 'githubToken'].includes(String(field));
+      if (usesDraft) updateKeyDraft(field, text);
+      else updateField(field, text as any);
       onShowToast(`✅ Pasted key for ${serviceName}!`);
     } catch {
       onShowToast(`⚠️ Could not read clipboard. Please paste manually.`);
@@ -225,7 +237,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   };
 
   const handleTestKey = async (serviceId: string, keyValue?: string, isZeroKey: boolean = false, field?: keyof BotConfig) => {
-    const normalizedKey = keyValue?.trim() || '';
+    const normalizedKey = field ? getKeyDraft(field).trim() : keyValue?.trim() || '';
     const session = AuthService.getCurrentSession();
     if (field && !isZeroKey && !session?.token) {
       onShowToast('⚠️ Please login first to save API keys.');
@@ -240,6 +252,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
     if (field && !isZeroKey && normalizedKey.length >= 6) {
       const nextConfig = { ...config, [field]: normalizedKey as BotConfig[typeof field] };
       void Promise.resolve(onChange(nextConfig)).catch(() => undefined);
+      setDraftKeys((previous) => {
+        const next = { ...previous };
+        delete next[field];
+        return next;
+      });
       setTestResults((prev) => ({ ...prev, [serviceId]: { status: 'testing' } }));
       const saved = await AiService.saveApiKey(serviceId, normalizedKey);
       if (!saved) {
@@ -490,8 +507,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['groq'] ? 'text' : 'password'}
                 placeholder="gsk_... (Groq API Key)"
-                value={config.groqApiKey || ''}
-                onChange={(e) => updateField('groqApiKey', e.target.value)}
+                value={getKeyDraft('groqApiKey')}
+                onChange={(e) => updateKeyDraft('groqApiKey', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -511,7 +528,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('groq', config.groqApiKey, false, 'groqApiKey')}
+                onClick={() => void handleTestKey('groq', undefined, false, 'groqApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
@@ -565,8 +582,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['gemini'] ? 'text' : 'password'}
                 placeholder="AIzaSy... (Gemini API Key)"
-                value={config.geminiApiKey || ''}
-                onChange={(e) => updateField('geminiApiKey', e.target.value)}
+                value={getKeyDraft('geminiApiKey')}
+                onChange={(e) => updateKeyDraft('geminiApiKey', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -585,7 +602,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('gemini', config.geminiApiKey, false, 'geminiApiKey')}
+                onClick={() => void handleTestKey('gemini', undefined, false, 'geminiApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
@@ -631,8 +648,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['cerebras'] ? 'text' : 'password'}
                 placeholder="csk-... (Cerebras API Key)"
-                value={config.cerebrasApiKey || ''}
-                onChange={(e) => updateField('cerebrasApiKey', e.target.value)}
+                value={getKeyDraft('cerebrasApiKey')}
+                onChange={(e) => updateKeyDraft('cerebrasApiKey', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -651,7 +668,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('cerebras', config.cerebrasApiKey, false, 'cerebrasApiKey')}
+                onClick={() => void handleTestKey('cerebras', undefined, false, 'cerebrasApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
@@ -697,8 +714,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['openrouter'] ? 'text' : 'password'}
                 placeholder="sk-or-v1-... (OpenRouter Key)"
-                value={config.openrouterApiKey || ''}
-                onChange={(e) => updateField('openrouterApiKey', e.target.value)}
+                value={getKeyDraft('openrouterApiKey')}
+                onChange={(e) => updateKeyDraft('openrouterApiKey', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -717,7 +734,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('openrouter', config.openrouterApiKey, false, 'openrouterApiKey')}
+                onClick={() => void handleTestKey('openrouter', undefined, false, 'openrouterApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
@@ -763,8 +780,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['sambanova'] ? 'text' : 'password'}
                 placeholder="SambaNova API Key"
-                value={config.sambanovaApiKey || ''}
-                onChange={(e) => updateField('sambanovaApiKey', e.target.value)}
+                value={getKeyDraft('sambanovaApiKey')}
+                onChange={(e) => updateKeyDraft('sambanovaApiKey', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -783,7 +800,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <span className="hidden sm:inline">Paste</span>
               </button>
               <button
-                onClick={() => handleTestKey('sambanova', config.sambanovaApiKey, false, 'sambanovaApiKey')}
+                onClick={() => void handleTestKey('sambanova', undefined, false, 'sambanovaApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <Zap className="w-3 h-3" />
@@ -833,8 +850,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['mistral'] ? 'text' : 'password'}
                 placeholder="Mistral API Key"
-                value={config.mistralApiKey || ''}
-                onChange={(e) => updateField('mistralApiKey', e.target.value)}
+                value={getKeyDraft('mistralApiKey')}
+                onChange={(e) => updateKeyDraft('mistralApiKey', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -852,7 +869,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('mistral', config.mistralApiKey, false, 'mistralApiKey')}
+                onClick={() => void handleTestKey('mistral', undefined, false, 'mistralApiKey')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
               >
                 Submit
@@ -886,8 +903,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['github'] ? 'text' : 'password'}
                 placeholder="ghp_... (GitHub Token)"
-                value={config.githubToken || ''}
-                onChange={(e) => updateField('githubToken', e.target.value)}
+                value={getKeyDraft('githubToken')}
+                onChange={(e) => updateKeyDraft('githubToken', e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button
@@ -905,7 +922,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Paste
               </button>
               <button
-                onClick={() => handleTestKey('github', config.githubToken, false, 'githubToken')}
+                onClick={() => void handleTestKey('github', undefined, false, 'githubToken')}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
               >
                 Submit
