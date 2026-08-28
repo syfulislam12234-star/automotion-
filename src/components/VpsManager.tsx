@@ -472,7 +472,7 @@ export const VpsManager: React.FC<VpsManagerProps> = ({
       },
       message: customMessage || `n8n webhook notification for ${eventType} on ${serverName}`,
       bot_gateway: {
-        active_providers: '20-Tier Auto-Failover (Groq, Gemini, DeepSeek, Cerebras, Mistral, OpenAI, Claude)',
+        active_providers: '100-Provider Auto-Failover (Groq, Gemini, DeepSeek, Cerebras, Mistral, OpenAI, Claude)',
         admin_whitelist_count: ((config as any).authorizedUserIds || []).length,
       },
     };

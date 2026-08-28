@@ -62,9 +62,9 @@ interface ConfigPanelProps {
 
 const PRESET_SYSTEM_PROMPTS = [
   {
-    label: '20-AI Multi-Tasker',
+    label: '100-AI Multi-Tasker',
     prompt:
-      'You are a versatile, intelligent multi-platform AI assistant powered by a 20-tier auto-failover engine. Provide clear, accurate, and concise Markdown answers across Telegram, Discord, Slack, and WhatsApp.',
+      'You are a versatile, intelligent multi-platform AI assistant powered by a 100-provider auto-failover engine. Provide clear, accurate, and concise Markdown answers across Telegram, Discord, Slack, and WhatsApp.',
   },
   {
     label: 'YouTube SEO & Creator Master',
@@ -312,7 +312,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           </div>
           <div>
             <h2 className="font-semibold text-slate-100 text-sm">Universal Bot Configuration Engine</h2>
-            <p className="text-xs text-slate-400">20 AI Providers • 10 Messaging Gateways • YouTube OAuth2 Suite</p>
+            <p className="text-xs text-slate-400">100 AI Providers • 10 Messaging Gateways • YouTube OAuth2 Suite</p>
           </div>
         </div>
 
@@ -349,7 +349,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           }`}
         >
           <Cpu className="w-3.5 h-3.5" />
-          <span>20 AI APIs</span>
+          <span>100 AI APIs</span>
         </button>
           {Object.values(channelStatuses as Record<string, { status?: string }>).some((entry) => entry?.status === 'connected' || entry?.status === 'running') && (
             <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold flex items-center gap-1">
@@ -418,7 +418,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         </button>
       </div>
 
-      {/* Tab 1: 20 AI Providers & Cascade */}
+      {/* Tab 1: 100 AI Providers & Cascade */}
       {activeTab === 'providers' && (
         <div className="space-y-3.5 max-h-[480px] overflow-y-auto pr-1">
           <div className="p-3 bg-cyan-950/40 border border-cyan-500/30 rounded-xl space-y-1">
@@ -918,7 +918,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           {/* Quick Hub for remaining providers */}
           <div className="p-3 bg-gradient-to-r from-slate-950 to-cyan-950/30 rounded-xl border border-cyan-500/30 flex items-center justify-between text-xs">
             <div>
-              <span className="font-bold text-white block">Configure All 20 AI Providers:</span>
+              <span className="font-bold text-white block">Configure All 100 AI Providers:</span>
               <span className="text-[11px] text-slate-400">
                 Together, Cohere, NVIDIA NIM, DeepInfra, Chutes, Voyage, DeepSeek, Replicate, Ollama...
               </span>

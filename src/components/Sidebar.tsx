@@ -191,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
               <SidebarItem
                 icon={<Sliders className="w-4 h-4 text-amber-400" />}
-                label="Bot Configurator"
+                label="Bot Configuration"
                 active={activeView === 'preferences' || activeView === 'settings'}
                 collapsed={isCollapsed}
                 onClick={() => select('preferences')}

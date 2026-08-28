@@ -65,8 +65,8 @@ const DEFAULT_CONFIG: BotConfig = {
   temperature: 0.7,
   maxOutputTokens: 2048,
   systemPrompt:
-    'You are a versatile, intelligent multi-platform AI assistant powered by a 20-tier auto-failover engine. Provide clear, accurate, and concise Markdown answers across Telegram, Discord, Slack, and WhatsApp.',
-  botName: 'Universal Multi-Platform 20-AI Bot',
+    'You are a versatile, intelligent multi-platform AI assistant powered by a 100-provider auto-failover engine. Provide clear, accurate, and concise Markdown answers across Telegram, Discord, Slack, and WhatsApp.',
+  botName: 'Universal Multi-Platform 100-AI Bot',
   enableAdminWhitelist: false,
   adminUserIds: '',
   enableStreamTyping: true,
@@ -81,7 +81,7 @@ const DEFAULT_CONFIG: BotConfig = {
   ensembleTimeoutMs: 3500,
   enableEnsembleComparisonTelemetry: true,
 
-  // Multi-Provider & Key Rotation (20 AI Providers)
+  // Multi-Provider & Key Rotation (100 AI Providers)
   enableMultiProviderFallback: true,
   groqKeysCount: 2,
   keyCooldownSeconds: 60,
@@ -541,7 +541,6 @@ function AppContent() {
         }}
         onLogOut={handleLogOut}
         onOpenDeployGuide={() => setIsDeployGuideOpen(true)}
-        onOpenPortal={() => handleOpenPortal('groq')}
         onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
         onOpenYouTubeStudio={() => setIsYouTubeStudioOpen(true)}
         onOpenAiChat={() => setIsAiChatOpen(true)}
@@ -745,16 +744,6 @@ function AppContent() {
           />
         )}
 
-        {currentUser?.role === 'admin' && activeTab === 'settings' && (
-          <ConfigPanel
-            config={config}
-            onChange={handleConfigChange}
-            onResetToDefaults={handleResetToDefaults}
-            onOpenPortal={handleOpenPortal}
-            onShowToast={showToast}
-          />
-        )}
-
         {activeTab === 'preferences' && (
           <ConfigPanel
             config={config}
@@ -787,7 +776,6 @@ function AppContent() {
               config={config}
               onChange={handleConfigChange}
               onShowToast={showToast}
-              onOpenPortal={handleOpenPortal}
             />
           </div>
         )}
@@ -842,7 +830,6 @@ function AppContent() {
             config={config}
             onChange={handleConfigChange}
             onShowToast={showToast}
-            onOpenPortal={handleOpenPortal}
             onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
           />
         )}
@@ -886,10 +873,6 @@ function AppContent() {
               className="text-rose-400 hover:text-rose-300 transition cursor-pointer flex items-center gap-1 font-medium"
             >
               <span>YouTube Studio</span>
-            </button>
-            <span>•</span>
-            <button onClick={() => handleOpenPortal('groq')} className="hover:text-cyan-400 transition cursor-pointer">
-              1-Click Setup Portal
             </button>
             <span>•</span>
             <button onClick={() => setIsDeployGuideOpen(true)} className="hover:text-cyan-400 transition cursor-pointer">

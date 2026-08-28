@@ -141,17 +141,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
-          {onOpenPortal && (
-            <button
-              onClick={onOpenPortal}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 transition shadow-md shadow-cyan-500/20 cursor-pointer"
-              title="1-Click Direct API Setup & Messaging Portal"
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">1-Click</span> Portal
-            </button>
-          )}
-
           <button
             onClick={onOpenDeployGuide}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-cyan-300 bg-cyan-950/50 border border-cyan-700/40 hover:bg-cyan-900/50 transition shadow-sm cursor-pointer"

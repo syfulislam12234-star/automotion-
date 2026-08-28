@@ -85,7 +85,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
         `### 📌 Executive Summary:\n` +
         `The document contains structured technical architectural specifications for deploying resilient 20-provider multi-platform AI agents across serverless clusters.\n\n` +
         `### 🔑 Key Takeaways & Extracted Insights:\n` +
-        `1. **Zero-Downtime 20-Tier Multi-Cascade:** Automatically mitigates API key failures via 20 providers.\n` +
+        `1. **Zero-Downtime 100-Provider Multi-Cascade:** Automatically mitigates API key failures across 100 providers.\n` +
         `2. **Automated Document Intelligence:** Extracts text from ${isPdf ? 'PDF pages via pypdf' : 'plaintext/code streams'} and synthesizes executive bullet points.\n` +
         `3. **10-Platform Gateway:** Syncs responses across Telegram, Discord, Slack, and WhatsApp.\n\n` +
         `💡 *Extracted from 100% of uploaded text buffers.*`;
@@ -177,7 +177,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               botResponse = `🛡️ *Universal Multi-Platform Bot Assistance*\n━━━━━━━━━━━━━━━━━━━━\n` +
                 `• \`/ensemble\` - Inspect & test Hybrid AI Ensemble Super-Brain\n` +
                 `• \`/status\` - Live VPS uptime, memory, and database metrics\n` +
-                `• \`/providers\` - 20-tier AI failover cascade health & latencies\n` +
+                `• \`/providers\` - 100-provider AI failover cascade health & latencies\n` +
                 `• \`/gateways\` - 10 messaging gateway connection states\n` +
                 `• \`/yt_seo <topic>\` - Viral YouTube tags, titles & thumbnail prompts\n` +
                 `• \`/image <prompt>\` - Synthesize AI artwork through a configured image provider\n` +
@@ -247,7 +247,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               break;
 
             case 'providers':
-              botResponse = `⚡ *20-Tier AI Failover Cascade Health:*\n\n` +
+              botResponse = `⚡ *100-Provider AI Failover Cascade Health:*\n\n` +
                 `1. 🟢 **Groq (LPU):** \`42ms\` (Active Primary)\n` +
                 `2. 🟢 **Google AI Studio (Gemini 3.7 / 2.5):** \`68ms\` (Standby)\n` +
                 `3. 🟢 **Cerebras (1000+ t/s):** \`38ms\` (Standby)\n` +
@@ -378,7 +378,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
         id: 'welcome',
         sender: 'bot',
         platform: 'telegram',
-        text: `👋 *Welcome to the 20-AI Provider Multi-Platform Bot Simulator!*\n\n• **10 Messaging Gateways:** Concurrently handles **Telegram**, **Discord**, **Slack**, **WhatsApp**, **Twilio**, **Pushover**, **Line**, **Matrix**, **Pyrogram**, and **Apprise**.\n• **Configured API-Key Failover:** Groq -> Gemini -> Cerebras -> OpenRouter -> SambaNova -> Mistral -> GitHub Models -> Cloudflare -> Together -> NVIDIA -> DeepInfra -> Hugging Face -> DeepSeek -> Cohere -> Voyage -> Replicate.\n• **YouTube Studio Suite:** Try \`/yt_seo <topic>\` for viral title formulas & \`/yt_upload\` for OAuth2 auto-uploader.\n\nType a message or click any quick command below!`,
+        text: `👋 *Welcome to the 100-AI Provider Multi-Platform Bot Simulator!*\n\n• **10 Messaging Gateways:** Concurrently handles **Telegram**, **Discord**, **Slack**, **WhatsApp**, **Twilio**, **Pushover**, **Line**, **Matrix**, **Pyrogram**, and **Apprise**.\n• **Configured API-Key Failover:** Routes through the active provider pool with automatic failover.\n• **YouTube Studio Suite:** Try \`/yt_seo <topic>\` for viral title formulas & \`/yt_upload\` for OAuth2 auto-uploader.\n\nType a message or click any quick command below!`,
         timestamp: getCurrentTime(),
         provider: `Groq (${config.modelName})`,
       },
@@ -429,7 +429,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
           </div>
           <div>
             <h3 className="text-xs font-bold text-white leading-none">Live Gateway Simulator</h3>
-            <span className="text-[10px] text-slate-400 font-mono">10 Protocols • 20 AI Cascade</span>
+            <span className="text-[10px] text-slate-400 font-mono">10 Protocols • 100 AI Cascade</span>
           </div>
         </div>
 

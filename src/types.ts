@@ -92,7 +92,7 @@ export interface BotConfig {
   ensembleTimeoutMs: number;
   enableEnsembleComparisonTelemetry: boolean;
 
-  // Multi-Provider & Key Rotation (20 AI Providers)
+  // Multi-Provider & Key Rotation (100 AI Providers)
   enableMultiProviderFallback: boolean;
   groqKeysCount: number;
   keyCooldownSeconds: number;

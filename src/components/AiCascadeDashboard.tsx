@@ -7,14 +7,12 @@ interface AiCascadeDashboardProps {
   config: BotConfig;
   onChange: (updates: Partial<BotConfig>) => void;
   onShowToast: (msg: string) => void;
-  onOpenPortal: (platformId?: string) => void;
 }
 
 export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
   config,
   onChange,
   onShowToast,
-  onOpenPortal,
 }) => {
   const [freeModelCount, setFreeModelCount] = useState(0);
   const [freeModels, setFreeModels] = useState<AiModelCatalogItem[]>([]);
@@ -61,13 +59,6 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
               <p className="text-xs text-slate-400">{freeModelCount || 'Dynamic'} free models available with sequential failover routing</p>
             </div>
           </div>
-          <button
-            onClick={() => onOpenPortal('groq')}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md transition cursor-pointer"
-          >
-            <Key className="w-4 h-4" />
-            <span>Manage API Keys</span>
-          </button>
         </div>
       </div>
 
@@ -101,13 +92,6 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
 
             <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
               <span>Speed: <strong className="text-slate-200">{tier.speed}</strong></span>
-              <button
-                onClick={() => onOpenPortal(tier.portalId)}
-                className="text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <span>Config</span>
-                <ExternalLink className="w-3 h-3" />
-              </button>
             </div>
           </div>
         ))}

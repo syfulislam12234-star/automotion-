@@ -48,7 +48,7 @@ const SUGGESTIONS = [
   },
   {
     title: '150-AI Failover Cascade',
-    desc: 'How zero-downtime routing works across 20 providers',
+    desc: 'How zero-downtime routing works across 100 providers',
     prompt: 'Explain the architecture of the 150-AI model failover cascade. How does it handle 503 high demand spikes and automatically route to Groq, Gemini, and Cerebras?',
     icon: '⚡',
   },
