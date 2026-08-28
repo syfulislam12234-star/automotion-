@@ -50,11 +50,6 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
     const value = keyInput.trim();
     if (!value) return;
     const session = AuthService.getCurrentSession();
-    if (!session?.token || !session.isVerified || !session.user.isVerified) {
-      onRequireAuth();
-      setConnectionStatus(null);
-      return;
-    }
     setIsSaving(true);
     setConnectionStatus(null);
     try {
@@ -64,12 +59,12 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
         body: JSON.stringify({ provider: currentProvider.id, token: value }),
       });
       const verification = await response.json().catch(() => ({}));
-      if (!response.ok || !verification.success) throw new Error(verification.error || verification.message || 'API key verification failed.');
+      if (!response.ok || !verification.success || verification.valid === false) throw new Error(verification.error || verification.message || 'API key verification failed.');
       void AiService.saveApiKey(currentProvider.id, value);
       void Promise.resolve(onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: value }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: value } : {}) })).catch(() => undefined);
       setConnectionStatus('Connected Successfully');
       onShowToast('🟢 API Key saved and activated successfully!');
-      setKeyInput('');
+      setKeyInput(value);
     } catch (error: any) {
       setConnectionStatus(error?.message || 'API key verification failed.');
       onShowToast(`⚠️ ${currentProvider.name}: ${error?.message || 'connection failed.'}`);
