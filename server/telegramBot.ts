@@ -87,6 +87,45 @@ export class TelegramBotService {
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
         return { ok: true, skipped: true };
       }
+      const normalizedText = text.toLowerCase();
+      const command = normalizedText.split(/\s+/)[0].split('@')[0];
+      const restrictedCommands = new Set(['/admin', '/stats', '/restart', '/broadcast', '/clear_memory', '/whitelist', '/database', '/settings', '/config', '/keys', '/env', '/status_admin', '/telemetry', '/users', '/setkey', '/setenv']);
+      const adminChatId = String(TelegramBotService.currentConfig?.telegramAdminChatId || TelegramBotService.currentConfig?.adminTelegramId || '').trim();
+      if (restrictedCommands.has(command) && String(chatId) !== adminChatId) {
+        await TelegramBotService.sendMessage(token, chatId, 'Access Denied: You do not have authorization for administrative operations.');
+        return { ok: true, denied: true };
+      }
+      const asksForHelp = normalizedText === 'help' || normalizedText === 'assistance' || normalizedText === 'what can you do';
+      if (command === '/help' || command === '/start' || asksForHelp) {
+        await TelegramBotService.sendMessage(token, chatId,
+          '<b>Automotion AI Assistant</b>\n\n' +
+          '<b>Available commands</b>\n' +
+          '/start - Start or restart the Telegram AI assistant.\n' +
+          '/help - View this guide and available automation tools.\n' +
+          '/status - Check the live AI engine status.\n' +
+          '/yt_upload - Start the secure YouTube upload guide.\n\n' +
+          '<b>YouTube upload guide</b>\n' +
+          '1. Send /yt_upload, optionally followed by a short topic.\n' +
+          '2. Attach the video file when prompted.\n' +
+          '3. Choose Public, Private, or Unlisted.\n' +
+          '4. Choose Made for Kids or Not Made for Kids.\n' +
+          'AI SEO metadata is generated automatically before live YouTube processing.\n\n' +
+          '<b>AI assistant chat</b>\n' +
+          'Send any question directly in this chat. The live AI fallback engine will answer in your language.\n\n' +
+          '<i>Administrative commands and credentials are protected.</i>');
+        return { ok: true };
+      }
+      if (command === '/status') {
+        const status = TelegramBotService.getStatus();
+        await TelegramBotService.sendMessage(token, chatId,
+          `<b>AI Engine Status</b>\n\n` +
+          `Status: <b>${status.running ? 'Operational' : 'Stopped'}</b>\n` +
+          `Configured: <b>${status.isConfigured ? 'Yes' : 'No'}</b>\n` +
+          `Mode: <b>${status.mode}</b>\n` +
+          `Updates processed: <b>${status.totalUpdatesProcessed}</b>\n` +
+          `Primary route: <b>${TelegramBotService.escapeHtml(status.aiCascade.primary)}</b>`);
+        return { ok: true };
+      }
       const chatKey = String(chatId);
       const uploadState = TelegramBotService.uploadStates.get(chatKey);
       if (message?.video?.file_id && uploadState?.step === 'file') {
@@ -192,12 +231,16 @@ export class TelegramBotService {
   }
 
   private static formatTelegramHtml(text: string): string {
-    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const escaped = TelegramBotService.escapeHtml(text);
     return escaped
       .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
       .replace(/__(.+?)__/g, '<b>$1</b>')
       .replace(/`([^`\n]+)`/g, '<code>$1</code>')
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+  }
+
+  private static escapeHtml(value: string): string {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   private static async sendMessage(token: string, chatId: string | number, text: string): Promise<void> {

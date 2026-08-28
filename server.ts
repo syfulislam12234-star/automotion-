@@ -1020,6 +1020,11 @@ async function startServer() {
       const secretHeader = (req.headers['x-telegram-bot-api-secret-token'] as string) || '';
       const update = req.body;
 
+      const expectedSecret = String(process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN || process.env.WEBHOOK_SECRET || '').trim();
+      if (expectedSecret && secretHeader !== expectedSecret) {
+        return res.status(403).json({ ok: false, error: 'Webhook authorization failed.' });
+      }
+
       if (!update) {
         return res.status(200).json({ ok: true, reason: 'Empty body' });
       }
