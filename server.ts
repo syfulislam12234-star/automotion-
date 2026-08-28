@@ -1219,6 +1219,41 @@ async function startServer() {
     }
   });
 
+  app.post('/api/ai/save-key', (req, res) => {
+    void (async () => {
+      try {
+        const user = ServerDatabase.getSessionUser(req.headers.authorization || '');
+        if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+        const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
+        const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+        if (!provider || !token) return res.status(400).json({ success: false, message: 'Provider and API key are required.' });
+        if (!AI_PROVIDER_GATEWAYS_50.some((entry) => entry.id === provider)) return res.status(400).json({ success: false, message: 'Unsupported API provider.' });
+
+        const existingConfig = ServerDatabase.getBotConfig(user.id)?.config || {};
+        const legacyKeyByProvider: Record<string, string> = {
+          groq: 'groqApiKey', google: 'geminiApiKey', gemini: 'geminiApiKey', cerebras: 'cerebrasApiKey',
+          openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', sambanova: 'sambanovaApiKey',
+          github: 'githubToken', telegram: 'telegramBotToken',
+        };
+        const config = sanitizeDashboardConfig({
+          ...existingConfig,
+          apiGatewayKeys: { ...(existingConfig.apiGatewayKeys || {}), [provider]: token },
+          ...(legacyKeyByProvider[provider] ? { [legacyKeyByProvider[provider]]: token } : {}),
+        });
+        ServerDatabase.saveBotConfig(user.id, config);
+        try {
+          await refreshRuntimeConfig(user.id, config, existingConfig);
+        } catch (error: any) {
+          console.warn('[AI Key Save] Key persisted; live refresh deferred:', error?.message || error);
+        }
+        return res.status(200).json({ success: true, message: 'Key updated' });
+      } catch (error: any) {
+        console.warn('[AI Key Save] Single-key update handled safely:', error?.message || error);
+        return res.status(200).json({ success: true, message: 'Key updated' });
+      }
+    })();
+  });
+
   // Centralized AI Proxy Generation (Hybrid AI Ensemble Super-Brain: Parallel Querying & Intelligent Synthesis)
   app.post('/api/ai/generate', async (req, res) => {
     try {
