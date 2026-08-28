@@ -98,24 +98,39 @@ export class TelegramBotService {
         await TelegramBotService.sendMessage(token, chatId, 'Access Denied: You do not have authorization for administrative operations.');
         return { ok: true, denied: true };
       }
-      const asksForHelp = normalizedText === 'help' || normalizedText === 'assistance' || normalizedText === 'what can you do';
-      if (command === '/help' || command === '/start' || asksForHelp) {
+      const asksForHelp = ['help', 'assistance', 'what can you do', 'setup', 'api setup', 'guide'].includes(normalizedText);
+      if (command === '/help' || command === '/start' || command === '/setup' || asksForHelp) {
         await TelegramBotService.sendMessage(token, chatId,
-          '<b>Automotion AI Assistant</b>\n\n' +
-          '<b>Available commands</b>\n' +
-          '/start - Start or restart the Telegram AI assistant.\n' +
-          '/help - View this guide and available automation tools.\n' +
-          '/status - Check the live AI engine status.\n' +
-          '/yt_upload - Start the secure YouTube upload guide.\n\n' +
-          '<b>YouTube upload guide</b>\n' +
-          '1. Send /yt_upload, optionally followed by a short topic.\n' +
-          '2. Attach the video file when prompted.\n' +
-          '3. Choose Public, Private, or Unlisted.\n' +
-          '4. Choose Made for Kids or Not Made for Kids.\n' +
-          'AI SEO metadata is generated automatically before live YouTube processing.\n\n' +
-          '<b>AI assistant chat</b>\n' +
-          'Send any question directly in this chat. The live AI fallback engine will answer in your language.\n\n' +
-          '<i>Administrative commands and credentials are protected.</i>');
+          '**🤖 AUTOMOTION AI — MASTER GUIDE**\n\n' +
+          '**📜 COMMANDS**\n' +
+          '/start — Activate the AI assistant\n' +
+          '/help or /setup — Show this master guide\n' +
+          '/status — Live AI engine, provider pool and key status\n' +
+          '/yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
+          'Send any text — Chat with the multi-model AI brain (instant failover)\n\n' +
+          '**🔑 STEP 1 — ADD AI API KEYS (unlocks AI replies)**\n' +
+          '1️⃣ Google Gemini (FREE): open https://aistudio.google.com/app/apikey → sign in → Create API key → copy\n' +
+          '2️⃣ Groq (FREE, fastest LPU): open https://console.groq.com/keys → log in → Create API Key → copy\n' +
+          '3️⃣ OpenAI: open https://platform.openai.com/api-keys → Create new secret key → copy\n' +
+          '4️⃣ OpenRouter (FREE models): open https://openrouter.ai/keys → Create key → copy\n' +
+          '5️⃣ Add keys: Web App → 1-Click API Portal → paste → Verify & Save. Server keys can also go into the .env file (e.g. GROQ_API_KEY) then restart.\n' +
+          '⚡ All keys join a circular millisecond failover pool — 429 rate limits and downtime heal automatically.\n\n' +
+          '**🎬 STEP 2 — YOUTUBE API & OAUTH (enables auto-upload)**\n' +
+          '1️⃣ Open https://console.cloud.google.com → create a project\n' +
+          '2️⃣ APIs & Services → Library → enable **YouTube Data API v3**\n' +
+          '3️⃣ OAuth consent screen → External → add your Google account as a Test user\n' +
+          '4️⃣ Credentials → Create credentials → **OAuth Client ID** → Web application\n' +
+          '5️⃣ Copy the Client ID and Client Secret\n' +
+          '6️⃣ Generate a Refresh Token with the youtube.upload scope (the Google OAuth 2.0 Playground works great)\n' +
+          '7️⃣ Paste Client ID, Secret and Refresh Token in the Web App → Config Panel → YouTube Studio tab\n\n' +
+          '**📺 VIDEO TUTORIALS**\n' +
+          '• Get a Gemini API key: https://www.youtube.com/results?search_query=how+to+get+google+gemini+api+key+free\n' +
+          '• Get a Groq API key: https://www.youtube.com/results?search_query=how+to+get+groq+api+key+free\n' +
+          '• YouTube OAuth refresh token: https://www.youtube.com/results?search_query=youtube+data+api+v3+oauth+refresh+token+tutorial\n' +
+          '• Auto upload bot: https://www.youtube.com/results?search_query=telegram+bot+youtube+auto+upload+tutorial\n\n' +
+          '**🔥 VIRAL AUTO-UPLOAD**\n' +
+          'Send /yt_upload (optionally with a topic) → attach the video → choose Public, Private or Unlisted → choose Kids or Not Kids. The AI automatically writes a high-CTR viral title, an engagement-focused description, hashtags and ranking search tags, then uploads to YouTube.\n\n' +
+          '__Administrative commands and credentials are protected.__');
         return { ok: true };
       }
       if (command === '/status') {
@@ -162,10 +177,10 @@ export class TelegramBotService {
           return { ok: true };
         }
         try {
-          await TelegramBotService.sendMessage(token, chatId, 'AI SEO metadata তৈরি করে YouTube-এ আপলোড করা হচ্ছে...');
+          await TelegramBotService.sendMessage(token, chatId, '🔥 Viral AI SEO (title, description, hashtags, tags) তৈরি করে YouTube-এ আপলোড করা হচ্ছে...');
           const result = await TelegramBotService.uploadTelegramVideo(token, uploadState, normalized === 'kids', chatId);
           TelegramBotService.uploadStates.delete(chatKey);
-          await TelegramBotService.sendMessage(token, chatId, `আপলোড সম্পন্ন: ${result.url}`);
+          await TelegramBotService.sendMessage(token, chatId, `🔥 ভাইরাল AI SEO সহ আপলোড সম্পন্ন: ${result.url}`);
         } catch (error: any) {
           TelegramBotService.uploadStates.delete(chatKey);
           await TelegramBotService.sendMessage(token, chatId, `YouTube আপলোড ব্যর্থ: ${error?.message || 'OAuth configuration পরীক্ষা করুন।'}`);

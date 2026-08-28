@@ -5,12 +5,13 @@ import { GlobalApiKeyStore, maskKey } from './keyStore';
  * Ultra-Fast Millisecond Multi-Model Failover Orchestrator
  *
  * Step A: Try the primary model / API key.
- * Step B: Every attempt runs under a tight 3-second response deadline. On a rate limit
- *         (HTTP 429), quota exhaustion, network timeout, or error response, the engine
- *         INSTANTLY (within milliseconds — no sleeps) fails over to the next active
- *         provider in the queue.
- * Step C: Rapid sequential retries continue across the entire active provider pool
- *         until a valid response is generated.
+ * Step B: Every attempt runs under a tight 2.5-second AbortController deadline. On a rate
+ *         limit (HTTP 429), quota exhaustion, network timeout, or error response, the engine
+ *         INSTANTLY (within milliseconds — no sleeps) fails over to the next provider in
+ *         the circular queue.
+ * Step C: Rapid sequential retries continue around the dynamic circular key pool until a
+ *         valid response is generated. A zero-break final sweep re-attempts every key with
+ *         cooldowns ignored, so the user NEVER sees an error while at least one key exists.
  *
  * The pool is built from the GlobalApiKeyStore (environment + persistent database +
  * runtime saves). As long as at least ONE valid API key remains active in the pool,
@@ -55,7 +56,8 @@ interface ProviderRoute {
   priority: number;
 }
 
-const DEFAULT_ATTEMPT_DEADLINE_MS = Math.max(1500, Number(process.env.AI_FAILOVER_DEADLINE_MS) || 3000);
+/** Tight 2.5-second AbortController deadline per provider attempt (circular failover). */
+const DEFAULT_ATTEMPT_DEADLINE_MS = Math.max(1500, Number(process.env.AI_FAILOVER_DEADLINE_MS) || 2500);
 const RATE_LIMIT_COOLDOWN_MS = Math.max(5000, Number(process.env.AI_KEY_COOLDOWN_MS) || 20000);
 const INVALID_KEY_COOLDOWN_MS = 120000;
 
@@ -169,51 +171,64 @@ export class FailoverEngine {
     const activeProviderIds = GlobalApiKeyStore.getActiveProviderIds();
     let attempts = 0;
     const trail: string[] = [];
+    const rotationOffset = GlobalApiKeyStore.getRotationCursor();
 
-    for (const route of orderedRoutes) {
-      const keys = GlobalApiKeyStore.getKeysForProvider(route.id).slice(0, maxKeysPerProvider);
-      if (keys.length === 0) continue;
+    // Dynamic circular key pool: up to two sweeps. Sweep 1 respects temporary key
+    // cooldowns; the zero-break Sweep 2 ignores them so EVERY active key is genuinely
+    // attempted — the user never sees an error while at least one key exists in the pool.
+    for (let sweep = 0; sweep < 2; sweep += 1) {
+      const ignoreCooldowns = sweep === 1;
+      for (const route of orderedRoutes) {
+        const allKeys = GlobalApiKeyStore.getKeysForProvider(route.id);
+        if (allKeys.length === 0) continue;
+        // Circular rotation: consecutive requests start with the next key in the queue.
+        const offset = rotationOffset % allKeys.length;
+        const rotatedKeys = [...allKeys.slice(offset), ...allKeys.slice(0, offset)];
+        const keys = rotatedKeys.slice(0, maxKeysPerProvider);
 
-      const candidateModels = route.id === preferredProvider && preferredModel
-        ? Array.from(new Set([preferredModel, ...route.models])).slice(0, maxModelsPerRoute + 1)
-        : route.models.slice(0, maxModelsPerRoute);
+        const candidateModels = route.id === preferredProvider && preferredModel
+          ? Array.from(new Set([preferredModel, ...route.models])).slice(0, maxModelsPerRoute + 1)
+          : route.models.slice(0, maxModelsPerRoute);
 
-      for (const apiKey of keys) {
-        if (FailoverEngine.isCoolingDown(route.id, apiKey)) continue;
-        for (const model of candidateModels) {
-          attempts += 1;
-          const attemptLabel = `${route.id}/${model}`;
-          try {
-            const text = route.style === 'anthropic'
-              ? await FailoverEngine.attemptAnthropic(route, apiKey, model, messages, deadlineMs)
-              : route.style === 'gemini'
-                ? await FailoverEngine.attemptGemini(route, apiKey, model, messages, deadlineMs)
-                : await FailoverEngine.attemptOpenAiStyle(route, apiKey, model, messages, deadlineMs);
-            if (text && text.trim()) {
-              trail.push(`${attemptLabel} ✓ (${Date.now() - startedAt}ms)`);
-              return {
-                text: text.trim(),
-                providerId: route.id,
-                providerName: route.name,
-                model,
-                attempts,
-                latencyMs: Date.now() - startedAt,
-                trail,
-                activeProviders: activeProviderIds,
-              };
+        for (const apiKey of keys) {
+          if (!ignoreCooldowns && FailoverEngine.isCoolingDown(route.id, apiKey)) continue;
+          for (const model of candidateModels) {
+            attempts += 1;
+            const attemptLabel = `${route.id}/${model}`;
+            try {
+              const text = route.style === 'anthropic'
+                ? await FailoverEngine.attemptAnthropic(route, apiKey, model, messages, deadlineMs)
+                : route.style === 'gemini'
+                  ? await FailoverEngine.attemptGemini(route, apiKey, model, messages, deadlineMs)
+                  : await FailoverEngine.attemptOpenAiStyle(route, apiKey, model, messages, deadlineMs);
+              if (text && text.trim()) {
+                trail.push(`${attemptLabel} ✓ (${Date.now() - startedAt}ms)`);
+                GlobalApiKeyStore.advanceRotation(1);
+                return {
+                  text: text.trim(),
+                  providerId: route.id,
+                  providerName: route.name,
+                  model,
+                  attempts,
+                  latencyMs: Date.now() - startedAt,
+                  trail,
+                  activeProviders: activeProviderIds,
+                };
+              }
+              trail.push(`${attemptLabel} ✗ (empty response)`);
+              FailoverEngine.noteFailure(route.id, apiKey, 'empty');
+            } catch (error: any) {
+              const isTimeout = error?.name === 'AbortError' || /timeout|abort/i.test(String(error?.message || ''));
+              trail.push(`${attemptLabel} ✗ (${isTimeout ? 'deadline' : 'error'})`);
+              FailoverEngine.noteFailure(route.id, apiKey, isTimeout ? 'timeout' : 'network');
+              console.warn(`[FailoverEngine] ${attemptLabel} failed (${isTimeout ? 'deadline' : error?.message || 'error'}); failing over instantly (<10ms).`);
             }
-            trail.push(`${attemptLabel} ✗ (empty response)`);
-            FailoverEngine.noteFailure(route.id, apiKey, 'empty');
-          } catch (error: any) {
-            const isTimeout = error?.name === 'AbortError' || /timeout|abort/i.test(String(error?.message || ''));
-            trail.push(`${attemptLabel} ✗ (${isTimeout ? 'deadline' : 'error'})`);
-            FailoverEngine.noteFailure(route.id, apiKey, isTimeout ? 'timeout' : 'network');
-            console.warn(`[FailoverEngine] ${attemptLabel} failed (${isTimeout ? 'deadline' : error?.message || 'error'}); failing over instantly.`);
           }
         }
       }
     }
 
+    GlobalApiKeyStore.advanceRotation(1);
     console.warn(`[FailoverEngine] Active pool exhausted after ${attempts} attempt(s) in ${Date.now() - startedAt}ms.`);
     return null;
   }

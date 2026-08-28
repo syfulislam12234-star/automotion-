@@ -69,7 +69,7 @@ export const YouTubeStudioModal: React.FC<YouTubeStudioModalProps> = ({ isOpen, 
   return <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
     <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl p-6 space-y-6">
       <header className="flex items-center justify-between border-b border-slate-800 pb-4">
-        <div className="flex items-center gap-3"><Youtube className="w-6 h-6 text-rose-400" /><div><h2 className="text-lg font-bold text-white">YouTube Auto Upload</h2><p className="text-xs text-slate-400">AI SEO metadata and live Data API v3 upload</p></div></div>
+        <div className="flex items-center gap-3"><Youtube className="w-6 h-6 text-rose-400" /><div><h2 className="text-lg font-bold text-white">YouTube Auto Upload</h2><p className="text-xs text-slate-400">Viral AI SEO metadata + live Data API v3 upload</p></div></div>
         <button onClick={close} disabled={isUploading} className="p-2 text-slate-400 hover:text-white disabled:opacity-40"><X className="w-5 h-5" /></button>
       </header>
       <div className="flex items-center gap-2 text-xs text-slate-400"><strong className="text-rose-400">Step {step} of 3</strong><div className="h-1 flex-1 bg-slate-800 rounded"><div className="h-1 bg-rose-500 rounded" style={{ width: `${step * 33.333}%` }} /></div></div>

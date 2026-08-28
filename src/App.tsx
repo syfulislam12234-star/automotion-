@@ -26,6 +26,7 @@ import { AiBrainVisualizer } from './components/AiBrainVisualizer';
 import { AiAnalyzerModal } from './components/AiAnalyzerModal';
 import { ApiVaultModal } from './components/ApiVaultModal';
 import { AuthService } from './services/authService';
+import { AiService } from './services/aiService';
 import {
   Rocket,
   Bot,
@@ -323,6 +324,59 @@ const normalizeWorkspaceConfig = (value: unknown): BotConfig => {
   };
 };
 
+/** Credential fields that must never be blanked by background config restores or telemetry pings. */
+const PROTECTED_CREDENTIAL_FIELDS: Array<keyof BotConfig> = [
+  'groqApiKey', 'geminiApiKey', 'cerebrasApiKey', 'openrouterApiKey', 'mistralApiKey',
+  'sambanovaApiKey', 'huggingfaceApiKey', 'cohereApiKey', 'nvidiaNimApiKey', 'togetherApiKey',
+  'deepinfraApiKey', 'chutesApiKey', 'voyageApiKey', 'replicateApiToken', 'vercelAiToken',
+  'deepseekApiKey', 'githubToken', 'cloudflareApiToken',
+  'youtubeClientId', 'youtubeClientSecret', 'youtubeRefreshToken',
+  'telegramBotToken', 'telegramAdminBotToken', 'discordBotToken', 'discordAdminWebhookUrl',
+  'slackBotToken', 'slackAppToken', 'slackSigningSecret',
+  'whatsappPhoneNumberId', 'whatsappAccessToken', 'whatsappVerifyToken',
+  'twilioAccountSid', 'twilioAuthToken', 'lineChannelSecret', 'lineChannelAccessToken',
+  'matrixAccessToken',
+];
+
+/**
+ * Zero-break config merge: incoming (server/telemetry) values never wipe non-empty local
+ * credentials, and keys saved through the API Portal localStorage vault always surface.
+ */
+const mergeConfigsPreservingCredentials = (previous: BotConfig, incoming: Partial<BotConfig>): BotConfig => {
+  const merged: BotConfig = { ...previous, ...incoming };
+  const incomingRecord = incoming as Record<string, unknown>;
+  const previousRecord = previous as Record<string, unknown>;
+  const mergedRecord = merged as Record<string, unknown>;
+  for (const field of PROTECTED_CREDENTIAL_FIELDS) {
+    const incomingValue = String(incomingRecord?.[field] ?? '').trim();
+    const previousValue = String(previousRecord?.[field] ?? '').trim();
+    if (!incomingValue && previousValue) {
+      mergedRecord[field] = previousRecord[field];
+    }
+  }
+  const incomingGatewayKeys = (incoming as { apiGatewayKeys?: Record<string, string> })?.apiGatewayKeys;
+  if (!incomingGatewayKeys || Object.keys(incomingGatewayKeys).length === 0) {
+    const previousGatewayKeys = (previous as { apiGatewayKeys?: Record<string, string> })?.apiGatewayKeys;
+    if (previousGatewayKeys && Object.keys(previousGatewayKeys).length > 0) {
+      merged.apiGatewayKeys = previousGatewayKeys;
+    }
+  }
+  const storedKeys = AiService.getStoredApiKeys();
+  const fieldByProvider: Record<string, keyof BotConfig> = {
+    groq: 'groqApiKey', google: 'geminiApiKey', gemini: 'geminiApiKey', cerebras: 'cerebrasApiKey',
+    openrouter: 'openrouterApiKey', sambanova: 'sambanovaApiKey', mistral: 'mistralApiKey',
+    github: 'githubToken', together: 'togetherApiKey', deepseek: 'deepseekApiKey',
+    cohere: 'cohereApiKey', nvidia: 'nvidiaNimApiKey', huggingface: 'huggingfaceApiKey',
+  };
+  for (const [provider, field] of Object.entries(fieldByProvider)) {
+    const storedValue = String(storedKeys[provider] || '').trim();
+    if (storedValue && !String(merged[field] || '').trim()) {
+      mergedRecord[field] = storedValue;
+    }
+  }
+  return merged;
+};
+
 function AppContent() {
   const [config, setConfig] = useState<BotConfig>(getInitialConfig);
   const [loading, setLoading] = useState(true);
@@ -370,7 +424,7 @@ function AppContent() {
           setSession(null);
         }
         if (serverConfig) {
-          setConfig((previous) => normalizeWorkspaceConfig({ ...previous, ...serverConfig }));
+          setConfig((previous) => normalizeWorkspaceConfig(mergeConfigsPreservingCredentials(previous, serverConfig)));
         }
       } catch (error) {
         console.warn('Workspace initialization sync notice:', error);

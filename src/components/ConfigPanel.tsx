@@ -118,11 +118,18 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
 
   const getKeyDraft = (field: keyof BotConfig): string => {
     const draft = draftKeys[field];
-    return draft !== undefined ? draft : String(config[field] || '');
+    if (draft !== undefined) return draft;
+    const configValue = String(config[field] || '');
+    if (configValue) return configValue;
+    // Zero-break fallback: recover the key from the localStorage vault when a background
+    // config restore or telemetry ping temporarily blanks the workspace config field.
+    return AiService.getKeyDraftForField(String(field)) || AiService.getStoredKeyForField(String(field));
   };
 
   const updateKeyDraft = (field: keyof BotConfig, value: string) => {
     setDraftKeys((previous) => ({ ...previous, [field]: value }));
+    // Persist the in-progress paste so re-renders/remounts can never lose it.
+    AiService.saveKeyDraftForField(String(field), value);
   };
 
   const selectTab = (tab: 'providers' | 'messaging' | 'youtube' | 'alerts' | 'hosting' | 'model') => {
@@ -258,11 +265,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
     if (field && !isZeroKey && normalizedKey.length >= 6) {
       const nextConfig = { ...config, [field]: normalizedKey as BotConfig[typeof field] };
       void Promise.resolve(onChange(nextConfig)).catch(() => undefined);
-      setDraftKeys((previous) => {
-        const next = { ...previous };
-        delete next[field];
-        return next;
-      });
+      // Keep the local draft so the input never blanks while the config state round-trips
+      // (background telemetry pings / re-renders can no longer clear the saved key).
       setTestResults((prev) => ({ ...prev, [serviceId]: { status: 'testing' } }));
       const saved = await AiService.saveApiKey(serviceId, normalizedKey);
       if (!saved) {

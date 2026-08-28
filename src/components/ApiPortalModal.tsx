@@ -27,8 +27,11 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<string>(initialPlatformId);
   const [keyInput, setKeyInput] = useState(() => {
     try {
+      // In-progress drafts first, then verified keys — background re-renders can never clear them.
+      const draft = AiService.getKeyDraft(initialPlatformId);
+      if (draft) return draft;
       const savedKeys = JSON.parse(localStorage.getItem('user_api_keys') || '{}') as Record<string, string>;
-      return savedKeys[initialPlatformId] || '';
+      return AiService.getStoredKey(initialPlatformId) || savedKeys[initialPlatformId] || '';
     } catch {
       return '';
     }
@@ -48,8 +51,14 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   const currentKey = (config.apiGatewayKeys?.[currentProvider.id] || (legacyKeys[currentProvider.id] ? config[legacyKeys[currentProvider.id]] : '')) as string;
 
   useEffect(() => {
-    setKeyInput((previous) => previous || currentKey);
-  }, [selectedProvider]);
+    if (!isOpen) return;
+    setKeyInput((previous) => {
+      if (previous && previous.trim()) return previous;
+      return AiService.getKeyDraft(selectedProvider)
+        || AiService.getStoredKey(selectedProvider)
+        || String(config.apiGatewayKeys?.[selectedProvider] || (legacyKeys[selectedProvider] ? config[legacyKeys[selectedProvider]] : '') || '');
+    });
+  }, [selectedProvider, isOpen]);
 
   if (!isOpen) return null;
 
@@ -71,6 +80,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
       void Promise.resolve(onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: value }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: value } : {}) })).catch(() => undefined);
       setConnectionStatus('Connected Successfully');
       onShowToast('🟢 API Key saved and activated successfully!');
+      AiService.saveKeyDraft(currentProvider.id, value);
       setKeyInput(value);
     } catch (error: any) {
       setConnectionStatus(error?.message || 'API key verification failed.');
@@ -104,7 +114,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
               key={p.id}
               onClick={() => {
                 setSelectedProvider(p.id);
-                setKeyInput((config.apiGatewayKeys?.[p.id] || (legacyKeys[p.id] ? config[legacyKeys[p.id]] : '')) as string || '');
+                setKeyInput(AiService.getKeyDraft(p.id) || AiService.getStoredKey(p.id) || String((config.apiGatewayKeys?.[p.id] || (legacyKeys[p.id] ? config[legacyKeys[p.id]] : '')) as string || ''));
                 setConnectionStatus(null);
               }}
               className={`p-3 rounded-xl border text-left transition cursor-pointer ${
@@ -135,8 +145,12 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
           <input
             type="password"
             value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-            placeholder={`Enter ${currentProvider.name} key...`}
+            onChange={(e) => {
+              setKeyInput(e.target.value);
+              // Persist the in-progress paste so background re-renders can never clear it.
+              AiService.saveKeyDraft(currentProvider.id, e.target.value);
+            }}
+            placeholder={currentKey ? AiService.maskKeyPreview(currentKey) : `Enter ${currentProvider.name} key...`}
             className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
           />
           <div className="flex justify-end">

@@ -1,3 +1,5 @@
+import { FailoverEngine } from './aiFailoverEngine';
+
 export interface YouTubeUploadOptions {
   video: Uint8Array;
   mimeType: string;
@@ -27,8 +29,16 @@ function cleanJsonText(value: string): string {
   return value.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 }
 
+const VIRAL_SEO_PROMPT = 'Return ONLY valid JSON (no markdown fences) with viral, high-CTR YouTube metadata for this video topic: "{{TOPIC}}". Shape: {"title":"punchy viral high-CTR title under 90 characters using power words, curiosity hooks and at most 2 emojis","description":"engagement-focused description that opens with a 2-line hook, then value bullets, then a strong call-to-action to like, subscribe and comment, then 4-6 relevant hashtags inline like #viral #shorts #tutorial","tags":["18 high-ranking search tags mixing broad and long-tail keywords"]}. The description MUST contain hashtags. Do not add any text outside the JSON.';
+
 export async function generateYouTubeSeo(prompt: string, generateAi: (input: string) => Promise<string | null>): Promise<YouTubeSeoMetadata> {
-  const aiText = await generateAi(`Return ONLY valid JSON for YouTube metadata for this video topic: "${prompt}". Shape: {"title":"high CTR title under 100 characters","description":"search optimized description with useful formatting, hashtags and links","tags":["15 relevant search tags"]}. Do not include markdown fences.`);
+  const seoRequest = VIRAL_SEO_PROMPT.replace('{{TOPIC}}', String(prompt || '').slice(0, 300));
+  let aiText = await generateAi(seoRequest).catch(() => null);
+  if (!aiText) {
+    // Zero-break: route the viral SEO request straight through the millisecond failover engine.
+    const direct = await FailoverEngine.generate([{ role: 'user', content: seoRequest }]).catch(() => null);
+    aiText = direct?.text || null;
+  }
   if (!aiText) throw new Error('AI SEO generation returned no metadata.');
 
   let parsed: Partial<YouTubeSeoMetadata>;
@@ -38,12 +48,31 @@ export async function generateYouTubeSeo(prompt: string, generateAi: (input: str
     throw new Error('AI SEO generation returned invalid metadata.');
   }
   const title = typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 100) : '';
-  const description = typeof parsed.description === 'string' ? parsed.description.trim() : '';
+  let description = typeof parsed.description === 'string' ? parsed.description.trim() : '';
   const tags = Array.isArray(parsed.tags)
-    ? parsed.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean).slice(0, 500)
+    ? parsed.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean)
     : [];
-  if (!title || !description || tags.length === 0) throw new Error('AI SEO metadata is incomplete.');
-  return { title, description, tags };
+
+  // Enforce viral hashtags inside the description when the model omitted them.
+  if (description && tags.length > 0 && !description.includes('#')) {
+    const hashtags = tags
+      .slice(0, 5)
+      .map((tag) => `#${tag.replace(/[^A-Za-z0-9_\u0980-\u09FF]/g, '')}`)
+      .filter((tag) => tag.length > 2);
+    if (hashtags.length > 0) description = `${description}\n\n${hashtags.join(' ')}`;
+  }
+
+  // YouTube accepts roughly 500 characters of tags in total — keep the widest safe set.
+  const boundedTags: string[] = [];
+  let totalTagLength = 0;
+  for (const tag of tags) {
+    if (totalTagLength + tag.length + 1 > 480) break;
+    boundedTags.push(tag);
+    totalTagLength += tag.length + 1;
+  }
+
+  if (!title || !description || boundedTags.length === 0) throw new Error('AI SEO metadata is incomplete.');
+  return { title, description, tags: boundedTags };
 }
 
 export async function uploadYouTubeVideo(options: YouTubeUploadOptions, generateAi: (input: string) => Promise<string | null>) {

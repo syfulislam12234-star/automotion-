@@ -326,7 +326,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                   </div>
 
                   {AI_PROVIDERS.map((provider) => {
-                    const val = draftKeys[provider.configKey] ?? String((config as any)[provider.configKey] || '');
+                    const val = draftKeys[provider.configKey] ?? (String((config as any)[provider.configKey] || '') || AiService.getKeyDraftForField(provider.configKey) || AiService.getStoredKeyForField(provider.configKey));
                     const isVisible = Boolean(showKeyMap[provider.id]);
                     const isTesting = testingKeyId === provider.id;
                     const testRes = testResults[provider.id];
@@ -414,7 +414,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                   </div>
 
                   {MESSENGER_PROTOCOLS.map((ch) => {
-                    const val = draftKeys[ch.configKey] ?? String((config as any)[ch.configKey] || '');
+                    const val = draftKeys[ch.configKey] ?? (String((config as any)[ch.configKey] || '') || AiService.getKeyDraftForField(ch.configKey) || AiService.getStoredKeyForField(ch.configKey));
                     const isVisible = Boolean(showKeyMap[ch.id]);
                     const isTesting = testingKeyId === ch.id;
                     const testRes = testResults[ch.id];

@@ -172,6 +172,30 @@ export class GlobalApiKeyStore {
   private static providerKeys = new Map<string, Map<string, ApiKeyEntry>>();
   private static nameIndex = new Map<string, Set<string>>();
   private static lastSyncedAt = '';
+  private static rotationCursor = 0;
+
+  /** Flat, stable list of every active (provider, key) pair across all providers. */
+  public static getActiveKeyEntries(): Array<{ providerId: string; key: string }> {
+    const entries: Array<{ providerId: string; key: string }> = [];
+    for (const provider of GlobalApiKeyStore.getActiveProviderIds()) {
+      for (const key of GlobalApiKeyStore.getKeysForProvider(provider)) {
+        entries.push({ providerId: provider, key });
+      }
+    }
+    return entries;
+  }
+
+  public static getRotationCursor(): number {
+    return GlobalApiKeyStore.rotationCursor;
+  }
+
+  /** Advances the circular pool cursor so consecutive requests start with the next key. */
+  public static advanceRotation(steps: number = 1): void {
+    const total = GlobalApiKeyStore.getActiveKeyEntries().length;
+    if (total > 0) {
+      GlobalApiKeyStore.rotationCursor = (GlobalApiKeyStore.rotationCursor + Math.max(1, steps)) % total;
+    }
+  }
 
   public static normalizeProvider(rawProvider: string): string {
     return normalizeProviderId(rawProvider);
