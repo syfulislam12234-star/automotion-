@@ -778,6 +778,14 @@ async function startServer() {
     return next();
   };
 
+  const requireSession = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization || '';
+    if (!ServerDatabase.getSessionUser(authHeader)) {
+      return res.status(401).json({ success: false, message: 'Authentication required.' });
+    }
+    return next();
+  };
+
   app.use('/api/admin', requireAdmin);
   app.use('/api/telegram-admin/config', requireAdmin);
   app.use('/api/telegram-admin/command', requireAdmin);
@@ -785,7 +793,7 @@ async function startServer() {
   app.use('/api/cron/trigger', requireAdmin);
   app.use('/api/cron/config', requireAdmin);
   app.use('/api/database/stats', requireAdmin);
-  app.use('/api/user/config', requireAdmin);
+  app.use('/api/user/config', requireSession);
   app.use('/api/channels', requireAdmin);
   app.use('/api/gateways/verify', requireAdmin);
 
@@ -1185,13 +1193,14 @@ async function startServer() {
   });
 
   app.post('/api/ai/verify-key', async (req, res) => {
-    const authHeader = req.headers.authorization || '';
-    if (!ServerDatabase.getSessionUser(authHeader)) return res.status(401).json({ success: false, error: 'Authentication is required to verify an API key.' });
-    const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
-    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
-    if (!provider || !token) return res.status(400).json({ success: false, error: 'Provider and API key are required.' });
-    if (!AI_PROVIDER_GATEWAYS_50.some((entry) => entry.id === provider)) return res.status(400).json({ success: false, error: 'Unsupported API provider.' });
     try {
+      const authHeader = req.headers.authorization || '';
+      const sessionUser = ServerDatabase.getSessionUser(authHeader);
+      if (!sessionUser) return res.status(401).json({ success: false, error: 'Authentication is required to verify an API key.' });
+      const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
+      const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+      if (!provider || !token) return res.status(400).json({ success: false, error: 'Provider and API key are required.' });
+      if (!AI_PROVIDER_GATEWAYS_50.some((entry) => entry.id === provider)) return res.status(400).json({ success: false, error: 'Unsupported API provider.' });
       const connected = await probeApiProvider(provider, token);
       if (!connected) return res.status(502).json({ success: false, error: `${provider} API key could not be verified by its live endpoint.` });
       return res.json({ success: true, status: 'Connected Successfully', provider });

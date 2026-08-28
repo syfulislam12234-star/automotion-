@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { BotConfig } from '../types';
 import { X, Key, ExternalLink, ShieldCheck, Check, Sparkles, Zap, Bot, Lock } from 'lucide-react';
 import { AI_PROVIDER_GATEWAYS_50 } from '../data/aiProviders50';
+import { AuthService } from '../services/authService';
 
 interface ApiPortalModalProps {
   isOpen: boolean;
@@ -9,6 +10,7 @@ interface ApiPortalModalProps {
   config: BotConfig;
   onUpdateConfig: (updates: Partial<BotConfig>) => Promise<boolean> | boolean;
   onShowToast: (msg: string) => void;
+  onRequireAuth: () => void;
   initialPlatformId?: string;
 }
 
@@ -18,6 +20,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   config,
   onUpdateConfig,
   onShowToast,
+  onRequireAuth,
   initialPlatformId = 'groq',
 }) => {
   const [selectedProvider, setSelectedProvider] = useState<string>(initialPlatformId);
@@ -39,10 +42,15 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   const handleSave = async () => {
     const value = keyInput.trim();
     if (!value) return;
+    const session = AuthService.getCurrentSession();
+    if (!session?.token || !session.isVerified || !session.user.isVerified) {
+      onRequireAuth();
+      setConnectionStatus(null);
+      return;
+    }
     setIsSaving(true);
     setConnectionStatus(null);
     try {
-      const session = JSON.parse(localStorage.getItem('groq_bot_auth_session_v1') || 'null');
       const response = await fetch('/api/ai/verify-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.token || ''}` },

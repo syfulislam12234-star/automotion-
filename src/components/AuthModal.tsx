@@ -31,6 +31,7 @@ interface AuthModalProps {
   onAuthenticated: (session: AuthSession) => void;
   onShowToast: (msg: string) => void;
   featureProtectedName?: string; // Optional context like "Admin Control Panel" or "VPS Manager"
+  authPromptMessage?: string;
   isAdminPortal?: boolean;
   initialEmail?: string;
 }
@@ -43,6 +44,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onAuthenticated,
   onShowToast,
   featureProtectedName,
+  authPromptMessage,
   isAdminPortal = false,
   initialEmail = '',
 }) => {
@@ -393,7 +395,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                {featureProtectedName ? (
+                {authPromptMessage ? (
+                  <span className="text-cyan-300 font-medium">{authPromptMessage}</span>
+                ) : featureProtectedName ? (
                   <span className="text-amber-300/90 font-medium">
                     Authentication required to access {featureProtectedName}.
                   </span>

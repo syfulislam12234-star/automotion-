@@ -932,6 +932,11 @@ function AppContent() {
         config={config}
         onUpdateConfig={handleConfigChange}
         onShowToast={showToast}
+        onRequireAuth={() => {
+          setAuthFeatureContext('API Key Portal');
+          setAuthModalTab('login');
+          setIsAuthModalOpen(true);
+        }}
         initialPlatformId={portalInitialServiceId}
       />
 
@@ -961,6 +966,7 @@ function AppContent() {
         isGateMode={!currentUser}
         initialTab={authModalTab}
         featureProtectedName={authFeatureContext}
+        authPromptMessage={authFeatureContext === 'API Key Portal' ? 'Please login first to save API keys.' : undefined}
         onAuthenticated={handleAuthenticated}
         onShowToast={showToast}
       />
