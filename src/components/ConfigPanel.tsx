@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AuthService } from '../services/authService';
 import { BotConfig } from '../types';
-import { GLOBAL_150_FREE_AI_MODELS } from '../data/aiModels150';
-import { AiService, FreeModelStatus } from '../services/aiService';
+import { GLOBAL_100_AI_MODELS } from '../data/aiModels100';
+import { AiService } from '../services/aiService';
 import {
   Sliders,
   Sparkles,
@@ -44,9 +44,9 @@ const HIGH_REASONING_MODEL_IDS = [
 
 const PRIORITIZED_AI_MODELS = [
   ...HIGH_REASONING_MODEL_IDS
-    .map((modelId) => GLOBAL_150_FREE_AI_MODELS.find((model) => model.modelId === modelId))
-    .filter((model): model is (typeof GLOBAL_150_FREE_AI_MODELS)[number] => Boolean(model)),
-  ...GLOBAL_150_FREE_AI_MODELS.filter((model) => !HIGH_REASONING_MODEL_IDS.includes(model.modelId)),
+    .map((modelId) => GLOBAL_100_AI_MODELS.find((model) => model.modelId === modelId))
+    .filter((model): model is (typeof GLOBAL_100_AI_MODELS)[number] => Boolean(model)),
+  ...GLOBAL_100_AI_MODELS.filter((model) => !HIGH_REASONING_MODEL_IDS.includes(model.modelId)),
 ];
 
 interface ConfigPanelProps {
@@ -93,7 +93,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
   const [draftKeys, setDraftKeys] = useState<Partial<Record<keyof BotConfig, string>>>({});
-  const [modelStatuses, setModelStatuses] = useState<Record<string, FreeModelStatus['status']>>({});
   const channelSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const toggleReveal = (field: string) => {
@@ -207,16 +206,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
       clearInterval(refreshTimer);
       Object.values(channelSyncTimers.current as Record<string, ReturnType<typeof setTimeout> | undefined>)
         .forEach((timer) => clearTimeout(timer));
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    void AiService.getFreeModelStatuses().then((statuses) => {
-      if (mounted) setModelStatuses(Object.fromEntries(statuses.map((status) => [status.modelId, status.status])));
-    });
-    return () => {
-      mounted = false;
     };
   }, []);
 
@@ -438,7 +427,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               )}
             </div>
             <p className="text-[11px] text-cyan-200/80 leading-relaxed">
-              If an API key encounters <code>HTTP 429</code> or downtime, the bot seamlessly rotates keys and cascades across all 20 free providers without interrupting the user.
+              If an API key encounters <code>HTTP 429</code> or downtime, the bot seamlessly rotates through configured providers without interrupting the user.
             </p>
           </div>
 
@@ -447,7 +436,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs font-bold text-slate-200">1. Groq Cloud (LPU)</span>
-                <span className="text-[10px] text-emerald-400 font-mono">14,400 RPD Free</span>
+                <span className="text-[10px] text-emerald-400 font-mono">14,400 RPD</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <a
@@ -457,7 +446,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 flex items-center gap-1"
                 >
                   <ExternalLink className="w-2.5 h-2.5" />
-                  <span>Get Free Key</span>
+                  <span>Get API Key</span>
                 </a>
                 {onOpenPortal && (
                   <button
@@ -483,11 +472,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 <datalist id="free-ai-model-options">
                   {PRIORITIZED_AI_MODELS.map((model) => <option key={model.modelId} value={model.modelId}>{model.name}</option>)}
                 </datalist>
-                {modelStatuses[config.modelName] && (
-                  <span className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-bold ${modelStatuses[config.modelName] === 'active' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
-                    {modelStatuses[config.modelName] === 'active' ? 'Active model' : 'Inactive model'}
-                  </span>
-                )}
               </div>
               <div>
                 <label className="text-[10px] text-slate-400">Key Pool Count:</label>
@@ -681,7 +665,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
           <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-200">4. OpenRouter (Free Tier)</span>
+                <span className="text-xs font-bold text-slate-200">4. OpenRouter</span>
                 <input
                   type="checkbox"
                   checked={config.enableOpenRouterFallback}

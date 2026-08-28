@@ -22,7 +22,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     {
       id: '1',
       sender: 'bot',
-      text: `Hello! I am your 150-AI Super-Brain Assistant powered by **${config.botName || 'Universal Bot'}**. How can I assist you with bot deployments, multi-channel gateways, or Python scripts today?`,
+      text: `Hello! I am your 100-AI Super-Brain Assistant powered by **${config.botName || 'Universal Bot'}**. How can I assist you with bot deployments, multi-channel gateways, or Python scripts today?`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -95,7 +95,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-slate-100 text-sm">AI Copilot & Multi-Tier Assistant</h3>
-              <p className="text-xs text-slate-400">150-AI Redundancy Cascade • Live Failover</p>
+              <p className="text-xs text-slate-400">100-AI Redundancy Cascade • Live Failover</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-200 rounded-xl transition cursor-pointer">
@@ -144,7 +144,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                 <Sparkles className="w-4 h-4" />
               </div>
               <div className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800 text-xs text-cyan-400 italic">
-                Cascading across 150 AI models...
+                Cascading across 100 AI providers...
               </div>
             </div>
           )}

@@ -307,7 +307,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Automated multi-messenger emergency bulletins with 150-AI failover synthesis
+                Automated multi-messenger emergency bulletins with 100-AI failover synthesis
               </p>
             </div>
           </div>
@@ -678,7 +678,7 @@ export const CronBroadcastManager: React.FC<CronBroadcastManagerProps> = ({ onSh
           <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
             <div>
               <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-                <span>Unified 150-AI Emergency Broadcast Generator</span>
+                <span>Unified 100-AI Emergency Broadcast Generator</span>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono">
                   Live Dispatch Preview
                 </span>

@@ -47,9 +47,9 @@ const SUGGESTIONS = [
     icon: '🤖',
   },
   {
-    title: '150-AI Failover Cascade',
+    title: '100-AI Failover Cascade',
     desc: 'How zero-downtime routing works across 100 providers',
-    prompt: 'Explain the architecture of the 150-AI model failover cascade. How does it handle 503 high demand spikes and automatically route to Groq, Gemini, and Cerebras?',
+    prompt: 'Explain the architecture of the 100-AI provider failover cascade. How does it handle 503 high demand spikes and automatically route to Groq, Gemini, and Cerebras?',
     icon: '⚡',
   },
   {
@@ -640,7 +640,7 @@ export const UnifiedChatWorkspace: React.FC<UnifiedChatWorkspaceProps> = ({
 
             <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-mono text-[11px] text-emerald-400">Unified 150-AI Core Active</span>
+              <span className="font-mono text-[11px] text-emerald-400">Unified 100-AI Core Active</span>
             </div>
           </div>
 
@@ -693,7 +693,7 @@ export const UnifiedChatWorkspace: React.FC<UnifiedChatWorkspaceProps> = ({
               <div className="space-y-1.5">
                 <h3 className="text-xl font-extrabold text-white">How can the Unified AI Brain assist you?</h3>
                 <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  Powered by 150 AI models with zero-downtime failover and multi-messenger protocol execution.
+                  Powered by 100 AI providers with zero-downtime failover and multi-messenger protocol execution.
                 </p>
               </div>
 

@@ -12,7 +12,6 @@ import { CronWorkerService } from './server/cronWorker';
 import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
-import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
 import { AI_PROVIDER_GATEWAYS_100 } from './src/data/aiProviders100';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
@@ -547,7 +546,7 @@ async function getAnalyzerStats(req: express.Request, clientKeys: Record<string,
   };
 }
 
-async function generateFreeAiText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
+async function generateConfiguredProviderText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
   const prompt = String(messages[messages.length - 1]?.content || '').trim();
   const systemPrompt = 'You are a helpful, natural AI assistant. Answer dynamically in the user\'s input language, including Bengali or Banglish. Return only the answer.';
   const aiMessages = [{ role: 'system' as const, content: systemPrompt }, ...messages];
@@ -572,13 +571,13 @@ async function generateFreeAiText(messages: any[], preferredModel?: string): Pro
   return null;
 }
 
-async function getFreeModelCatalog() {
-  return [...GLOBAL_100_AI_MODELS, ...GLOBAL_150_FREE_AI_MODELS];
+async function getConfiguredModelCatalog() {
+  return GLOBAL_100_AI_MODELS;
 }
 
-async function getFreeModelStatuses() {
+async function getConfiguredModelStatuses() {
   if (freeModelStatusCache && Date.now() - freeModelStatusCache.checkedAt < 60_000) return freeModelStatusCache.statuses;
-  const statuses = GLOBAL_150_FREE_AI_MODELS.map((model) => {
+  const statuses = GLOBAL_100_AI_MODELS.map((model) => {
     const provider = model.provider.toLowerCase();
     const active = Boolean(process.env[`${provider.toUpperCase()}_API_KEY`] && !process.env[`${provider.toUpperCase()}_API_KEY`]?.startsWith('YOUR_'));
     return { modelId: model.modelId, status: active ? 'active' as const : 'inactive' as const, reason: active ? undefined : 'Provider route or credentials unavailable.' };
@@ -729,7 +728,7 @@ async function startServer() {
       return data.text;
     } catch (error: any) {
       console.warn('[TelegramBotService] Unified AI request failed:', error?.message || error);
-      const fallback = await generateFreeAiText([{ role: 'user', content: prompt }], model);
+      const fallback = await generateConfiguredProviderText([{ role: 'user', content: prompt }], model);
       return fallback && fallback.modelUsed !== 'Contextual-Emergency-Synthesizer' ? fallback.text : null;
     }
   });
@@ -1044,24 +1043,24 @@ async function startServer() {
 
   app.get('/api/ai/models', async (_req, res) => {
     try {
-      const models = await getFreeModelCatalog();
+      const models = await getConfiguredModelCatalog();
       return res.json({ success: true, count: models.length, models });
     } catch (error: any) {
       console.warn('[AI Catalog] Catalog request failed:', error?.message || error);
-      return res.json({ success: true, count: GLOBAL_150_FREE_AI_MODELS.length, models: GLOBAL_150_FREE_AI_MODELS });
+      return res.json({ success: true, count: models.length, models });
     }
   });
 
   app.get('/api/ai/models/status', async (_req, res) => {
     try {
-      const statuses = await getFreeModelStatuses();
+      const statuses = await getConfiguredModelStatuses();
       return res.json({ success: true, checkedAt: new Date().toISOString(), count: statuses.length, statuses });
     } catch (error: any) {
       console.warn('[AI Status] Health check failed:', error?.message || error);
       return res.status(200).json({
         success: true,
-        count: GLOBAL_150_FREE_AI_MODELS.length,
-        statuses: GLOBAL_150_FREE_AI_MODELS.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Health check unavailable.' })),
+        count: GLOBAL_100_AI_MODELS.length,
+        statuses: GLOBAL_100_AI_MODELS.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Health check unavailable.' })),
       });
     }
   });
@@ -1153,7 +1152,7 @@ async function startServer() {
       if (requestsSensitiveInternals(prompt)) {
         return res.json({ success: true, text: SECURITY_REFUSAL_BN, providerUsed: 'Security Guardrail' });
       }
-      const selectedCatalogModel = [...GLOBAL_150_FREE_AI_MODELS, ...GLOBAL_100_AI_MODELS]
+      const selectedCatalogModel = GLOBAL_100_AI_MODELS
         .find(entry => entry.id === model || entry.modelId === model);
       const selectedProvider = selectedCatalogModel?.provider.toLowerCase() || '';
       const selectedProviderModel = selectedCatalogModel?.modelId
@@ -1384,12 +1383,12 @@ async function startServer() {
         });
       }
 
-      const freeCascadeResult = await generateFreeAiText(groqMessages, selectedProviderModel);
-      if (freeCascadeResult?.text) {
+      const configuredCascadeResult = await generateConfiguredProviderText(groqMessages, selectedProviderModel);
+      if (configuredCascadeResult?.text) {
         return res.json({
           success: true,
-          text: freeCascadeResult.text,
-          providerUsed: `Configured API Provider (${freeCascadeResult.modelUsed})`,
+          text: configuredCascadeResult.text,
+          providerUsed: `Configured API Provider (${configuredCascadeResult.modelUsed})`,
           tier: 'Configured API Provider Cascade',
           latencyMs: Date.now() - generationStart,
         });

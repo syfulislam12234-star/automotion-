@@ -570,7 +570,7 @@ function AppContent() {
                 <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
                   <span>10 Gateways Active</span>
                   <span>•</span>
-                  <span>150-AI Failover Core</span>
+                  <span>100-AI Failover Core</span>
                   <span>•</span>
                   <span>2H Emergency Dispatch</span>
                 </div>
@@ -613,7 +613,7 @@ function AppContent() {
               <span>Live Simulator</span>
             </button>
 
-            {/* View 2: Performance Dashboard (Real-Time 150-AI Telemetry) */}
+            {/* View 2: Performance Dashboard (Real-Time 100-AI Telemetry) */}
             <button
               onClick={() => setActiveTab('performance')}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
@@ -625,11 +625,11 @@ function AppContent() {
               <Activity className="w-4 h-4 text-cyan-400 animate-pulse" />
               <span>Performance Dashboard</span>
               <span className="px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-cyan-400/20 text-cyan-300 border border-cyan-400/30">
-                150-AI
+                100-AI
               </span>
             </button>
 
-            {/* View 3: 150-AI Cascade Engine */}
+            {/* View 3: 100-AI Cascade Engine */}
             <button
               onClick={() => setActiveTab('cascade')}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
@@ -639,7 +639,7 @@ function AppContent() {
               }`}
             >
               <Layers className="w-4 h-4 text-amber-400" />
-              <span>150-AI Cascade</span>
+              <span>100-AI Cascade</span>
             </button>
 
             {/* View 3: Automated Bangladesh Emergency News Broadcast Worker */}
@@ -759,7 +759,7 @@ function AppContent() {
           </AppErrorBoundary>
         )}
 
-        {/* View 2: Performance Dashboard (Real-Time 150-AI Telemetry) */}
+        {/* View 2: Performance Dashboard (Real-Time 100-AI Telemetry) */}
         {activeTab === 'performance' && (
           <PerformanceDashboard
             onShowToast={showToast}
@@ -767,7 +767,7 @@ function AppContent() {
           />
         )}
 
-        {/* View 3: 150-AI Super-Brain & Failover Cascade Dashboard */}
+        {/* View 3: 100-AI Super-Brain & Failover Cascade Dashboard */}
         {activeTab === 'cascade' && (
           <div className="space-y-6">
             <AiBrainVisualizer
@@ -853,7 +853,7 @@ function AppContent() {
           <div className="flex items-center gap-2">
             <Bot className="w-4 h-4 text-cyan-400" />
             <span>
-              Universal Multi-Platform & 150-AI Super-App • Syful Islam Architecture • 10 Gateways • Zero Downtime
+              Universal Multi-Platform & 100-AI Super-App • Syful Islam Architecture • 10 Gateways • Zero Downtime
             </span>
           </div>
           <div className="flex items-center gap-4">

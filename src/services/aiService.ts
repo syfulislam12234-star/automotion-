@@ -1,16 +1,3 @@
-import { AiModelCatalogItem } from '../types';
-import { GLOBAL_150_FREE_AI_MODELS } from '../data/aiModels150';
-
-export interface FreeModelCatalog {
-  count: number;
-  models: AiModelCatalogItem[];
-}
-
-export interface FreeModelStatus {
-  modelId: string;
-  status: 'active' | 'inactive';
-  reason?: string;
-}
 
 export interface AiTextRequest {
   prompt: string;
@@ -84,7 +71,7 @@ export class AiService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          model: request.model || 'openrouter/deepseek/deepseek-r1:free',
+          model: request.model || 'openrouter/deepseek/deepseek-r1',
           systemPrompt,
           messages: messagesWithSystem,
           enableEnsemble: false,
@@ -101,31 +88,4 @@ export class AiService {
     throw new Error('No configured AI provider returned a usable response. Please add at least one API key in the API Portal to enable AI features.');
   }
 
-  public static async getFreeModelCatalog(): Promise<FreeModelCatalog> {
-    try {
-      const response = await fetch('/api/ai/models');
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && Array.isArray(data.models)) {
-        return {
-          count: Number(data.count) || data.models.length,
-          models: data.models as AiModelCatalogItem[],
-        };
-      }
-    } catch (error) {
-      console.warn('[AI Catalog] Dynamic catalog unavailable; using bundled free models.', error);
-    }
-
-    return { count: 0, models: [] };
-  }
-
-  public static async getFreeModelStatuses(): Promise<FreeModelStatus[]> {
-    try {
-      const response = await fetch('/api/ai/models/status');
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && Array.isArray(data.statuses)) return data.statuses as FreeModelStatus[];
-    } catch (error) {
-      console.warn('[AI Status] Dynamic status check unavailable.', error);
-    }
-    return [];
-  }
 }

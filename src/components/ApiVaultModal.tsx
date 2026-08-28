@@ -205,7 +205,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                   {isUnlocked ? 'VAULT UNLOCKED' : 'PASSWORD PROTECTED'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Secure storage for 150 AI models and 10 messenger protocol keys</p>
+              <p className="text-xs text-slate-400">Secure storage for 100 AI providers and 10 messenger protocol keys</p>
             </div>
           </div>
 
@@ -321,7 +321,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
               {activeTab === 'ai' && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs text-slate-400 pb-1">
-                    <span>Configure keys for zero-downtime 150-AI automatic failover cascade</span>
+                    <span>Configure keys for zero-downtime 100-AI automatic failover cascade</span>
                     <span className="text-cyan-400 font-mono">14 Active Providers</span>
                   </div>
 
@@ -353,7 +353,7 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
                             rel="noopener noreferrer"
                             className="flex items-center gap-1 text-[11px] text-cyan-400 hover:underline shrink-0"
                           >
-                            <span>Get Free Key</span>
+                            <span>Get API Key</span>
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         </div>

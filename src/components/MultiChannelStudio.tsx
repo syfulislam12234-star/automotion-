@@ -117,7 +117,7 @@ const MESSENGER_PROTOCOLS: MessengerProtocolInfo[] = [
     keyField: 'whatsappVerifyToken',
     enabledField: 'enableMultiProviderFallback',
     formatGuide: 'Page sender actions, quick replies, and attachment attachments',
-    sampleMessage: 'Hello page bot! Are you connected to the 150-AI model cascade?',
+    sampleMessage: 'Hello page bot! Are you connected to the 100-AI provider cascade?',
   },
   {
     id: 'signal',
@@ -189,7 +189,7 @@ export const MultiChannelStudio: React.FC<MultiChannelStudioProps> = ({
       {
         id: 'tg-init',
         sender: 'bot',
-        text: '👋 <b>Telegram Bot Gateway Online!</b>\n\nConnected to the 150-AI Failover Brain. Type any question or test command like <code>/help</code>, <code>/stats</code>, or <code>/emergency</code>.',
+        text: '👋 <b>Telegram Bot Gateway Online!</b>\n\nConnected to the 100-AI Failover Brain. Type any question or test command like <code>/help</code>, <code>/stats</code>, or <code>/emergency</code>.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         provider: 'Unified AI Brain',
       },
@@ -481,7 +481,7 @@ export const MultiChannelStudio: React.FC<MultiChannelStudioProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Unified messaging simulator, webhooks, and live routing to 150-AI Failover Core
+                Unified messaging simulator, webhooks, and live routing to 100-AI Failover Core
               </p>
             </div>
           </div>
@@ -656,7 +656,7 @@ export const MultiChannelStudio: React.FC<MultiChannelStudioProps> = ({
                   className="px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-left text-xs text-slate-300 transition flex items-center gap-1.5"
                 >
                   <code className="text-emerald-400 font-mono text-[10px]">/stats</code>
-                  <span className="text-[11px] truncate">150-AI Status</span>
+                  <span className="text-[11px] truncate">100-AI Status</span>
                 </button>
                 <button
                   onClick={() => handleSendMessage('/emergency')}
@@ -790,7 +790,7 @@ export const MultiChannelStudio: React.FC<MultiChannelStudioProps> = ({
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
                     <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-                    <span>Processing through 150-AI Brain...</span>
+                    <span>Processing through 100-AI Brain...</span>
                   </div>
                 </div>
               )}

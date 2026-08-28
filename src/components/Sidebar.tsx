@@ -183,7 +183,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
               <SidebarItem
                 icon={<Brain className="w-4 h-4 text-indigo-400" />}
-                label="150-AI Brain Core"
+                label="100-AI Brain Core"
                 badge="Active"
                 active={activeView === 'cascade'}
                 collapsed={isCollapsed}
@@ -204,7 +204,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!isCollapsed && (
               <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
                 <span>AI Models & Intelligence</span>
-                <span className="text-[9px] font-mono text-purple-400">150 AI</span>
+                <span className="text-[9px] font-mono text-purple-400">100 AI Providers</span>
               </div>
             )}
 

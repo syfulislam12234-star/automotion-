@@ -88,7 +88,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-100">1-Click Direct API Setup Portal</h2>
-              <p className="text-xs text-slate-400">Generate & configure zero-cost developer API keys</p>
+              <p className="text-xs text-slate-400">Configure developer API keys across 100 providers</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-200 rounded-xl transition cursor-pointer">
@@ -126,7 +126,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"
             >
-              <span>Get Free Key at Official Console</span>
+              <span>Get API Key at Official Console</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>

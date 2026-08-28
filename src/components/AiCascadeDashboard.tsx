@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { AiModelCatalogItem, BotConfig } from '../types';
-import { AiService, FreeModelStatus } from '../services/aiService';
+import React from 'react';
+import { BotConfig } from '../types';
 import { Cpu, Zap, ShieldCheck, Key, RefreshCw, CheckCircle2, AlertCircle, Sparkles, ExternalLink } from 'lucide-react';
 
 interface AiCascadeDashboardProps {
@@ -14,31 +13,11 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
   onChange,
   onShowToast,
 }) => {
-  const [freeModelCount, setFreeModelCount] = useState(0);
-  const [freeModels, setFreeModels] = useState<AiModelCatalogItem[]>([]);
-  const [modelStatuses, setModelStatuses] = useState<Record<string, FreeModelStatus['status']>>({});
-
-  useEffect(() => {
-    let mounted = true;
-    void AiService.getFreeModelCatalog().then((catalog) => {
-      if (mounted) {
-        setFreeModelCount(catalog.count);
-        setFreeModels(catalog.models);
-      }
-    });
-    void AiService.getFreeModelStatuses().then((statuses) => {
-      if (mounted) setModelStatuses(Object.fromEntries(statuses.map((status) => [status.modelId, status.status])));
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   const tiers = [
     { rank: 1, provider: 'Google AI Studio', model: config.geminiModel || 'gemini-3.7-flash', enabled: config.enableGeminiFallback, key: config.geminiApiKey, portalId: 'gemini', speed: '200 tok/s' },
     { rank: 2, provider: 'Groq Cloud LPU', model: config.groqModel || 'llama-3.3-70b-versatile', enabled: true, key: config.groqApiKey, portalId: 'groq', speed: '380 tok/s' },
     { rank: 3, provider: 'Cerebras CS-3', model: config.cerebrasModel || 'llama3.3-70b', enabled: config.enableCerebrasFallback, key: config.cerebrasApiKey, portalId: 'cerebras', speed: '1800 tok/s' },
-    { rank: 4, provider: 'OpenRouter Aggregator', model: config.openrouterModel || 'deepseek/deepseek-r1:free', enabled: config.enableOpenRouterFallback, key: config.openrouterApiKey, portalId: 'openrouter', speed: '90 tok/s' },
+    { rank: 4, provider: 'OpenRouter Aggregator', model: config.openrouterModel || 'deepseek/deepseek-r1', enabled: config.enableOpenRouterFallback, key: config.openrouterApiKey, portalId: 'openrouter', speed: '90 tok/s' },
     { rank: 5, provider: 'Mistral AI', model: config.mistralModel || 'mistral-small-latest', enabled: config.enableMistralFallback, key: config.mistralApiKey, portalId: 'mistral', speed: '160 tok/s' },
     { rank: 6, provider: 'SambaNova Systems', model: config.sambanovaModel || 'Meta-Llama-3.3-70B-Instruct', enabled: config.enableSambaNovaFallback, key: config.sambanovaApiKey, portalId: 'sambanova', speed: '450 tok/s' },
     { rank: 7, provider: 'Cohere Enterprise', model: config.cohereModel || 'command-r-plus-08-2024', enabled: config.enableCohereFallback, key: config.cohereApiKey, portalId: 'cohere', speed: '100 tok/s' },
@@ -55,8 +34,8 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
               <Zap className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-slate-100">{freeModelCount >= 150 ? `${freeModelCount}-AI` : 'Free AI'} Auto-Failover Cascade Hierarchy</h2>
-              <p className="text-xs text-slate-400">{freeModelCount || 'Dynamic'} free models available with sequential failover routing</p>
+              <h2 className="text-xl font-bold text-slate-100">100-AI Configured Provider Cascade</h2>
+              <p className="text-xs text-slate-400">Active API-key providers available with sequential failover routing</p>
             </div>
           </div>
         </div>
@@ -97,23 +76,6 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
         ))}
       </div>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-bold text-slate-100">Available free models ({freeModels.length || 150})</h3>
-          <span className="text-[10px] uppercase tracking-widest text-emerald-400">Automatic fallback order</span>
-        </div>
-        <div className="grid max-h-[34rem] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
-          {freeModels.map((model, index) => (
-            <div key={`${model.provider}-${model.modelId}-${index}`} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-900/70 px-3 py-2">
-              <span className="w-6 shrink-0 text-[10px] font-mono text-cyan-400">{index + 1}</span>
-              <span className="min-w-0 truncate text-[11px] text-slate-300" title={model.modelId}>{model.name}</span>
-              <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${modelStatuses[model.modelId] === 'active' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
-                {modelStatuses[model.modelId] === 'active' ? 'Active' : 'Inactive'}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   );
 };

@@ -36,7 +36,7 @@ let sandboxMessages: GmailMessageDetail[] = [
     id: 'msg_sb_101',
     threadId: 'th_sb_101',
     labelIds: ['INBOX', 'IMPORTANT', 'UNREAD'],
-    snippet: 'Universal 150-AI Failover Cascade Status: All 150 LLM inference nodes healthy. Groq 8b-instant latency: 112ms.',
+    snippet: 'Universal 100-AI Failover Cascade Status: All configured provider connections healthy. Groq 8b-instant latency: 112ms.',
     subject: '⚡ AI Brain Cascade Telemetry Report — 150 Models Online',
     from: 'Universal Bot Telemetry <telemetry@universal-bot.ai>',
     to: 'bot.builder@workspace.preview',
@@ -90,7 +90,7 @@ let sandboxMessages: GmailMessageDetail[] = [
         <li>Discord Gateway & Slack Bolt App</li>
         <li>LINE Messaging API & Microsoft Teams</li>
       </ul>
-      <p>Incoming customer messages will automatically stream into the 150-AI Super-Brain.</p>
+      <p>Incoming customer messages will automatically stream into the 100-AI Super-Brain.</p>
     </div>`,
     bodyText: 'Multi-Platform Webhook Ingress Ready: Telegram, WhatsApp, Discord, Slack, and LINE have passed verification.',
     attachments: [],
