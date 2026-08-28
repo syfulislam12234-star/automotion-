@@ -25,7 +25,14 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   initialPlatformId = 'groq',
 }) => {
   const [selectedProvider, setSelectedProvider] = useState<string>(initialPlatformId);
-  const [keyInput, setKeyInput] = useState('');
+  const [keyInput, setKeyInput] = useState(() => {
+    try {
+      const savedKeys = JSON.parse(localStorage.getItem('user_api_keys') || '{}') as Record<string, string>;
+      return savedKeys[initialPlatformId] || '';
+    } catch {
+      return '';
+    }
+  });
   const [isSaving, setIsSaving] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
 

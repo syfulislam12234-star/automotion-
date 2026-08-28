@@ -54,7 +54,16 @@ export const AiAnalyzerModal: React.FC<AiAnalyzerModalProps> = ({ isOpen, onClos
   }, []);
 
   useEffect(() => {
+    const refreshOnKeyUpdate = () => {
+      if (isOpen) void scan();
+    };
+    window.addEventListener('storage', refreshOnKeyUpdate);
+    window.addEventListener('ai-api-key-updated', refreshOnKeyUpdate);
     if (isOpen) void scan();
+    return () => {
+      window.removeEventListener('storage', refreshOnKeyUpdate);
+      window.removeEventListener('ai-api-key-updated', refreshOnKeyUpdate);
+    };
   }, [isOpen, scan]);
 
   if (!isOpen) return null;

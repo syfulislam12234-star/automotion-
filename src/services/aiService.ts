@@ -16,6 +16,7 @@ export class AiService {
     try {
       const storedKeys = JSON.parse(localStorage.getItem('user_api_keys') || '{}') as Record<string, string>;
       localStorage.setItem('user_api_keys', JSON.stringify({ ...storedKeys, [normalizedProvider]: normalizedToken }));
+      window.dispatchEvent(new CustomEvent('ai-api-key-updated', { detail: { provider: normalizedProvider } }));
     } catch (error) {
       console.warn('[AI Key Save] Local key persistence unavailable:', error);
     }

@@ -92,7 +92,24 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   const [testResults, setTestResults] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid' | 'idle'; latency?: number }>>({});
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
-  const [draftKeys, setDraftKeys] = useState<Partial<Record<keyof BotConfig, string>>>({});
+  const [draftKeys, setDraftKeys] = useState<Partial<Record<keyof BotConfig, string>>>(() => {
+    const savedKeys = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('user_api_keys') || '{}') as Record<string, string>;
+      } catch {
+        return {};
+      }
+    })();
+    return {
+      groqApiKey: savedKeys.groq || config.groqApiKey || '',
+      geminiApiKey: savedKeys.google || savedKeys.gemini || config.geminiApiKey || '',
+      cerebrasApiKey: savedKeys.cerebras || config.cerebrasApiKey || '',
+      openrouterApiKey: savedKeys.openrouter || config.openrouterApiKey || '',
+      sambanovaApiKey: savedKeys.sambanova || config.sambanovaApiKey || '',
+      mistralApiKey: savedKeys.mistral || config.mistralApiKey || '',
+      githubToken: savedKeys.github || config.githubToken || '',
+    };
+  });
   const channelSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const toggleReveal = (field: string) => {
