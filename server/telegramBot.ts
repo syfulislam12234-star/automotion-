@@ -1,6 +1,5 @@
 import { BotConfig } from '../src/types';
 import { uploadYouTubeVideo } from './youtubeService';
-import { KeylessAiBrain } from './keylessAiBrain';
 
 interface TelegramUploadState {
   step: 'file' | 'privacy' | 'kids';
@@ -186,16 +185,10 @@ export class TelegramBotService {
         ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
       } catch (error: any) {
-        console.warn('[TelegramBotService] Primary AI route unavailable; trying public Pollinations fallback:', error?.message || error);
-        try {
-          const keylessResult = await KeylessAiBrain.generate(text, 'You are a helpful Telegram assistant. Answer in the user\'s language and return only the answer.');
-          reply = keylessResult.text?.trim() || null;
-        } catch (fallbackError: any) {
-          console.warn('[TelegramBotService] Public Pollinations fallback unavailable:', fallbackError?.message || fallbackError);
-        }
+        console.warn('[TelegramBotService] Configured API provider cascade unavailable:', error?.message || error);
       }
       if (!reply?.trim()) {
-        reply = 'I could not reach a live AI route right now. Please send your message again in a moment.';
+        reply = 'Please add at least one API key in the API Portal to enable AI features.';
       }
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text));
       TelegramBotService.lastError = null;

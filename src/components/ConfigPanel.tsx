@@ -809,21 +809,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
             </div>
           </div>
 
-          {/* 6. Pollinations AI (Zero Key) */}
-          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
-            <div>
-              <span className="font-bold text-slate-200 block">6. Pollinations.ai (100% Free Zero-Key)</span>
-              <span className="text-[11px] text-emerald-400 font-mono">No API key required (Text & /image generation)</span>
-            </div>
-            <button
-              onClick={() => handleTestKey('pollinations', undefined, true)}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
-            >
-              <Zap className="w-3 h-3" />
-              <span>Ping</span>
-            </button>
-          </div>
-
           {/* 7. Mistral AI */}
           <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between">

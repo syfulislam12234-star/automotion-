@@ -46,7 +46,6 @@ export const AiCascadeDashboard: React.FC<AiCascadeDashboardProps> = ({
     { rank: 7, provider: 'Cohere Enterprise', model: config.cohereModel || 'command-r-plus-08-2024', enabled: config.enableCohereFallback, key: config.cohereApiKey, portalId: 'cohere', speed: '100 tok/s' },
     { rank: 8, provider: 'Together AI Turbo', model: config.togetherModel || 'meta-llama/Llama-3.3-70B-Instruct-Turbo', enabled: config.enableTogetherFallback, key: config.togetherApiKey, portalId: 'together', speed: '240 tok/s' },
     { rank: 9, provider: 'NVIDIA NIM Microservices', model: config.nvidiaNimModel || 'meta/llama-3.3-70b-instruct', enabled: config.enableNvidiaNimFallback, key: config.nvidiaNimApiKey, portalId: 'nvidianim', speed: '260 tok/s' },
-    { rank: 10, provider: 'Pollinations AI Cluster', model: 'openai/free', enabled: config.enablePollinationsFallback, key: 'Zero Key Free', portalId: 'pollinations', speed: '90 tok/s' },
   ];
 
   return (

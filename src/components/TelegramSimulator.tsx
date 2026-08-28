@@ -180,8 +180,8 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
                 `• \`/providers\` - 20-tier AI failover cascade health & latencies\n` +
                 `• \`/gateways\` - 10 messaging gateway connection states\n` +
                 `• \`/yt_seo <topic>\` - Viral YouTube tags, titles & thumbnail prompts\n` +
-                `• \`/image <prompt>\` - Synthesize AI artwork via Pollinations\n` +
-                `• \`/weather <city>\` - Real-time zero-key meteorological report\n` +
+                `• \`/image <prompt>\` - Synthesize AI artwork through a configured image provider\n` +
+                `• \`/weather <city>\` - Real-time weather report\n` +
                 `• \`/translate <text>\` - Multi-language translation suite\n` +
                 `• \`/search <query>\` - Live web intelligence & answer synthesis\n` +
                 `• \`/health\` - Background worker & gateway telemetry\n` +
@@ -231,10 +231,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
               break;
 
             case 'image':
-              generatedImageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-                args || 'futuristic glowing cybernetic AI robot in neon server room'
-              )}?width=800&height=600&nologo=true`;
-              botResponse = `🎨 *AI Image Synthesized (Pollinations AI Free):*\n\nPrompt: _"${args || 'futuristic glowing cybernetic AI robot in neon server room'}"_\nResolution: \`800x600 HD\``;
+              botResponse = 'Image generation requires a configured image API provider in the API Portal.';
               break;
 
             case 'weather':
@@ -256,12 +253,11 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
                 `3. 🟢 **Cerebras (1000+ t/s):** \`38ms\` (Standby)\n` +
                 `4. 🟢 **OpenRouter (DeepSeek R1 free):** \`74ms\` (Standby)\n` +
                 `5. 🟢 **SambaNova (200+ t/s):** \`49ms\` (Standby)\n` +
-                `6. 🟢 **Pollinations AI (Zero Key):** \`55ms\` (Standby)\n` +
-                `7. 🟢 **Mistral AI:** \`80ms\` (Standby)\n` +
-                `8. 🟢 **GitHub Models (Azure):** \`62ms\` (Standby)\n` +
-                `9. 🟢 **Cloudflare Workers AI:** \`90ms\` (Standby)\n` +
-                `10. 🟢 **Together AI Turbo:** \`85ms\` (Standby)\n` +
-                `11-20. 🟢 NVIDIA NIM, DeepInfra, Hugging Face, DeepSeek, Cohere, Chutes, Voyage, Replicate, Vercel AI, Ollama.`;
+                `6. 🟢 **Mistral AI:** \`80ms\` (Standby)\n` +
+                `7. 🟢 **GitHub Models (Azure):** \`62ms\` (Standby)\n` +
+                `8. 🟢 **Cloudflare Workers AI:** \`90ms\` (Standby)\n` +
+                `9. 🟢 **Together AI Turbo:** \`85ms\` (Standby)\n` +
+                `10-20. 🟢 NVIDIA NIM, DeepInfra, Hugging Face, DeepSeek, Cohere, Voyage, Replicate, Vercel AI.`;
               break;
 
             case 'health':
@@ -329,7 +325,6 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
             { name: `Cerebras (${config.cerebrasModel || 'Llama 3.3'})`, label: 'Cerebras' },
             { name: `OpenRouter (DeepSeek R1 free)`, label: 'OpenRouter Free' },
             { name: `SambaNova (${config.sambanovaModel || 'Llama 3.3'})`, label: 'SambaNova' },
-            { name: `Pollinations.ai (Free Zero-Key)`, label: 'Pollinations AI' },
             { name: `Mistral AI (${config.mistralModel || 'Mistral Small'})`, label: 'Mistral AI' },
             { name: `GitHub Models (${config.githubModel || 'gpt-4o-mini'})`, label: 'GitHub Models' },
           ];
@@ -383,7 +378,7 @@ export const TelegramSimulator: React.FC<TelegramSimulatorProps> = ({ config }) 
         id: 'welcome',
         sender: 'bot',
         platform: 'telegram',
-        text: `👋 *Welcome to the 20-AI Provider Multi-Platform Bot Simulator!*\n\n• **10 Messaging Gateways:** Concurrently handles **Telegram**, **Discord**, **Slack**, **WhatsApp**, **Twilio**, **Pushover**, **Line**, **Matrix**, **Pyrogram**, and **Apprise**.\n• **20-Tier AI Failover:** Groq -> Gemini -> Cerebras -> OpenRouter -> SambaNova -> Pollinations -> Mistral -> GitHub Models -> Cloudflare -> Together -> NVIDIA -> DeepInfra -> Hugging Face -> DeepSeek -> Cohere -> Chutes -> Voyage -> Replicate -> Vercel -> Ollama.\n• **YouTube Studio Suite:** Try \`/yt_seo <topic>\` for viral title formulas & \`/yt_upload\` for OAuth2 auto-uploader.\n\nType a message or click any quick command below!`,
+        text: `👋 *Welcome to the 20-AI Provider Multi-Platform Bot Simulator!*\n\n• **10 Messaging Gateways:** Concurrently handles **Telegram**, **Discord**, **Slack**, **WhatsApp**, **Twilio**, **Pushover**, **Line**, **Matrix**, **Pyrogram**, and **Apprise**.\n• **Configured API-Key Failover:** Groq -> Gemini -> Cerebras -> OpenRouter -> SambaNova -> Mistral -> GitHub Models -> Cloudflare -> Together -> NVIDIA -> DeepInfra -> Hugging Face -> DeepSeek -> Cohere -> Voyage -> Replicate.\n• **YouTube Studio Suite:** Try \`/yt_seo <topic>\` for viral title formulas & \`/yt_upload\` for OAuth2 auto-uploader.\n\nType a message or click any quick command below!`,
         timestamp: getCurrentTime(),
         provider: `Groq (${config.modelName})`,
       },

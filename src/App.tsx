@@ -127,11 +127,7 @@ const DEFAULT_CONFIG: BotConfig = {
   huggingfaceApiKey: '',
   huggingfaceModel: 'meta-llama/Llama-3.3-70B-Instruct',
 
-  // 9. Pollinations AI (Zero key free)
-  enablePollinationsFallback: true,
-  pollinationsModel: 'openai',
-
-  // 10. Cohere
+  // 9. Cohere
   enableCohereFallback: true,
   cohereApiKey: '',
   cohereModel: 'command-r-plus-08-2024',

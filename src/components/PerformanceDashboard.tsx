@@ -8,10 +8,8 @@ interface PerformanceDashboardProps {
 }
 
 interface AnalyzerStats {
-  activeKeyless: number;
   activeApiKeyConnections: number;
   totalActiveModels: number;
-  activeKeylessList: string[];
   activeApiKeyList: string[];
 }
 
@@ -124,7 +122,7 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({ onSh
 
       <div className="p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/20 space-y-4">
         <div className="flex items-center justify-between"><h3 className="font-semibold text-slate-200 text-sm">Real-Time AI System Analyzer</h3><button onClick={() => void scanSystem()} disabled={scanning} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} />{scanning ? 'Scanning...' : 'Re-Scan System'}</button></div>
-        {analyzer ? <><div className="grid grid-cols-1 sm:grid-cols-3 gap-3">{[['Total Active AI Models', analyzer.totalActiveModels], ['Keyless Active', analyzer.activeKeyless], ['API Keys Active', analyzer.activeApiKeyConnections]].map(([label, value]) => <div key={String(label)} className="p-3 rounded-xl bg-slate-950 border border-slate-800"><div className="text-2xl font-bold text-white">{value}</div><div className="text-xs text-slate-400">{label}</div></div>)}</div><div className="max-h-52 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-1.5"><h4 className="text-xs font-semibold text-white mb-2">Active AI Infrastructure</h4>{[...analyzer.activeKeylessList, ...analyzer.activeApiKeyList].map((name) => <div key={name} className="flex items-center gap-2 text-xs text-slate-300"><span className="text-emerald-400">●</span><span>{name}</span><span className="ml-auto text-emerald-400">Operational</span></div>)}{analyzer.totalActiveModels === 0 && <p className="text-xs text-slate-500">No live connections verified.</p>}</div><p className="text-sm font-semibold text-emerald-400">{analyzer.totalActiveModels >= 15 ? 'Verified 15+ Keyless & API Providers operational' : `Verified ${analyzer.totalActiveModels} Keyless & API Providers operational`}</p></> : <p className="text-xs text-slate-500">Scanning live AI infrastructure...</p>}
+        {analyzer ? <><div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{[['Total Active AI Models', analyzer.totalActiveModels], ['API Keys Active', analyzer.activeApiKeyConnections]].map(([label, value]) => <div key={String(label)} className="p-3 rounded-xl bg-slate-950 border border-slate-800"><div className="text-2xl font-bold text-white">{value}</div><div className="text-xs text-slate-400">{label}</div></div>)}</div><div className="max-h-52 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-1.5"><h4 className="text-xs font-semibold text-white mb-2">Active AI Infrastructure</h4>{analyzer.activeApiKeyList.map((name) => <div key={name} className="flex items-center gap-2 text-xs text-slate-300"><span className="text-emerald-400">●</span><span>{name}</span><span className="ml-auto text-emerald-400">Operational</span></div>)}{analyzer.totalActiveModels === 0 && <p className="text-xs text-slate-500">Please add at least one API key in the API Portal to enable AI features.</p>}</div><p className="text-sm font-semibold text-emerald-400">Verified {analyzer.totalActiveModels} API Key Providers operational</p></> : <p className="text-xs text-slate-500">Scanning live AI infrastructure...</p>}
       </div>
 
       {/* Provider Health Table */}

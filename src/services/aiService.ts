@@ -1,6 +1,5 @@
 import { AiModelCatalogItem } from '../types';
 import { GLOBAL_150_FREE_AI_MODELS } from '../data/aiModels150';
-import { KEYLESS_AI_MODELS_100 } from '../data/keylessModels100';
 
 export interface FreeModelCatalog {
   count: number;
@@ -99,45 +98,7 @@ export class AiService {
       console.warn('[AI Chat] Primary route unavailable; switching to public fallback.', error);
     }
 
-    const fallbackPrompt = messagesWithSystem.map((message) => `${message.role}: ${message.content}`).join('\n');
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const response = await fetch('https://text.pollinations.ai/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: messagesWithSystem, model: ['openai', 'qwen', 'mistral'][attempt - 1] }),
-          signal: AbortSignal.timeout(5000),
-        });
-        const text = await response.text();
-        if (response.ok && text.trim() && !text.includes('<html') && !text.startsWith('<!DOCTYPE')) {
-          let answer = text.trim();
-          try {
-            const payload = JSON.parse(text);
-            answer = payload.choices?.[0]?.message?.content?.trim() || answer;
-          } catch {}
-          if (answer) return this.withYouTubeLink(answer, prompt);
-        }
-        console.warn(`[AI Chat] Public Pollinations fallback returned no usable text (attempt ${attempt}).`);
-      } catch (error) {
-        console.warn(`[AI Chat] Public Pollinations fallback unavailable (attempt ${attempt}).`, error);
-      }
-    }
-
-    try {
-      const response = await fetch(`https://router.huggingface.co/novita/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'meta-llama/llama-3.1-8b-instruct', messages: messagesWithSystem, max_tokens: 1024 }),
-        signal: AbortSignal.timeout(7000),
-      });
-      const data = await response.json().catch(() => ({}));
-      const answer = data.choices?.[0]?.message?.content;
-      if (response.ok && typeof answer === 'string' && answer.trim()) return this.withYouTubeLink(answer.trim(), prompt);
-    } catch (error) {
-      console.warn('[AI Chat] Public Hugging Face fallback unavailable.', error);
-    }
-
-    throw new Error('All configured and public AI providers returned no usable text.');
+    throw new Error('No configured AI provider returned a usable response. Please add at least one API key in the API Portal to enable AI features.');
   }
 
   public static async getFreeModelCatalog(): Promise<FreeModelCatalog> {
@@ -154,7 +115,7 @@ export class AiService {
       console.warn('[AI Catalog] Dynamic catalog unavailable; using bundled free models.', error);
     }
 
-    return { count: KEYLESS_AI_MODELS_100.length, models: KEYLESS_AI_MODELS_100 };
+    return { count: 0, models: [] };
   }
 
   public static async getFreeModelStatuses(): Promise<FreeModelStatus[]> {
@@ -165,6 +126,6 @@ export class AiService {
     } catch (error) {
       console.warn('[AI Status] Dynamic status check unavailable.', error);
     }
-    return KEYLESS_AI_MODELS_100.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Status check failed.' }));
+    return [];
   }
 }

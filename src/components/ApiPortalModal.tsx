@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BotConfig } from '../types';
 import { X, Key, ExternalLink, ShieldCheck, Check, Sparkles, Zap, Bot, Lock } from 'lucide-react';
-import { AI_PROVIDER_GATEWAYS_50 } from '../data/aiProviders50';
+import { AI_PROVIDER_GATEWAYS_100 } from '../data/aiProviders100';
 import { AuthService } from '../services/authService';
 import { AiService } from '../services/aiService';
 
@@ -31,7 +31,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
 
   if (!isOpen) return null;
 
-  const providers = AI_PROVIDER_GATEWAYS_50;
+  const providers = AI_PROVIDER_GATEWAYS_100;
 
   const currentProvider = providers.find((p) => p.id === selectedProvider) || providers[0];
   const legacyKeys: Record<string, keyof BotConfig> = {

@@ -138,11 +138,7 @@ export interface BotConfig {
   huggingfaceApiKey: string;
   huggingfaceModel: string;
 
-  // 9. Pollinations AI (Zero key free)
-  enablePollinationsFallback: boolean;
-  pollinationsModel: string;
-
-  // 10. Cohere
+  // 9. Cohere
   enableCohereFallback: boolean;
   cohereApiKey: string;
   cohereModel: string;

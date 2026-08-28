@@ -682,7 +682,7 @@ export const MultiChannelStudio: React.FC<MultiChannelStudioProps> = ({
                 <span>Zero-Downtime Multi-Cascade</span>
               </div>
               <p className="text-[11px]">
-                Inbound messages on <strong>{currentProtocol.name}</strong> automatically cascade through 150 free AI models with DuckDuckGo & Pollinations keyless fallbacks.
+                Inbound messages on <strong>{currentProtocol.name}</strong> automatically cascade through configured API-key providers.
               </p>
             </div>
           </div>

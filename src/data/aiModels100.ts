@@ -274,20 +274,7 @@ export const GLOBAL_100_AI_MODELS: AiModelCatalogItem[] = [
     category: 'reasoning',
   },
 
-  // 11. Pollinations AI (Zero Key Free)
-  {
-    id: 'pollinations-openai',
-    name: 'Pollinations AI (Community Gateway)',
-    provider: 'pollinations',
-    modelId: 'openai',
-    contextWindow: 32000,
-    speedRating: '90 tokens/sec',
-    description: 'Zero-API-key community cluster for fallback redundancy.',
-    freeTier: true,
-    category: 'balanced',
-  },
-
-  // 12. Hugging Face Inference
+  // 11. Hugging Face Inference
   {
     id: 'hf-llama-3.3-70b',
     name: 'Hugging Face Llama 3.3 70B',

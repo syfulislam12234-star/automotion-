@@ -74,7 +74,6 @@ const AVAILABLE_MODELS = [
   { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1 (Reasoning)', provider: 'OpenRouter', badge: 'Free Tier', speed: '~80ms' },
   { id: 'mistral-small-latest', name: 'Mistral Small Latest', provider: 'Mistral AI', badge: 'Active', speed: '~70ms' },
   { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', name: 'Together Llama 3.3 Turbo', provider: 'Together AI', badge: 'Active', speed: '~65ms' },
-  { id: 'pollinations-free', name: 'Pollinations AI (Zero-Key)', provider: 'Pollinations', badge: '100% Free', speed: '~50ms' },
 ];
 
 export const UnifiedChatWorkspace: React.FC<UnifiedChatWorkspaceProps> = ({

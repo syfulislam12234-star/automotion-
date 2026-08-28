@@ -9,13 +9,11 @@ import { ServerDatabase } from './server/db';
 import { TelegramAdminService } from './server/telegramAdmin';
 import { TelegramBotService } from './server/telegramBot';
 import { CronWorkerService } from './server/cronWorker';
-import { KeylessAiBrain } from './server/keylessAiBrain';
 import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
-import { KEYLESS_AI_MODELS_100, KEYLESS_PROBE_ROUTES } from './src/data/keylessModels100';
-import { AI_PROVIDER_GATEWAYS_50 } from './src/data/aiProviders50';
+import { AI_PROVIDER_GATEWAYS_100 } from './src/data/aiProviders100';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
@@ -422,62 +420,6 @@ async function generateWithSambaNova(
   return null;
 }
 
-// Resilient Zero-Key Pollinations Generator
-async function generateWithPollinations(
-  messages: any[],
-  systemPrompt?: string,
-  userPrompt?: string
-): Promise<{ text: string; modelUsed: string } | null> {
-  const promptText = userPrompt || (messages.length > 0 ? messages[messages.length - 1].content : '');
-  const sysText = systemPrompt || 'You are a helpful, ultra-fast AI assistant.';
-
-  // Method 1: POST to text.pollinations.ai
-  try {
-    const resp = await fetch('https://text.pollinations.ai/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages,
-        model: 'openai',
-        seed: Math.floor(Math.random() * 100000),
-        jsonMode: false,
-      }),
-      signal: AbortSignal.timeout(3500),
-    });
-    if (resp.ok) {
-      const text = await resp.text();
-      if (text && text.trim() && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-        let clean = text.trim();
-        try {
-          const parsed = JSON.parse(text);
-          if (parsed.choices?.[0]?.message?.content) {
-            clean = parsed.choices[0].message.content.trim();
-          }
-        } catch {}
-        if (clean) {
-          return { text: clean, modelUsed: 'openai (Pollinations Free)' };
-        }
-      }
-    }
-  } catch {}
-
-  // Method 2: GET with prompt and system
-  if (promptText) {
-    try {
-      const pUrl = `https://text.pollinations.ai/${encodeURIComponent(promptText)}?system=${encodeURIComponent(sysText)}&seed=${Math.floor(Math.random() * 10000)}`;
-      const pResp = await fetch(pUrl, { signal: AbortSignal.timeout(3500) });
-      if (pResp.ok) {
-        const pText = await pResp.text();
-        if (pText && pText.trim() && !pText.startsWith('<!DOCTYPE') && !pText.includes('<html')) {
-          return { text: pText.trim(), modelUsed: 'text (Pollinations Free)' };
-        }
-      }
-    } catch {}
-  }
-
-  return null;
-}
-
 async function generateConfiguredAiText(prompt: string, preferredModel?: string): Promise<string | null> {
   const messages = [{ role: 'user', content: prompt }];
   const candidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
@@ -486,8 +428,6 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     () => generateWithOpenRouter(messages, preferredModel),
     () => generateWithCerebras(messages),
     () => generateWithSambaNova(messages),
-    () => generateWithPollinations(messages, 'You are a precise notification and news editor.', prompt),
-    () => KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.'),
   ];
 
   for (const candidate of candidates) {
@@ -499,14 +439,6 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     }
   }
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fallback = await KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.');
-      if (fallback.provider !== 'contextual_engine' && fallback.text?.trim()) return fallback.text.trim();
-    } catch (error: any) {
-      console.warn(`[AI Summarizer] Keyless attempt ${attempt + 1} exhausted:`, error?.message || error);
-    }
-  }
   return null;
 }
 
@@ -600,35 +532,16 @@ async function getAnalyzerStats(req: express.Request, clientKeys: Record<string,
     || process.env[`${providerId.toUpperCase()}_API_KEY`]
     || process.env[`${providerId.toUpperCase()}_TOKEN`]
     || '').trim();
-  const configuredProviders = AI_PROVIDER_GATEWAYS_50.filter((provider) => Boolean(getProviderCredential(provider.id)));
+  const configuredProviders = AI_PROVIDER_GATEWAYS_100.filter((provider) => Boolean(getProviderCredential(provider.id)));
   const activeApiProviders = (await Promise.all(configuredProviders.map(async (provider) => {
     const token = getProviderCredential(provider.id);
     return await probeApiProvider(provider.id, token) ? provider : null;
-  }))).filter((provider): provider is typeof AI_PROVIDER_GATEWAYS_50[number] => Boolean(provider));
-  const activeKeylessRoutes = (await Promise.all(KEYLESS_PROBE_ROUTES.map(async (route) => {
-    try {
-      const response = await fetch(route.probeUrl, {
-        headers: { Accept: 'application/json', 'User-Agent': 'Automotion-AI-Analyzer/1.0', ...(route.provider === 'duckduckgo' ? { 'x-vqd-accept': '1' } : {}) },
-        signal: AbortSignal.timeout(3500),
-      });
-      if (!response.ok) return null;
-      if (route.provider === 'duckduckgo' && !response.headers.get('x-vqd-4')) return null;
-      if (route.provider === 'openrouter') {
-        const payload = await response.json().catch(() => ({}));
-        if (!payload.data?.some((model: any) => model.id === route.modelId)) return null;
-      }
-      return route;
-    } catch { return null; }
-  }))).filter((route): route is typeof KEYLESS_PROBE_ROUTES[number] => Boolean(route));
-  const activeKeylessList = activeKeylessRoutes.map((route) => route.name);
+  }))).filter((provider): provider is typeof AI_PROVIDER_GATEWAYS_100[number] => Boolean(provider));
   const activeApiKeyList = activeApiProviders.map((provider) => provider.name);
   return {
-    activeKeyless: activeKeylessList.length,
     activeApiKeyConnections: activeApiKeyList.length,
-    totalActiveModels: activeKeylessList.length + activeApiKeyList.length,
+    totalActiveModels: activeApiKeyList.length,
     checkedAt: new Date().toISOString(),
-    keylessHealthy: activeKeylessList.length > 0,
-    activeKeylessList,
     activeApiKeyList,
     verifiedApiProviders: activeApiProviders.map((provider) => provider.id),
   };
@@ -656,60 +569,18 @@ async function generateFreeAiText(messages: any[], preferredModel?: string): Pro
     }
   }
 
-  try {
-    const keylessRes = await KeylessAiBrain.generate(prompt, systemPrompt);
-    if (keylessRes?.text?.trim() && keylessRes.provider !== 'contextual_engine') {
-      return { text: keylessRes.text.trim(), modelUsed: keylessRes.modelUsed };
-    }
-  } catch (error: any) {
-    console.warn('[AI Cascade] Keyless providers exhausted:', error?.message || error);
-  }
   return null;
 }
 
 async function getFreeModelCatalog() {
-  const localModels = [...KEYLESS_AI_MODELS_100, ...GLOBAL_150_FREE_AI_MODELS];
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(5000) });
-    const data = await response.json().catch(() => ({}));
-    const openRouterModels = (Array.isArray(data.data) ? data.data : [])
-      .filter((model: any) => typeof model?.id === 'string' && model.id.endsWith(':free'))
-      .map((model: any) => ({
-        id: `openrouter-${model.id}`,
-        name: model.name || model.id,
-        provider: 'openrouter',
-        modelId: model.id,
-        contextWindow: Number(model.context_length) || 32768,
-        speedRating: 'variable',
-        description: 'Dynamically discovered OpenRouter free model.',
-        freeTier: true,
-        category: 'balanced' as const,
-      }));
-    return Array.from(new Map([...localModels, ...openRouterModels].map((model) => [model.modelId, model])).values());
-  } catch (error: any) {
-    console.warn('[AI Catalog] Dynamic free model discovery unavailable:', error?.message || error);
-    return localModels;
-  }
+  return [...GLOBAL_100_AI_MODELS, ...GLOBAL_150_FREE_AI_MODELS];
 }
 
 async function getFreeModelStatuses() {
   if (freeModelStatusCache && Date.now() - freeModelStatusCache.checkedAt < 60_000) return freeModelStatusCache.statuses;
-  let openRouterIds = new Set<string>();
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(5000) });
-    const data = await response.json().catch(() => ({}));
-    openRouterIds = new Set((Array.isArray(data.data) ? data.data : [])
-      .filter((model: any) => typeof model?.id === 'string' && model.id.endsWith(':free'))
-      .map((model: any) => model.id));
-  } catch (error: any) {
-    console.warn('[AI Status] OpenRouter health check unavailable:', error?.message || error);
-  }
-
   const statuses = GLOBAL_150_FREE_AI_MODELS.map((model) => {
     const provider = model.provider.toLowerCase();
-    const hasKey = provider === 'pollinations' || provider === 'ollama'
-      || Boolean(process.env[`${provider.toUpperCase()}_API_KEY`] && !process.env[`${provider.toUpperCase()}_API_KEY`]?.startsWith('YOUR_'));
-    const active = provider === 'openrouter' ? openRouterIds.has(model.modelId.replace(/^openrouter\//, '')) : hasKey;
+    const active = Boolean(process.env[`${provider.toUpperCase()}_API_KEY`] && !process.env[`${provider.toUpperCase()}_API_KEY`]?.startsWith('YOUR_'));
     return { modelId: model.modelId, status: active ? 'active' as const : 'inactive' as const, reason: active ? undefined : 'Provider route or credentials unavailable.' };
   });
   freeModelStatusCache = { checkedAt: Date.now(), statuses };
@@ -731,9 +602,8 @@ const CENTRAL_PLATFORM_STATUS = {
     { provider: 'Cerebras Ultra-Fast Llama', tier: 3, status: 'MANAGED_ACTIVE', latency: 38 },
     { provider: 'OpenRouter DeepSeek R1 (Free)', tier: 4, status: 'MANAGED_ACTIVE', latency: 74 },
     { provider: 'SambaNova RDU 70B', tier: 5, status: 'MANAGED_ACTIVE', latency: 49 },
-    { provider: 'Pollinations AI (Zero-Key Free)', tier: 6, status: 'MANAGED_ACTIVE', latency: 55 },
-    { provider: 'Mistral AI Small & Codestral', tier: 7, status: 'MANAGED_ACTIVE', latency: 80 },
-    { provider: 'GitHub Models GPT-4o Mini', tier: 8, status: 'MANAGED_ACTIVE', latency: 62 },
+    { provider: 'Mistral AI Small & Codestral', tier: 6, status: 'MANAGED_ACTIVE', latency: 80 },
+    { provider: 'GitHub Models GPT-4o Mini', tier: 7, status: 'MANAGED_ACTIVE', latency: 62 },
   ],
   connectedProGatewaysCount: 10,
   activeProBotsCount: 4,
@@ -1214,7 +1084,7 @@ async function startServer() {
       const stats = await getAnalyzerStats(req, clientKeys);
       return res.json({ success: true, stats });
     } catch (error: any) {
-      return res.status(200).json({ success: true, stats: { activeKeyless: 0, activeApiKeyConnections: 0, totalActiveModels: 0, checkedAt: new Date().toISOString(), keylessHealthy: false, activeKeylessList: [], activeApiKeyList: [], verifiedApiProviders: [] }, warning: error?.message || 'Analyzer refresh unavailable.' });
+      return res.status(200).json({ success: true, stats: { activeApiKeyConnections: 0, totalActiveModels: 0, checkedAt: new Date().toISOString(), activeApiKeyList: [], verifiedApiProviders: [] }, warning: error?.message || 'Analyzer refresh unavailable.' });
     }
   });
 
@@ -1226,7 +1096,7 @@ async function startServer() {
       const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
       const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
       if (!provider || !token) return res.status(400).json({ success: false, error: 'Provider and API key are required.' });
-      if (!AI_PROVIDER_GATEWAYS_50.some((entry) => entry.id === provider)) return res.status(400).json({ success: false, error: 'Unsupported API provider.' });
+      if (!AI_PROVIDER_GATEWAYS_100.some((entry) => entry.id === provider)) return res.status(400).json({ success: false, error: 'Unsupported API provider.' });
       const connected = await probeApiProvider(provider, token);
       if (!connected) return res.status(502).json({ success: false, error: `${provider} API key could not be verified by its live endpoint.` });
       return res.json({ success: true, status: 'Connected Successfully', provider });
@@ -1242,7 +1112,7 @@ async function startServer() {
         const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
         const token = typeof req.body?.token === 'string' ? req.body.token.trim() : typeof req.body?.key === 'string' ? req.body.key.trim() : '';
         if (!provider || !token) return res.status(200).json({ success: true, message: 'Configuration persisted' });
-        if (!AI_PROVIDER_GATEWAYS_50.some((entry) => entry.id === provider)) return res.status(200).json({ success: true, message: 'Configuration persisted' });
+        if (!AI_PROVIDER_GATEWAYS_100.some((entry) => entry.id === provider)) return res.status(200).json({ success: true, message: 'Configuration persisted' });
 
         const targetId = user?.id || 'guest_api_key_user';
         const existingConfig = ServerDatabase.getBotConfig(targetId)?.config || {};
@@ -1396,16 +1266,6 @@ async function startServer() {
           })()
         );
 
-        // Task 6: Zero-Key Pollinations AI
-        parallelTasks.push(
-          (async () => {
-            const t0 = Date.now();
-            const pol = await generateWithPollinations(groqMessages, effectiveSysInstruction, prompt);
-            if (!pol || !pol.text) throw new Error('Pollinations failed');
-            return { provider: 'Pollinations AI (Zero-Key)', model: pol.modelUsed, text: pol.text, latencyMs: Date.now() - t0 };
-          })()
-        );
-
         const results = await Promise.allSettled(parallelTasks);
         const successful = results
           .filter((r): r is PromiseFulfilledResult<{ provider: string; model: string; text: string; latencyMs: number }> => r.status === 'fulfilled' && !!r.value?.text?.trim())
@@ -1524,28 +1384,13 @@ async function startServer() {
         });
       }
 
-      // Tier 6: Zero-Key Pollinations AI Dynamic Generation
-      const userQuery = String(prompt || (Array.isArray(history) && history.length > 0 ? history[history.length - 1].content : 'Hello')).trim();
-      const pollinationsResult = selectedProvider && selectedProvider !== 'pollinations'
-        ? null
-        : await generateWithPollinations(groqMessages, effectiveSysInstruction, userQuery);
-      if (pollinationsResult && pollinationsResult.text) {
-        return res.json({
-          success: true,
-          text: pollinationsResult.text,
-          providerUsed: `Pollinations AI (${pollinationsResult.modelUsed})`,
-          tier: 'Universal Free Tier',
-          latencyMs: Math.floor(Math.random() * 30) + 50,
-        });
-      }
-
       const freeCascadeResult = await generateFreeAiText(groqMessages, selectedProviderModel);
       if (freeCascadeResult?.text) {
         return res.json({
           success: true,
           text: freeCascadeResult.text,
-          providerUsed: `150-Model Free Cascade (${freeCascadeResult.modelUsed})`,
-          tier: 'Universal Free Model Cascade',
+          providerUsed: `Configured API Provider (${freeCascadeResult.modelUsed})`,
+          tier: 'Configured API Provider Cascade',
           latencyMs: Date.now() - generationStart,
         });
       }
@@ -1714,7 +1559,6 @@ async function startServer() {
         { id: 'google-gemini-3-7-flash', name: 'Google Gemini 3.7 Flash', model: 'gemini-3.7-flash', baseLat: 165 },
         { id: 'sambanova-llama-3-3-70b', name: 'SambaNova SN40L', model: 'Meta-Llama-3.3-70B', baseLat: 95 },
         { id: 'openrouter-deepseek-r1', name: 'OpenRouter (DeepSeek R1)', model: 'deepseek/deepseek-r1:free', baseLat: 220 },
-        { id: 'pollinations-openai', name: 'Pollinations AI (Zero-Key)', model: 'openai', baseLat: 240 },
         { id: 'mistral-small-latest', name: 'Mistral Small', model: 'mistral-small-latest', baseLat: 190 },
       ];
 

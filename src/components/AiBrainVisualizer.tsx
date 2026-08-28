@@ -119,17 +119,6 @@ const PROVIDER_NODES: ProviderNode[] = [
     features: ['High Throughput', 'Fine-Tuned', 'Streaming'],
   },
   {
-    id: 'pollinations',
-    name: 'Pollinations AI',
-    hardware: 'Community Zero-Key Mesh',
-    speed: '~55ms',
-    status: 'active',
-    latency: 55,
-    tier: 3,
-    models: ['openai', 'mistral', 'deepseek'],
-    features: ['100% Free', 'Zero Auth', 'Infinite Fallback'],
-  },
-  {
     id: 'cloudflare',
     name: 'Cloudflare Workers AI',
     hardware: '300+ Edge Data Centers',
@@ -298,7 +287,7 @@ export const AiBrainVisualizer: React.FC<AiBrainVisualizerProps> = ({
             { id: 'super_brain_synthesis', name: 'Super-Brain Synthesis', desc: 'Parallel query best 3 providers and arbitrate highest quality answer.' },
             { id: 'ultra_fast_speed', name: 'Speed First (LPU <40ms)', desc: 'Direct all requests to Groq & Cerebras for instant responses.' },
             { id: 'deep_reasoning', name: 'Reasoning First', desc: 'Prioritize DeepSeek R1 and Gemini 3.6 for complex technical logic.' },
-            { id: 'free_tier_priority', name: '100% Free Tier Priority', desc: 'Route to zero-key Pollinations, OpenRouter Free & GitHub Models.' },
+            { id: 'configured_priority', name: 'Configured Provider Priority', desc: 'Route through active API-key providers with automatic failover.' },
           ].map((strat) => {
             const isSel = selectedStrategy === strat.id;
             return (
