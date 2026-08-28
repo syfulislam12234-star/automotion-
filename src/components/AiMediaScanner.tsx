@@ -191,17 +191,59 @@ export const AiMediaScanner: React.FC<AiMediaScannerProps> = ({ onShowToast }) =
     }
   };
 
-  const runAnalysis = (urlToScan: string, type: 'image' | 'video' | 'audio', preset?: PresetSample, customFile?: File) => {
+  const runAnalysis = async (urlToScan: string, type: 'image' | 'video' | 'audio', preset?: PresetSample, customFile?: File) => {
     if (!urlToScan.trim()) {
       if (onShowToast) onShowToast('⚠️ Please provide a media file or URL to scan.');
       return;
     }
 
-    setIsScanning(false);
-    setScanProgress(0);
-    setScanStageText('Live media provenance detector is not configured.');
-    setResult(null);
-    if (onShowToast) onShowToast('Media scan unavailable: configure a live provenance detector service.');
+    setIsScanning(true);
+    setScanProgress(15);
+    setScanStageText('Reading live media metadata and reachability...');
+    try {
+      let sourceStatus = 'Local file loaded';
+      let details = customFile
+        ? `Name: ${customFile.name}; MIME: ${customFile.type || 'unknown'}; Size: ${customFile.size} bytes.`
+        : 'Remote media URL supplied.';
+      if (!customFile) {
+        const response = await fetch(urlToScan, { method: 'HEAD', signal: AbortSignal.timeout(10000) });
+        sourceStatus = response.ok ? `Remote media reachable (HTTP ${response.status})` : `Remote media returned HTTP ${response.status}`;
+        details = `Content-Type: ${response.headers.get('content-type') || 'unknown'}; Content-Length: ${response.headers.get('content-length') || 'unknown'}.`;
+      }
+      const newResult: MediaProvenanceScanResult = {
+        id: `scan_${Date.now()}`,
+        mediaUrl: urlToScan,
+        mediaType: type,
+        scannedAt: new Date().toISOString(),
+        isAiGenerated: false,
+        aiProbability: 0,
+        confidencePercentage: 0,
+        verdict: 'UNDETERMINED',
+        likelyModel: 'No detector configured',
+        modelFamily: 'Unavailable',
+        c2paManifestStatus: 'Not inspected',
+        analysisStages: {
+          metadata: { score: 0, status: sourceStatus, details },
+          spectralFrequency: { score: 0, status: 'Detector unavailable', checkerboardArtifacts: false, details: 'No live forensic detector is configured for spectral analysis.' },
+          latentDiffusionResiduals: { score: 0, status: 'Detector unavailable', details: 'No live forensic detector is configured for latent residual analysis.' },
+          anatomicalTemporalCoherence: { score: 0, status: 'Detector unavailable', details: 'No live forensic detector is configured for coherence analysis.' },
+        },
+        forensicIndicators: [{ name: 'Live detector status', level: 'unknown', description: 'The media was inspected for reachability and metadata only; no AI verdict was inferred.' }],
+        provenanceChain: [{ step: 'Metadata and reachability check', status: sourceStatus, details }],
+      };
+      setResult(newResult);
+      setHistory((previous) => [newResult, ...previous.slice(0, 7)]);
+      setScanProgress(100);
+      setScanStageText('Live metadata scan complete; AI verdict undetermined.');
+      onShowToast?.('Live media metadata scan complete. AI verdict is undetermined without a detector service.');
+    } catch (error: any) {
+      setResult(null);
+      setScanProgress(0);
+      setScanStageText('Live media scan failed.');
+      onShowToast?.(`Media scan failed: ${error?.message || 'The media could not be reached.'}`);
+    } finally {
+      setIsScanning(false);
+    }
     return;
 
     setIsScanning(true);

@@ -7,7 +7,7 @@ interface ApiPortalModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: BotConfig;
-  onUpdateConfig: (updates: Partial<BotConfig>) => void;
+  onUpdateConfig: (updates: Partial<BotConfig>) => Promise<boolean> | boolean;
   onShowToast: (msg: string) => void;
   initialPlatformId?: string;
 }
@@ -22,6 +22,8 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
 }) => {
   const [selectedProvider, setSelectedProvider] = useState<string>(initialPlatformId);
   const [keyInput, setKeyInput] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -34,10 +36,31 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   };
   const currentKey = (config.apiGatewayKeys?.[currentProvider.id] || (legacyKeys[currentProvider.id] ? config[legacyKeys[currentProvider.id]] : '')) as string;
 
-  const handleSave = () => {
-    onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: keyInput }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: keyInput } : {}) } as Partial<BotConfig>);
-    onShowToast(`✅ ${currentProvider.name} credentials updated!`);
-    setKeyInput('');
+  const handleSave = async () => {
+    const value = keyInput.trim();
+    if (!value) return;
+    setIsSaving(true);
+    setConnectionStatus(null);
+    try {
+      const session = JSON.parse(localStorage.getItem('groq_bot_auth_session_v1') || 'null');
+      const response = await fetch('/api/ai/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.token || ''}` },
+        body: JSON.stringify({ provider: currentProvider.id, token: value }),
+      });
+      const verification = await response.json().catch(() => ({}));
+      if (!response.ok || !verification.success) throw new Error(verification.error || verification.message || 'API key verification failed.');
+      const saved = await onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: value }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: value } : {}) });
+      if (!saved) throw new Error('API key could not be persisted.');
+      setConnectionStatus('Connected Successfully');
+      onShowToast(`✅ ${currentProvider.name} connected and saved.`);
+      setKeyInput('');
+    } catch (error: any) {
+      setConnectionStatus(error?.message || 'API key verification failed.');
+      onShowToast(`⚠️ ${currentProvider.name}: ${error?.message || 'connection failed.'}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -65,6 +88,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
               onClick={() => {
                 setSelectedProvider(p.id);
                 setKeyInput((config.apiGatewayKeys?.[p.id] || (legacyKeys[p.id] ? config[legacyKeys[p.id]] : '')) as string || '');
+                setConnectionStatus(null);
               }}
               className={`p-3 rounded-xl border text-left transition cursor-pointer ${
                 selectedProvider === p.id
@@ -101,11 +125,13 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
           <div className="flex justify-end">
             <button
               onClick={handleSave}
+              disabled={isSaving || !keyInput.trim()}
               className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md transition cursor-pointer"
             >
-              Save Credentials
+              {isSaving ? 'Verifying & Saving...' : 'Verify & Save Credentials'}
             </button>
           </div>
+          {connectionStatus && <p className={`text-xs ${connectionStatus === 'Connected Successfully' ? 'text-emerald-400' : 'text-rose-400'}`}>{connectionStatus}</p>}
         </div>
 
         <div className="flex justify-end pt-2">

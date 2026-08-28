@@ -392,18 +392,19 @@ function AppContent() {
     };
   }, []);
 
-  const handleConfigChange = async (newConfig: BotConfig): Promise<boolean> => {
+  const handleConfigChange = async (newConfig: BotConfig | Partial<BotConfig>): Promise<boolean> => {
     const previousConfig = config;
-    setConfig(newConfig);
+    const mergedConfig = normalizeWorkspaceConfig({ ...config, ...newConfig });
+    setConfig(mergedConfig);
     try {
-      localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(newConfig));
+      localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(mergedConfig));
     } catch (e) {
       console.error('Failed to persist config to localStorage:', e);
     }
     // Permanently sync with server database
     let saved = false;
     try {
-      saved = await AuthService.saveUserBotConfig(newConfig, currentUser?.id);
+      saved = await AuthService.saveUserBotConfig(mergedConfig, currentUser?.id);
     } catch (error: any) {
       console.error('Failed to persist bot configuration:', error);
       showToast(`⚠️ Configuration save failed: ${error?.message || 'Please try again.'}`);

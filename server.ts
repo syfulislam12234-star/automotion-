@@ -1184,6 +1184,22 @@ async function startServer() {
     }
   });
 
+  app.post('/api/ai/verify-key', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!ServerDatabase.getSessionUser(authHeader)) return res.status(401).json({ success: false, error: 'Authentication is required to verify an API key.' });
+    const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!provider || !token) return res.status(400).json({ success: false, error: 'Provider and API key are required.' });
+    if (!AI_PROVIDER_GATEWAYS_50.some((entry) => entry.id === provider)) return res.status(400).json({ success: false, error: 'Unsupported API provider.' });
+    try {
+      const connected = await probeApiProvider(provider, token);
+      if (!connected) return res.status(502).json({ success: false, error: `${provider} API key could not be verified by its live endpoint.` });
+      return res.json({ success: true, status: 'Connected Successfully', provider });
+    } catch (error: any) {
+      return res.status(502).json({ success: false, error: error?.message || 'API key verification failed.' });
+    }
+  });
+
   // Centralized AI Proxy Generation (Hybrid AI Ensemble Super-Brain: Parallel Querying & Intelligent Synthesis)
   app.post('/api/ai/generate', async (req, res) => {
     try {
