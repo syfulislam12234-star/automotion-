@@ -499,13 +499,15 @@ async function generateConfiguredAiText(prompt: string, preferredModel?: string)
     }
   }
 
-  try {
-    const fallback = await KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.');
-    return fallback.provider !== 'contextual_engine' && fallback.text?.trim() ? fallback.text.trim() : null;
-  } catch (error: any) {
-    console.warn('[AI Summarizer] All providers exhausted:', error?.message || error);
-    return null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fallback = await KeylessAiBrain.generate(prompt, 'You are a precise notification and news editor.');
+      if (fallback.provider !== 'contextual_engine' && fallback.text?.trim()) return fallback.text.trim();
+    } catch (error: any) {
+      console.warn(`[AI Summarizer] Keyless attempt ${attempt + 1} exhausted:`, error?.message || error);
+    }
   }
+  return null;
 }
 
 async function probeApiProvider(providerId: string, token: string): Promise<boolean> {

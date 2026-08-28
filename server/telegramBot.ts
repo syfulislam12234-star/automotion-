@@ -195,7 +195,7 @@ export class TelegramBotService {
         }
       }
       if (!reply?.trim()) {
-        reply = 'The live AI providers are temporarily unavailable. Please try again shortly.';
+        reply = 'I could not reach a live AI route right now. Please send your message again in a moment.';
       }
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text));
       TelegramBotService.lastError = null;
