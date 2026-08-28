@@ -142,14 +142,14 @@ export class TelegramBotService {
       try {
         reply = await Promise.race([
           TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Primary Telegram AI response timed out.')), 5000)),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Primary Telegram AI response timed out.')), 450)),
         ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
       } catch (error: any) {
         console.warn('[TelegramBotService] Primary AI route unavailable; trying public Pollinations fallback:', error?.message || error);
         try {
           const fallbackResponse = await fetch(`https://text.pollinations.ai/${encodeURIComponent(text)}`, {
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(450),
           });
           const fallbackText = await fallbackResponse.text();
           if (fallbackResponse.ok && fallbackText.trim() && !fallbackText.startsWith('<!DOCTYPE') && !fallbackText.includes('<html')) {

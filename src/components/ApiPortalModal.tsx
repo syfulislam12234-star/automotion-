@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BotConfig } from '../types';
 import { X, Key, ExternalLink, ShieldCheck, Check, Sparkles, Zap, Bot, Lock } from 'lucide-react';
+import { AI_PROVIDER_GATEWAYS_50 } from '../data/aiProviders50';
 
 interface ApiPortalModalProps {
   isOpen: boolean;
@@ -24,23 +25,19 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
 
   if (!isOpen) return null;
 
-  const providers = [
-    { id: 'groq', name: 'Groq Cloud LPU', link: 'https://console.groq.com/keys', configKey: 'groqApiKey', badge: 'Ultra-Fast LPU' },
-    { id: 'gemini', name: 'Google AI Studio', link: 'https://aistudio.google.com/app/apikey', configKey: 'geminiApiKey', badge: '2M Context' },
-    { id: 'cerebras', name: 'Cerebras Wafer-Scale', link: 'https://cloud.cerebras.ai', configKey: 'cerebrasApiKey', badge: '1800 Tok/s' },
-    { id: 'openrouter', name: 'OpenRouter Aggregator', link: 'https://openrouter.ai/keys', configKey: 'openrouterApiKey', badge: '100+ Models' },
-    { id: 'telegram', name: 'Telegram Bot Father', link: 'https://t.me/BotFather', configKey: 'telegramBotToken', badge: 'Messaging' },
-    { id: 'mistral', name: 'Mistral AI Console', link: 'https://console.mistral.ai', configKey: 'mistralApiKey', badge: 'European AI' },
-  ];
+  const providers = AI_PROVIDER_GATEWAYS_50;
 
   const currentProvider = providers.find((p) => p.id === selectedProvider) || providers[0];
+  const legacyKeys: Record<string, keyof BotConfig> = {
+    groq: 'groqApiKey', gemini: 'geminiApiKey', google: 'geminiApiKey', cerebras: 'cerebrasApiKey',
+    openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', telegram: 'telegramBotToken',
+  };
+  const currentKey = (config.apiGatewayKeys?.[currentProvider.id] || (legacyKeys[currentProvider.id] ? config[legacyKeys[currentProvider.id]] : '')) as string;
 
   const handleSave = () => {
-    if (currentProvider.configKey) {
-      onUpdateConfig({ [currentProvider.configKey]: keyInput } as Partial<BotConfig>);
-      onShowToast(`✅ ${currentProvider.name} credentials updated!`);
-      setKeyInput('');
-    }
+    onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: keyInput }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: keyInput } : {}) } as Partial<BotConfig>);
+    onShowToast(`✅ ${currentProvider.name} credentials updated!`);
+    setKeyInput('');
   };
 
   return (
@@ -61,13 +58,13 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
           {providers.map((p) => (
             <button
               key={p.id}
               onClick={() => {
                 setSelectedProvider(p.id);
-                setKeyInput((config as any)[p.configKey] || '');
+                setKeyInput((config.apiGatewayKeys?.[p.id] || (legacyKeys[p.id] ? config[legacyKeys[p.id]] : '')) as string || '');
               }}
               className={`p-3 rounded-xl border text-left transition cursor-pointer ${
                 selectedProvider === p.id
@@ -76,7 +73,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
               }`}
             >
               <div className="text-xs font-semibold">{p.name}</div>
-              <div className="text-[10px] text-slate-500 mt-1">{p.badge}</div>
+              <div className="text-[10px] text-slate-500 mt-1">{p.speedTag}</div>
             </button>
           ))}
         </div>
@@ -85,7 +82,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-200">{currentProvider.name} API Key</span>
             <a
-              href={currentProvider.link}
+              href={currentProvider.keyUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"
@@ -96,7 +93,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
           </div>
           <input
             type="password"
-            value={keyInput}
+            value={keyInput || currentKey}
             onChange={(e) => setKeyInput(e.target.value)}
             placeholder={`Enter ${currentProvider.name} key...`}
             className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"

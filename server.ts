@@ -14,6 +14,7 @@ import { TelemetryService } from './server/telemetryService';
 import { MultiChannelGateway } from './server/multiChannelGateway';
 import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { GLOBAL_150_FREE_AI_MODELS } from './src/data/aiModels150';
+import { KEYLESS_AI_MODELS_100 } from './src/data/keylessModels100';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
@@ -538,7 +539,7 @@ async function generateFreeAiText(messages: any[], preferredModel?: string): Pro
 }
 
 async function getFreeModelCatalog() {
-  const localModels = GLOBAL_150_FREE_AI_MODELS;
+  const localModels = [...KEYLESS_AI_MODELS_100, ...GLOBAL_150_FREE_AI_MODELS];
   try {
     const response = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(5000) });
     const data = await response.json().catch(() => ({}));
@@ -713,7 +714,7 @@ async function startServer() {
           enableEnsemble: false,
           platform: 'telegram',
         }),
-        signal: AbortSignal.timeout(2500),
+        signal: AbortSignal.timeout(450),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || typeof data.text !== 'string') {

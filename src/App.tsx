@@ -84,6 +84,7 @@ const DEFAULT_CONFIG: BotConfig = {
   enableMultiProviderFallback: true,
   groqKeysCount: 2,
   keyCooldownSeconds: 60,
+  apiGatewayKeys: {},
 
   // 1. Google AI Studio
   enableGeminiFallback: true,

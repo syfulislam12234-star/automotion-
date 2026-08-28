@@ -1,5 +1,6 @@
 import { AiModelCatalogItem } from '../types';
 import { GLOBAL_150_FREE_AI_MODELS } from '../data/aiModels150';
+import { KEYLESS_AI_MODELS_100 } from '../data/keylessModels100';
 
 export interface FreeModelCatalog {
   count: number;
@@ -42,8 +43,7 @@ export class AiService {
       { role: 'system' as const, content: systemPrompt },
       ...messages.filter((message) => message.role !== 'system'),
     ];
-    const isComplexQuery = prompt.split(/\s+/).filter(Boolean).length > 50 || /\b(code|explain|why|derive|architect|debug|compare|proof|theory)\b/i.test(prompt);
-    const primaryTimeoutMs = isComplexQuery ? 8000 : 5000;
+    const primaryTimeoutMs = 450;
 
     try {
       const response = await fetch('/api/ai/generate', {
@@ -65,11 +65,11 @@ export class AiService {
       console.warn('[AI Chat] Primary route unavailable; switching to public fallback.', error);
     }
 
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= 1; attempt += 1) {
       try {
         const fallbackPrompt = messagesWithSystem.map((message) => `${message.role}: ${message.content}`).join('\n');
         const response = await fetch(`https://text.pollinations.ai/${encodeURIComponent(fallbackPrompt)}`, {
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(450),
         });
         const text = await response.text();
         if (response.ok && text.trim() && !text.includes('<html') && !text.startsWith('<!DOCTYPE')) return this.withYouTubeLink(text.trim(), prompt);
@@ -96,7 +96,7 @@ export class AiService {
       console.warn('[AI Catalog] Dynamic catalog unavailable; using bundled free models.', error);
     }
 
-    return { count: GLOBAL_150_FREE_AI_MODELS.length, models: GLOBAL_150_FREE_AI_MODELS };
+    return { count: KEYLESS_AI_MODELS_100.length, models: KEYLESS_AI_MODELS_100 };
   }
 
   public static async getFreeModelStatuses(): Promise<FreeModelStatus[]> {
@@ -107,6 +107,6 @@ export class AiService {
     } catch (error) {
       console.warn('[AI Status] Dynamic status check unavailable.', error);
     }
-    return GLOBAL_150_FREE_AI_MODELS.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Status check failed.' }));
+    return KEYLESS_AI_MODELS_100.map((model) => ({ modelId: model.modelId, status: 'inactive' as const, reason: 'Status check failed.' }));
   }
 }

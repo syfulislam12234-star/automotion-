@@ -96,6 +96,7 @@ export interface BotConfig {
   enableMultiProviderFallback: boolean;
   groqKeysCount: number;
   keyCooldownSeconds: number;
+  apiGatewayKeys: Record<string, string>;
 
   // 1. Google AI Studio
   enableGeminiFallback: boolean;
