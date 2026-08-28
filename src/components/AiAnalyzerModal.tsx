@@ -28,7 +28,24 @@ export const AiAnalyzerModal: React.FC<AiAnalyzerModalProps> = ({ isOpen, onClos
     setError(null);
     try {
       const session = AuthService.getCurrentSession();
-      const response = await fetch('/api/ai/analyzer-stats', { headers: { Authorization: `Bearer ${session?.token || ''}` }, signal: AbortSignal.timeout(15000) });
+      const localKeys = (() => {
+        try {
+          const savedConfig = JSON.parse(localStorage.getItem('universal_bot_config_v2') || '{}') as { apiGatewayKeys?: Record<string, string> };
+          const savedKeys = JSON.parse(localStorage.getItem('user_api_keys') || '{}') as Record<string, string>;
+          return { ...savedConfig.apiGatewayKeys, ...savedKeys };
+        } catch {
+          return {};
+        }
+      })();
+      const response = await fetch('/api/ai/analyzer-stats', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({ keys: localKeys }),
+        signal: AbortSignal.timeout(15000),
+      });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) throw new Error(data.error || data.message || 'Live analyzer unavailable.');
       setStats(data.stats);

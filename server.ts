@@ -551,10 +551,10 @@ async function probeApiProvider(providerId: string, token: string): Promise<bool
   }
 }
 
-async function getAnalyzerStats(req: express.Request) {
+async function getAnalyzerStats(req: express.Request, clientKeys: Record<string, string> = {}) {
   const sessionUser = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
   const savedConfig = sessionUser ? ServerDatabase.getBotConfig(sessionUser.id)?.config : undefined;
-  const genericKeys = savedConfig?.apiGatewayKeys || {};
+  const genericKeys = { ...(savedConfig?.apiGatewayKeys || {}), ...clientKeys };
   const legacyKeys: Record<string, string | undefined> = {
     groq: savedConfig?.groqApiKey || process.env.GROQ_API_KEY,
     cerebras: savedConfig?.cerebrasApiKey || process.env.CEREBRAS_API_KEY,
@@ -642,6 +642,8 @@ async function generateFreeAiText(messages: any[], preferredModel?: string): Pro
     () => generateWithCerebras(aiMessages),
     () => generateWithGemini(prompt, systemPrompt, preferredModel),
     () => generateWithSambaNova(aiMessages),
+    () => generateWithOpenAiCompatible(aiMessages, 'together'),
+    () => generateWithOpenAiCompatible(aiMessages, 'huggingface'),
   ];
   for (const candidate of configuredCandidates) {
     try {
@@ -1198,6 +1200,19 @@ async function startServer() {
       return res.json({ success: true, stats });
     } catch (error: any) {
       return res.status(503).json({ success: false, error: error?.message || 'Live analyzer unavailable.' });
+    }
+  });
+
+  app.post('/api/ai/analyzer-stats', async (req, res) => {
+    try {
+      const rawKeys = req.body?.keys;
+      const clientKeys = rawKeys && typeof rawKeys === 'object' && !Array.isArray(rawKeys)
+        ? Object.fromEntries(Object.entries(rawKeys).filter(([key, value]) => /^[a-z0-9_-]+$/i.test(key) && typeof value === 'string' && value.trim()).map(([key, value]) => [key.toLowerCase(), String(value).trim()]))
+        : {};
+      const stats = await getAnalyzerStats(req, clientKeys);
+      return res.json({ success: true, stats });
+    } catch (error: any) {
+      return res.status(200).json({ success: true, stats: { activeKeyless: 0, activeApiKeyConnections: 0, totalActiveModels: 0, checkedAt: new Date().toISOString(), keylessHealthy: false, activeKeylessList: [], activeApiKeyList: [], verifiedApiProviders: [] }, warning: error?.message || 'Analyzer refresh unavailable.' });
     }
   });
 
