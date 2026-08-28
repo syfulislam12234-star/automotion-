@@ -473,10 +473,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <button
               type="button"
               onClick={() => {
-                const bypass = AuthService.createBypassSession('admin');
-                onShowToast('⚡ Instant Access granted! Welcome to Automotion Bot Builder.');
-                onAuthenticated(bypass);
-                if (onClose) onClose();
+                setErrorMessage('Instant bypass is unavailable. Please sign in with a live account.');
               }}
               className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-md shadow-cyan-500/20 transition cursor-pointer whitespace-nowrap"
             >
@@ -750,10 +747,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const session = AuthService.createBypassSession('admin');
-                    onShowToast('⚡ Email verified automatically!');
-                    onAuthenticated(session);
-                    if (onClose) onClose();
+                    setErrorMessage('OTP verification is required. Please enter the code sent to your email.');
                   }}
                   className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
                 >

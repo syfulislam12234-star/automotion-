@@ -209,14 +209,8 @@ export class GmailService {
    * Activates preview sandbox mode directly
    */
   public static enableSandboxMode(email: string = 'bot.builder@workspace.preview'): { user: User; accessToken: string; isSandbox: boolean } {
-    isSandboxMode = true;
-    cachedAccessToken = 'sandbox_oauth_preview_token';
-    const sandboxUser = {
-      uid: 'usr_gmail_sandbox',
-      email,
-      displayName: 'Universal Bot Architect',
-    } as any;
-    return { user: sandboxUser, accessToken: cachedAccessToken, isSandbox: true };
+    void email;
+    throw new Error('Gmail sandbox mode is unavailable. Connect a live Google account.');
   }
 
   /**
@@ -225,8 +219,7 @@ export class GmailService {
    */
   public static async signInWithGmail(): Promise<{ user: User; accessToken: string; isSandbox?: boolean; domainNotice?: string }> {
     if (!auth) {
-      console.info('[GmailService] Operating in Sandbox mode (Firebase Auth uninitialized)');
-      return this.enableSandboxMode();
+      throw new Error('Gmail is unavailable: Firebase authentication is not configured.');
     }
 
     try {
@@ -246,19 +239,7 @@ export class GmailService {
       const code = error?.code || '';
       const msg = error?.message || '';
       
-      // Gracefully handle domain authorization limitations in preview/cloud-run environments
-      if (code === 'auth/unauthorized-domain' || msg.includes('unauthorized-domain') || code === 'auth/popup-blocked') {
-        const hostname = typeof window !== 'undefined' ? window.location.hostname : 'preview-domain';
-        console.warn(`[GmailService] Domain authorization notice: '${hostname}' is not in Firebase Authorized Domains. Activating Gmail Sandbox Workspace seamlessly.`);
-        const sandboxRes = this.enableSandboxMode();
-        return {
-          ...sandboxRes,
-          domainNotice: `Domain '${hostname}' is not yet whitelisted in Firebase Console. Gmail Sandbox Workspace mode is active.`,
-        };
-      }
-
-      console.warn('[GmailService] Google Sign-in encountered notice, activating Sandbox Workspace:', error?.message);
-      return this.enableSandboxMode();
+      throw new Error(`Gmail sign-in failed${code ? ` (${code})` : ''}: ${msg || 'authorization was not completed.'}`);
     } finally {
       isSigningIn = false;
     }

@@ -329,16 +329,8 @@ function AppContent() {
   const [config, setConfig] = useState<BotConfig>(getInitialConfig);
   const [loading, setLoading] = useState(true);
 
-  // User Authentication & Session State (Instant Bypass for Preview)
-  const [session, setSession] = useState<AuthSession | null>(() => {
-    try {
-      const storedSession = AuthService.getCurrentSession();
-      return AuthService.normalizeSession(storedSession) || AuthService.createBypassSession('admin');
-    } catch (error) {
-      console.error('Failed to initialize authentication session:', error);
-      return AuthService.createBypassSession('admin');
-    }
-  });
+  // User Authentication & Session State
+  const [session, setSession] = useState<AuthSession | null>(() => AuthService.normalizeSession(AuthService.getCurrentSession()));
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'signup' | 'verify'>('login');
@@ -376,7 +368,7 @@ function AppContent() {
         if (isValidSession(normalizedSession)) {
           setSession(normalizedSession);
         } else {
-          setSession(AuthService.createBypassSession('admin'));
+          setSession(null);
         }
         if (serverConfig) {
           setConfig((previous) => normalizeWorkspaceConfig({ ...previous, ...serverConfig }));
@@ -384,7 +376,7 @@ function AppContent() {
       } catch (error) {
         console.warn('Workspace initialization sync notice:', error);
         if (isMounted) {
-          setSession(AuthService.createBypassSession('admin'));
+          setSession(null);
         }
       } finally {
         if (isMounted) setLoading(false);

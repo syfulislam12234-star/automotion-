@@ -205,7 +205,7 @@ export const GmailManager: React.FC<GmailManagerProps> = ({ onBackToChat }) => {
       showNotice('Connected to Gmail Sandbox Workspace (Demo Environment active)');
       await loadGmailData();
     } catch (err: any) {
-      showNotice('Could not initialize sandbox mode.', 'error');
+      setAuthError(err?.message || 'Gmail sandbox mode is unavailable. Connect a live Google account.');
     } finally {
       setIsAuthenticating(false);
     }

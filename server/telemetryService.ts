@@ -1,36 +1,33 @@
 export class TelemetryService {
-  private static totalRequests = 1420;
-  private static successfulFailovers = 87;
-  private static averageLatencyMs = 240;
-  private static tokenCount = 890450;
+  private static totalRequests = 0;
+  private static successfulFailovers = 0;
+  private static averageLatencyMs = 0;
+  private static tokenCount = 0;
   private static interactions: Array<any> = [];
 
   public static getDashboardData() {
+    const successfulInteractions = TelemetryService.interactions.filter((interaction) => interaction.success);
+    const latencyTotal = TelemetryService.interactions.reduce((total, interaction) => total + interaction.latencyMs, 0);
+    const providers = [...new Set(TelemetryService.interactions.map((interaction) => interaction.provider))];
     return {
       totalRequests: TelemetryService.totalRequests,
       successfulFailovers: TelemetryService.successfulFailovers,
-      averageLatencyMs: TelemetryService.averageLatencyMs,
+      averageLatencyMs: TelemetryService.interactions.length ? Math.round(latencyTotal / TelemetryService.interactions.length) : 0,
       tokenCount: TelemetryService.tokenCount,
       uptimeSeconds: process.uptime(),
-      providerHealth: [
-        { provider: 'Google Gemini', status: 'optimal', latency: '210ms', uptime: '99.98%' },
-        { provider: 'Groq LPU', status: 'blazing', latency: '120ms', uptime: '99.99%' },
-        { provider: 'Cerebras CS-3', status: 'ultra', latency: '80ms', uptime: '99.95%' },
-        { provider: 'OpenRouter', status: 'healthy', latency: '380ms', uptime: '99.85%' },
-        { provider: 'Mistral AI', status: 'optimal', latency: '290ms', uptime: '99.90%' },
-      ],
+      providerHealth: providers.map((provider) => {
+        const providerInteractions = TelemetryService.interactions.filter((interaction) => interaction.provider === provider);
+        const providerFailures = providerInteractions.filter((interaction) => !interaction.success).length;
+        const latency = Math.round(providerInteractions.reduce((total, interaction) => total + interaction.latencyMs, 0) / providerInteractions.length);
+        return { provider, status: providerFailures ? 'degraded' : 'observed', latency: `${latency}ms`, uptime: `${(((providerInteractions.length - providerFailures) / providerInteractions.length) * 100).toFixed(2)}%` };
+      }),
       recentInteractions: TelemetryService.interactions.slice(0, 20),
     };
   }
 
   public static async runLiveBenchmark(prompt?: string) {
-    return [
-      { provider: 'Groq (Llama 3.3 70B)', latencyMs: 142, tokensPerSec: 380, status: 'pass' },
-      { provider: 'Gemini 3.7 Flash', latencyMs: 198, tokensPerSec: 210, status: 'pass' },
-      { provider: 'Cerebras Llama 3.3', latencyMs: 88, tokensPerSec: 1750, status: 'pass' },
-      { provider: 'OpenRouter (R1 Distill)', latencyMs: 340, tokensPerSec: 90, status: 'pass' },
-      { provider: 'SambaNova (Llama 3.3)', latencyMs: 165, tokensPerSec: 420, status: 'pass' },
-    ];
+    void prompt;
+    return [];
   }
 
   public static recordInteraction(data: {
@@ -47,15 +44,15 @@ export class TelemetryService {
     [key: string]: any;
   }) {
     TelemetryService.totalRequests++;
-    TelemetryService.tokenCount += data.tokens || 150;
+    TelemetryService.tokenCount += data.tokens || 0;
     TelemetryService.interactions.unshift({
       id: Math.random().toString(36).substring(2, 9),
       timestamp: new Date().toISOString(),
       provider: data.provider || data.providerName || data.providerId || 'Groq',
       model: data.model || data.modelUsed || 'default',
-      latencyMs: data.latencyMs || 100,
-      tokens: data.tokens || 150,
-      success: data.success !== undefined ? data.success : true,
+      latencyMs: data.latencyMs || 0,
+      tokens: data.tokens || 0,
+      success: data.success === true,
       ...data,
     });
   }

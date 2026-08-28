@@ -12,69 +12,12 @@ import { auth } from './firebase';
 const USERS_STORAGE_KEY = 'groq_bot_users_db_v1';
 const SESSION_STORAGE_KEY = 'groq_bot_auth_session_v1';
 
-export const PREVIEW_ADMIN_USER: UserAccount = {
-  id: 'usr_preview_admin',
-  name: 'Preview Master Admin',
-  email: 'admin@preview.local',
-  role: 'admin',
-  isVerified: true,
-  createdAt: new Date().toISOString(),
-  lastLoginAt: new Date().toISOString(),
-  avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=preview_master_admin',
-  bio: 'Automotion Bot Builder Super Admin (Preview Mode)',
-};
-
-export const PREVIEW_ADMIN_SESSION: AuthSession = {
-  token: 'tok_preview_admin_master_session',
-  user: PREVIEW_ADMIN_USER,
-  expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-  isVerified: true,
-  adminAuthorized: true,
-};
-
-const INITIAL_USERS: UserAccount[] = [PREVIEW_ADMIN_USER];
+const INITIAL_USERS: UserAccount[] = [];
 
 const PASSWORDS_STORAGE_KEY = 'groq_bot_passwords_v1';
 const INITIAL_PASSWORDS: Record<string, string> = {};
 
 export class AuthService {
-  /**
-   * Directly issue an instant verified session for seamless preview & testing
-   */
-  public static createBypassSession(role: 'admin' | 'developer' = 'admin'): AuthSession {
-    const user: UserAccount = {
-      ...PREVIEW_ADMIN_USER,
-      id: `usr_preview_${role}`,
-      name: role === 'admin' ? 'Preview Master Admin' : 'Preview Developer',
-      email: role === 'admin' ? 'admin@preview.local' : 'developer@preview.local',
-      role,
-      isVerified: true,
-    };
-    const session: AuthSession = {
-      token: `tok_preview_${role}_${Date.now()}`,
-      user,
-      expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-      isVerified: true,
-      adminAuthorized: role === 'admin',
-    };
-    try {
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-      const users = this.getStoredUsers();
-      if (!users.some(u => u.id === user.id)) {
-        users.push(user);
-        this.saveUsers(users);
-      }
-    } catch (e) {
-      console.warn('Failed to cache bypass session:', e);
-    }
-    return session;
-  }
-
-  public static getGuestPreviewSession(): AuthSession {
-    const current = this.getCurrentSession();
-    if (current && current.isVerified) return current;
-    return this.createBypassSession('admin');
-  }
   /**
    * Helper to format Firebase Auth error messages into clear, actionable user feedback
    */
@@ -182,43 +125,6 @@ export class AuthService {
         session,
       };
     } catch (error: any) {
-      const code = error?.code || '';
-      const msg = error?.message || '';
-
-      // Gracefully handle domain restriction in preview / sandbox / container environments
-      if (code === 'auth/unauthorized-domain' || msg.includes('unauthorized-domain') || code === 'auth/popup-blocked') {
-        const hostname = typeof window !== 'undefined' ? window.location.hostname : 'preview-domain';
-        console.warn(`[Firebase Auth] Domain '${hostname}' is not yet whitelisted in Firebase Authorized Domains. Activating instant verified developer session.`);
-
-        const previewUser: UserAccount = {
-          id: `usr_gauth_preview_${Date.now()}`,
-          name: 'Developer (Google Preview)',
-          email: 'developer@preview.local',
-          role: 'admin',
-          isVerified: true,
-          createdAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString(),
-          avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=google_developer_preview',
-          bio: 'Google Verified Preview Developer (Domain Sandbox Active)',
-        };
-
-        const session: AuthSession = {
-          token: `gauth_preview_${Date.now()}`,
-          user: previewUser,
-          expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
-          isVerified: true,
-          adminAuthorized: true,
-        };
-
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-
-        return {
-          success: true,
-          message: `Welcome, ${previewUser.name}! (Preview access enabled)`,
-          session,
-        };
-      }
-
       console.error('[Firebase Auth] Google sign-in failed:', error);
       return {
         success: false,
@@ -238,14 +144,10 @@ export class AuthService {
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data.session));
         return data;
       }
+      return { success: false, message: data?.message || 'Administrator registration failed.' };
     } catch (error: any) {
-      console.warn('Backend admin signup offline, using direct verification session:', error);
+      return { success: false, message: error?.message || 'Administrator registration service is unavailable.' };
     }
-    const session = this.createBypassSession('admin');
-    session.user.name = params.name;
-    session.user.email = params.email.toLowerCase().trim();
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-    return { success: true, message: `Admin account ${params.name} created and verified!`, session, user: session.user };
   }
 
   public static async verifyAdminSignUp(email: string, code: string): Promise<any> {
@@ -344,27 +246,25 @@ export class AuthService {
   public static getCurrentSession(): AuthSession | null {
     try {
       const sessionStr = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (!sessionStr) {
-        return this.createBypassSession('admin');
-      }
+      if (!sessionStr) return null;
       const session = this.normalizeSession(JSON.parse(sessionStr));
-      if (!session) {
-        return this.createBypassSession('admin');
-      }
+      if (!session) return null;
 
       if (session.expiresAt && Date.now() > session.expiresAt) {
-        return this.createBypassSession('admin');
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        return null;
       }
 
       return session;
     } catch {
-      return this.createBypassSession('admin');
+      return null;
     }
   }
 
   // Validate session against server database & fetch updated user and bot config
   public static async syncSessionWithServer(): Promise<{ session: AuthSession | null; botConfig?: BotConfig | null }> {
-    const current = this.getCurrentSession() || this.createBypassSession('admin');
+    const current = this.getCurrentSession();
+    if (!current) return { session: null, botConfig: null };
 
     try {
       const resp = await fetch('/api/auth/me', {
@@ -404,8 +304,6 @@ export class AuthService {
     password: string;
     role?: 'admin' | 'developer' | 'operator';
   }): Promise<{ success: boolean; message: string; user?: UserAccount; session?: AuthSession; verificationCode?: string }> {
-    const cleanEmail = params.email.toLowerCase().trim();
-
     try {
       const resp = await fetch('/api/auth/signup', {
         method: 'POST',
@@ -438,48 +336,9 @@ export class AuthService {
         };
       }
     } catch (err) {
-      console.warn('Backend signup notice:', err);
+      return { success: false, message: 'Registration service is unavailable. Please try again.' };
     }
-
-    // Local instant verified signup
-    const users = this.getStoredUsers();
-    let user = users.find(u => u.email.toLowerCase() === cleanEmail);
-    if (!user) {
-      user = {
-        id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        name: params.name.trim() || 'Developer',
-        email: cleanEmail,
-        role: params.role || 'admin',
-        isVerified: true,
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-        avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(params.name)}`,
-        bio: 'Cloud Bot Builder Member',
-      };
-      users.push(user);
-      this.saveUsers(users);
-      this.savePassword(cleanEmail, params.password);
-    } else {
-      user.isVerified = true;
-      this.saveUsers(users);
-    }
-
-    const session: AuthSession = {
-      token: `gauth_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
-      user,
-      expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-      isVerified: true,
-      adminAuthorized: true,
-    };
-
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-
-    return {
-      success: true,
-      message: `Account created and verified! Welcome, ${user.name}.`,
-      user,
-      session,
-    };
+    return { success: false, message: 'Registration service returned no usable response.' };
   }
 
   // Verify OTP once and issue the persisted verified session.
@@ -528,8 +387,6 @@ export class AuthService {
     unverifiedUser?: UserAccount;
     verificationCode?: string;
   }> {
-    const cleanEmail = params.email.toLowerCase().trim();
-
     try {
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
@@ -566,23 +423,9 @@ export class AuthService {
         };
       }
     } catch (err) {
-      console.warn('Backend login notice:', err);
+      return { success: false, message: 'Authentication service is unavailable. Please try again.' };
     }
-
-    // Local instant verified login
-    const session = this.createBypassSession('admin');
-    if (cleanEmail) {
-      session.user.email = cleanEmail;
-      session.user.name = cleanEmail.split('@')[0] || 'Admin';
-    }
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-
-    return {
-      success: true,
-      message: `Welcome back, ${session.user.name}!`,
-      session,
-      requiresVerification: false,
-    };
+    return { success: false, message: 'Authentication service returned no usable response.' };
   }
 
   // Permanently save user's bot configuration to server database and Firestore cloud

@@ -57,38 +57,7 @@ export class CronWorkerService {
     whatsAppRecipients: [],
   };
 
-  private static history: BroadcastHistoryItem[] = [
-    {
-      id: 'crn_init_01',
-      timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-      title: '🚨 বাংলাদেশ জরুরি ও সমসাময়িক জাতীয় সংবাদ বুলেটিন (২ ঘণ্টার স্বয়ংক্রিয় সাইকেল)',
-      summary: 'ফায়ার সার্ভিসের দ্রুত তৎপরতায় মতিঝিলে বৈদ্যুতিক অগ্নিকাণ্ড নিয়ন্ত্রণ। জাতীয় গ্রিডে ১৪,২০০ মেগাওয়াট বিদ্যুৎ সঞ্চালন স্বাভাবিক। চট্টগ্রাম নদী বন্দরে ১ নম্বর সতর্কতা সংকেত।',
-      fullMessage: `🇧🇩 **বাংলাদেশ জরুরি ও জাতীয় সংবাদ বুলেটিন**
-🕒 সময়: ${new Date(Date.now() - 1000 * 60 * 45).toLocaleTimeString('bn-BD')} | স্বয়ংক্রিয় ২ ঘণ্টার সাইকেল
-
-🚨 **জরুরি আপডেট ও নিরাপত্তা:**
-• ফায়ার সার্ভিসের ৪টি ইউনিটের তৎপরতায় মতিঝিল এলাকার বাণিজ্যিক ভবনের বৈদ্যুতিক আগুন সম্পূর্ণ নিয়ন্ত্রণে এসেছে। কোনো হতাহত নেই।
-• বিউবো (BPDB): জাতীয় গ্রিড ফ্রিকোয়েন্সি স্থিতিশীল এবং মেট্রোপলিটন অঞ্চলে সার্বিক বিদ্যুৎ সরবরাহ স্বাভাবিক।
-
-🌧️ **আবহাওয়া ও উপকূলীয় সতর্কতা:**
-• চট্টগ্রাম ও কক্সবাজার নদী বন্দরসমূহকে ১ নম্বর স্থানীয় সতর্ক সংকেত দেখাতে বলা হয়েছে।
-• বন্যা পূর্বাভাস কেন্দ্র: দেশের সকল প্রধান নদ-নদীর পানি স্বাভাবিক এবং বিপৎসীমার নিচে।
-
-📞 **জরুরি জাতীয় হেল্পলাইন:**
-• ৯৯৯ (জাতীয় জরুরি সেবা) | ১০৯০ (দুর্যোগ তথ্য) | ৩৩৩ (সরকারি নাগরিক সেবা)`,
-      targetCount: 3,
-      targets: ['telegram', 'whatsapp', 'discord'],
-      status: 'delivered',
-      modelUsed: 'gemini-3.7-flash',
-      itemsCount: 5,
-      emergencyAlertLevel: 'NORMAL',
-      recipientsDetail: [
-        { platform: 'telegram', target: 'Admin Channel & Broadcast Group', status: 'ok', note: 'Dispatched via Telegram Bot API' },
-        { platform: 'whatsapp', target: 'Verified Operations Recipient', status: 'ok', note: 'Dispatched via WhatsApp Cloud API' },
-        { platform: 'discord', target: 'Emergency Alerts Webhook', status: 'ok', note: 'Webhook payload 200 OK' },
-      ],
-    },
-  ];
+  private static history: BroadcastHistoryItem[] = [];
 
   public static setAiSummarizer(fn: (prompt: string) => Promise<string>) {
     CronWorkerService.summarizer = fn;
@@ -145,7 +114,7 @@ export class CronWorkerService {
       enabled: CronWorkerService.config.enabled,
       intervalMinutes: CronWorkerService.config.intervalMinutes,
       config: CronWorkerService.config,
-      lastRun: CronWorkerService.lastRun || new Date().toISOString(),
+      lastRun: CronWorkerService.lastRun,
       nextRun: CronWorkerService.nextRunTimestamp,
       countdownSeconds,
       tasksQueued: 0,
@@ -337,7 +306,7 @@ ${helplinesText}
       fullMessage: generated.fullMessage,
       targetCount: targets.length,
       targets,
-      status: successfulSends > 0 ? (successfulSends === targets.length ? 'delivered' : 'partial') : 'delivered',
+      status: successfulSends > 0 ? (successfulSends === targets.length ? 'delivered' : 'partial') : 'failed',
       modelUsed: generated.modelUsed,
       itemsCount: generated.newsItems.length,
       emergencyAlertLevel: generated.emergencyLevel,
@@ -353,10 +322,10 @@ ${helplinesText}
     CronWorkerService.scheduleNextRun();
 
     return {
-      success: true,
-      message: `Emergency news bulletin successfully broadcasted to ${targets.length} channels (${successfulSends} confirmed deliveries).`,
+      success: successfulSends > 0,
+      message: `Emergency news bulletin delivered to ${successfulSends} of ${targets.length} channels.`,
       totalTargets: targets.length,
-      successfulSends: Math.max(successfulSends, targets.length),
+      successfulSends,
       broadcast: historyItem,
     };
   }
@@ -396,7 +365,7 @@ ${helplinesText}
           console.warn('[Telegram Dispatch] Network dispatch error:', e?.message);
         }
       }
-      return { platform: 'telegram', target: 'Telegram Bot Gateway', status: 'ok', note: 'Dispatched to Telegram Broadcast Gateway' };
+      return { platform: 'telegram', target: 'Telegram Bot Gateway', status: 'skipped', note: 'Telegram credentials are not configured or delivery was not confirmed.' };
     }
 
     // 2. WhatsApp Cloud Dispatch
@@ -428,7 +397,7 @@ ${helplinesText}
           console.warn('[WhatsApp Dispatch] Network error:', e?.message);
         }
       }
-      return { platform: 'whatsapp', target: 'WhatsApp Cloud Ingress', status: 'ok', note: 'Dispatched via WhatsApp Multi-Channel Gateway' };
+      return { platform: 'whatsapp', target: 'WhatsApp Cloud Ingress', status: 'skipped', note: 'WhatsApp credentials are not configured or delivery was not confirmed.' };
     }
 
     // 3. Discord Dispatch
@@ -449,7 +418,7 @@ ${helplinesText}
           // Safe fallback
         }
       }
-      return { platform: 'discord', target: 'Discord Alert Webhook', status: 'ok', note: 'Dispatched to Discord Broadcast Gateway' };
+      return { platform: 'discord', target: 'Discord Alert Webhook', status: 'skipped', note: 'Discord webhook is not configured or delivery was not confirmed.' };
     }
 
     // 4. Slack Dispatch
@@ -470,11 +439,11 @@ ${helplinesText}
           // Safe fallback
         }
       }
-      return { platform: 'slack', target: 'Slack Alert Ingress', status: 'ok', note: 'Dispatched via Slack Bolt Gateway' };
+      return { platform: 'slack', target: 'Slack Alert Ingress', status: 'skipped', note: 'Slack webhook is not configured or delivery was not confirmed.' };
     }
 
     // 5. LINE / Teams / Viber / Generic Webhook
-    return { platform: cleanPlatform, target: `${cleanPlatform.toUpperCase()} Gateway`, status: 'ok', note: `Broadcast routed to ${cleanPlatform} channel` };
+    return { platform: cleanPlatform, target: `${cleanPlatform.toUpperCase()} Gateway`, status: 'skipped', note: `${cleanPlatform} delivery handler is not configured.` };
   }
 
   public static getHistory() {

@@ -1461,6 +1461,7 @@ async function startServer() {
     try {
       const { prompt } = req.body;
       const benchmarkData = await TelemetryService.runLiveBenchmark(prompt);
+      if (benchmarkData.length === 0) return res.status(503).json({ success: false, error: 'Live benchmark providers are not configured.' });
       return res.json({ success: true, benchmark: benchmarkData });
     } catch (err: any) {
       console.error('Error running telemetry benchmark:', err);
@@ -1468,8 +1469,10 @@ async function startServer() {
     }
   });
 
-  // Simulate real-time Telegram traffic across 100 AI providers for testing
+  // Retain the route for clients, but never manufacture telemetry.
   app.post('/api/telemetry/simulate', (req, res) => {
+    return res.status(410).json({ success: false, error: 'Telemetry simulation is unavailable in production. Use live Telegram traffic.' });
+    /* istanbul ignore next */
     try {
       const sampleQueries = [
         'Analyze real-time crypto signals & volume',

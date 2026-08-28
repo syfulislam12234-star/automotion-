@@ -143,11 +143,6 @@ export const AiMediaScanner: React.FC<AiMediaScannerProps> = ({ onShowToast }) =
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize with initial scanned result for Midjourney preset
-  useEffect(() => {
-    runAnalysis(PRESET_SAMPLES[1].url, 'image', PRESET_SAMPLES[1]);
-  }, []);
-
   const handleFileSelection = (file: File) => {
     if (!file) return;
 
@@ -201,6 +196,13 @@ export const AiMediaScanner: React.FC<AiMediaScannerProps> = ({ onShowToast }) =
       if (onShowToast) onShowToast('⚠️ Please provide a media file or URL to scan.');
       return;
     }
+
+    setIsScanning(false);
+    setScanProgress(0);
+    setScanStageText('Live media provenance detector is not configured.');
+    setResult(null);
+    if (onShowToast) onShowToast('Media scan unavailable: configure a live provenance detector service.');
+    return;
 
     setIsScanning(true);
     setScanProgress(5);

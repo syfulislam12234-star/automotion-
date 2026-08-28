@@ -62,19 +62,6 @@ export class ServerDatabase {
   public static getSessionUser(authHeader: string): UserAccount | null {
     if (!authHeader) return null;
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (token.startsWith('tok_preview_') || token.startsWith('gauth_preview_') || token.includes('preview')) {
-      return {
-        id: 'usr_preview_admin',
-        name: 'Preview Master Admin',
-        email: 'admin@preview.local',
-        role: 'admin',
-        isVerified: true,
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-        avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=preview_master_admin',
-        bio: 'Automotion Bot Builder Super Admin (Preview Mode)',
-      };
-    }
     const session = ServerDatabase.db.sessions[token];
     if (session && session.expiresAt > Date.now()) {
       return session.user;
@@ -85,9 +72,6 @@ export class ServerDatabase {
   public static isAdminSessionAuthorized(authHeader: string): boolean {
     if (!authHeader) return false;
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (token.startsWith('tok_preview_') || token.startsWith('gauth_preview_') || token.includes('preview')) {
-      return true;
-    }
     const user = ServerDatabase.getSessionUser(authHeader);
     if (!user) return false;
     return user.role === 'admin' && user.isVerified;
