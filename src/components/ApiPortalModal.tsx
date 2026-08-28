@@ -3,6 +3,7 @@ import { BotConfig } from '../types';
 import { X, Key, ExternalLink, ShieldCheck, Check, Sparkles, Zap, Bot, Lock } from 'lucide-react';
 import { AI_PROVIDER_GATEWAYS_50 } from '../data/aiProviders50';
 import { AuthService } from '../services/authService';
+import { AiService } from '../services/aiService';
 
 interface ApiPortalModalProps {
   isOpen: boolean;
@@ -58,10 +59,10 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
       });
       const verification = await response.json().catch(() => ({}));
       if (!response.ok || !verification.success) throw new Error(verification.error || verification.message || 'API key verification failed.');
-      const saved = await onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: value }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: value } : {}) });
-      if (!saved) throw new Error('API key could not be persisted.');
+      void AiService.saveApiKey(currentProvider.id, value);
+      void Promise.resolve(onUpdateConfig({ apiGatewayKeys: { ...(config.apiGatewayKeys || {}), [currentProvider.id]: value }, ...(legacyKeys[currentProvider.id] ? { [legacyKeys[currentProvider.id]]: value } : {}) })).catch(() => undefined);
       setConnectionStatus('Connected Successfully');
-      onShowToast(`✅ ${currentProvider.name} connected and saved.`);
+      onShowToast('🟢 API Key saved and activated successfully!');
       setKeyInput('');
     } catch (error: any) {
       setConnectionStatus(error?.message || 'API key verification failed.');

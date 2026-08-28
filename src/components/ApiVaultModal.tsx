@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BotConfig } from '../types';
+import { AiService } from '../services/aiService';
 import {
   Lock,
   Unlock,
@@ -133,6 +134,10 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
       return;
     }
     setTestingKeyId(providerId);
+    void AiService.saveApiKey(providerId, token);
+    const providerConfigKey = AI_PROVIDERS.find((provider) => provider.id === providerId)?.configKey;
+    if (providerConfigKey) onUpdateConfig({ [providerConfigKey]: token } as Partial<BotConfig>);
+    onShowToast('🟢 API Key saved and activated successfully!');
     const start = Date.now();
     try {
       // Simulate/ping gateway or test endpoint

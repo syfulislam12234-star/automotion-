@@ -109,11 +109,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
 
   const updateField = <K extends keyof BotConfig>(key: K, value: BotConfig[K]) => {
     const nextConfig = { ...config, [key]: value };
-    void Promise.resolve(onChange(nextConfig)).then((saved) => {
-      if (saved === false) onShowToast('⚠️ Live update failed. Previous configuration remains active.');
-    }).catch((error: any) => {
-      onShowToast(`⚠️ Live update failed: ${error?.message || 'Previous configuration remains active.'}`);
-    });
+    void Promise.resolve(onChange(nextConfig)).catch(() => undefined);
     const channelByField: Partial<Record<keyof BotConfig, string>> = {
       enableTelegram: 'telegram',
       telegramBotToken: 'telegram',

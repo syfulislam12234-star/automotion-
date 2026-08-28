@@ -25,6 +25,14 @@ export class AiService {
   private static readonly MANDATORY_LANGUAGE_PROMPT = 'You are an intelligent multi-lingual AI assistant. You MUST strictly follow the user\'s language choice. If the user asks to reply in Bengali (বাংলা) or Banglish, always respond in Bengali.';
 
   public static async saveApiKey(provider: string, token: string): Promise<boolean> {
+    const normalizedProvider = provider.trim().toLowerCase();
+    const normalizedToken = token.trim();
+    try {
+      const storedKeys = JSON.parse(localStorage.getItem('user_api_keys') || '{}') as Record<string, string>;
+      localStorage.setItem('user_api_keys', JSON.stringify({ ...storedKeys, [normalizedProvider]: normalizedToken }));
+    } catch (error) {
+      console.warn('[AI Key Save] Local key persistence unavailable:', error);
+    }
     const session = (() => {
       try {
         const raw = localStorage.getItem('groq_bot_auth_session_v1');
@@ -40,7 +48,7 @@ export class AiService {
           'Content-Type': 'application/json',
           ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
         },
-        body: JSON.stringify({ provider: provider.trim().toLowerCase(), token: token.trim() }),
+        body: JSON.stringify({ provider: normalizedProvider, token: normalizedToken }),
       });
       const data = await response.json().catch(() => ({}));
       return response.ok && data?.success === true;
