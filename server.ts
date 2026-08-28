@@ -892,6 +892,16 @@ async function startServer() {
     }
   };
 
+  const getActiveConfigKeys = (config: any): string[] => {
+    if (!config || typeof config !== 'object') return [];
+    const keys = config.apiGatewayKeys && typeof config.apiGatewayKeys === 'object'
+      ? Object.entries(config.apiGatewayKeys)
+        .filter(([, value]) => typeof value === 'string' && value.trim())
+        .map(([key]) => key)
+      : [];
+    return [...new Set(keys)];
+  };
+
   const refreshAdminConfig = (config: any): void => {
     const adminChatId = config.telegramAdminChatId || config.adminTelegramId;
     const adminBotToken = config.telegramAdminBotToken || config.telegramBotToken;
@@ -1981,9 +1991,13 @@ async function startServer() {
       }
 
       const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
-      await refreshRuntimeConfig(targetId, config, previousConfig);
-      refreshAdminConfig(config);
       const result = ServerDatabase.saveBotConfig(targetId, config);
+      try {
+        await refreshRuntimeConfig(targetId, config, previousConfig);
+      } catch (error: any) {
+        console.warn('[Runtime Refresh] Configuration persisted; live service refresh deferred:', error?.message || error);
+      }
+      refreshAdminConfig(config);
       void notifyAdminOfConfigurationUpdate().catch((error) => {
         console.error('[Telegram Alert] Configuration notification failed:', error);
       });
@@ -1992,6 +2006,7 @@ async function startServer() {
         message: 'Bot configuration permanently saved to server database.',
         targetId,
         saved: result,
+        activeKeys: getActiveConfigKeys(config),
       });
       } catch (err: any) {
         return res.status(400).json({ success: false, message: err.message || 'Runtime configuration refresh failed.' });
@@ -2053,9 +2068,13 @@ async function startServer() {
       if (!targetId) targetId = 'global_default_user';
 
       const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
-      await refreshRuntimeConfig(targetId, config, previousConfig);
-      refreshAdminConfig(config);
       ServerDatabase.saveBotConfig(targetId, config);
+      try {
+        await refreshRuntimeConfig(targetId, config, previousConfig);
+      } catch (error: any) {
+        console.warn('[Runtime Refresh] Key sync persisted; live service refresh deferred:', error?.message || error);
+      }
+      refreshAdminConfig(config);
       void notifyAdminOfConfigurationUpdate().catch((error) => {
         console.error('[Telegram Alert] Configuration notification failed:', error);
       });
@@ -2065,6 +2084,7 @@ async function startServer() {
         message: 'Automated Key Sync: 20 AI Providers and 10 Gateway credentials synchronized.',
         syncedAt: new Date().toISOString(),
         targetId,
+        activeKeys: getActiveConfigKeys(config),
       });
       } catch (err: any) {
         return res.status(400).json({ success: false, message: err.message || 'Runtime credential refresh failed.' });

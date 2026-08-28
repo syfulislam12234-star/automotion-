@@ -438,24 +438,31 @@ export class AuthService {
       console.warn('[Firestore] Background config save notice:', e);
     });
 
-    try {
-      const resp = await fetch('/api/user/config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
-        },
-        body: JSON.stringify({
-          config,
-          userId: effectiveUserId,
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      return resp.ok && data.success !== false;
-    } catch (e) {
-      console.warn('Failed to sync bot config to server DB:', e);
-      return false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const activeSession = this.getCurrentSession() || session;
+        const resp = await fetch('/api/user/config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(activeSession?.token ? { Authorization: `Bearer ${activeSession.token}` } : {}),
+          },
+          body: JSON.stringify({
+            config,
+            userId: activeSession?.user.id || effectiveUserId,
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data.success === true) return true;
+        if (resp.status < 500 || attempt === 1) return false;
+      } catch (e) {
+        if (attempt === 1) {
+          console.warn('Failed to sync bot config to server DB:', e);
+          return false;
+        }
+      }
     }
+    return false;
   }
 
   // Real-time automated key and credential synchronization
