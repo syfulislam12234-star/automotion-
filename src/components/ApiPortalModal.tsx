@@ -29,11 +29,11 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  const providers = AI_PROVIDER_GATEWAYS_100 || [];
 
-  const providers = AI_PROVIDER_GATEWAYS_100;
-
-  const currentProvider = providers.find((p) => p.id === selectedProvider) || providers[0];
+  const currentProvider = providers.find((p) => p?.id === selectedProvider) || providers[0] || {
+    id: 'custom-01', name: 'Custom Provider', speedTag: 'API key provider', keyUrl: '#', category: 'Custom API', placeholder: 'API key...', description: 'Custom API provider.',
+  };
   const legacyKeys: Record<string, keyof BotConfig> = {
     groq: 'groqApiKey', gemini: 'geminiApiKey', google: 'geminiApiKey', cerebras: 'cerebrasApiKey',
     openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', telegram: 'telegramBotToken',
@@ -43,6 +43,8 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
   useEffect(() => {
     setKeyInput((previous) => previous || currentKey);
   }, [selectedProvider]);
+
+  if (!isOpen) return null;
 
   const handleSave = async () => {
     const value = keyInput.trim();
@@ -95,7 +97,7 @@ export const ApiPortalModal: React.FC<ApiPortalModalProps> = ({
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
-          {providers.map((p) => (
+          {(providers || []).map((p) => (
             <button
               key={p.id}
               onClick={() => {

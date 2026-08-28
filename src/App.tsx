@@ -520,6 +520,7 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans selection:bg-cyan-500 selection:text-white">
+      <AppErrorBoundary fallback={<div className="w-[268px] p-4 text-xs text-slate-400">Navigation temporarily unavailable.</div>}>
       <Sidebar
         isOpen={isSidebarOpen}
         activeView={activeTab}
@@ -530,6 +531,7 @@ function AppContent() {
         onOpenVault={() => setIsVaultModalOpen(true)}
         currentUser={currentUser}
       />
+      </AppErrorBoundary>
       <div className="min-w-0 flex-1 flex flex-col">
       {/* Universal Super-App Navbar */}
       <Navbar
@@ -745,6 +747,7 @@ function AppContent() {
         )}
 
         {activeTab === 'preferences' && (
+          <AppErrorBoundary fallback={<div className="p-6 rounded-2xl border border-amber-500/30 bg-slate-900 text-sm text-amber-300">Bot Configuration is temporarily unavailable.</div>}>
           <ConfigPanel
             config={config}
             onChange={handleConfigChange}
@@ -753,6 +756,7 @@ function AppContent() {
             onShowToast={showToast}
             initialTab="model"
           />
+          </AppErrorBoundary>
         )}
 
         {/* View 2: Performance Dashboard (Real-Time 150-AI Telemetry) */}
@@ -905,6 +909,7 @@ function AppContent() {
       />
 
       {/* 1-Click Direct API Setup & Messaging Portal Modal */}
+      <AppErrorBoundary fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-6"><div className="rounded-xl border border-amber-500/30 bg-slate-900 p-5 text-sm text-amber-300">API Portal is temporarily unavailable. Please return to Bot Configuration and try again.</div></div>}>
       <ApiPortalModal
         isOpen={isPortalOpen}
         onClose={() => setIsPortalOpen(false)}
@@ -918,6 +923,7 @@ function AppContent() {
         }}
         initialPlatformId={portalInitialServiceId}
       />
+      </AppErrorBoundary>
 
       {/* Subscription & Managed Cloud Plans Portal Modal */}
       <SubscriptionModal
@@ -1008,6 +1014,7 @@ function AppContent() {
 
 interface AppErrorBoundaryProps {
   children?: React.ReactNode;
+  fallback?: React.ReactNode;
 }
 
 interface AppErrorBoundaryState {
@@ -1030,6 +1037,7 @@ class AppErrorBoundary extends React.Component<AppErrorBoundaryProps, AppErrorBo
 
   override render() {
     if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback;
       return (
         <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
           <div className="max-w-md rounded-2xl border border-rose-500/30 bg-slate-900 p-6 text-center shadow-xl">

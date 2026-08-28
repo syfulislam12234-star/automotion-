@@ -3,9 +3,19 @@ export interface AiProviderGateway {
   name: string;
   speedTag: string;
   keyUrl: string;
+  category: string;
+  placeholder: string;
+  description: string;
 }
 
-export const AI_PROVIDER_GATEWAYS_100: AiProviderGateway[] = [
+interface AiProviderSeed {
+  id: string;
+  name: string;
+  speedTag: string;
+  keyUrl: string;
+}
+
+const PROVIDER_SEEDS: AiProviderSeed[] = [
   { id: 'openai', name: 'OpenAI', speedTag: 'GPT models', keyUrl: 'https://platform.openai.com/api-keys' },
   { id: 'anthropic', name: 'Anthropic Claude', speedTag: 'Claude models', keyUrl: 'https://console.anthropic.com/settings/keys' },
   { id: 'google', name: 'Google Gemini', speedTag: 'Gemini fast tier', keyUrl: 'https://aistudio.google.com/app/apikey' },
@@ -107,3 +117,10 @@ export const AI_PROVIDER_GATEWAYS_100: AiProviderGateway[] = [
   { id: 'custom-47', name: 'Custom Provider 47', speedTag: 'API key provider', keyUrl: '#' },
   { id: 'custom-48', name: 'Custom Provider 48', speedTag: 'API key provider', keyUrl: '#' },
 ];
+
+export const AI_PROVIDER_GATEWAYS_100: AiProviderGateway[] = PROVIDER_SEEDS.map((provider) => ({
+  ...provider,
+  category: provider.id.startsWith('custom-') || provider.id === 'openai-compatible' ? 'Custom API' : 'AI Provider',
+  placeholder: `${provider.id.toUpperCase()} API key...`,
+  description: `${provider.name} API integration with configurable key-based failover.`,
+}));
