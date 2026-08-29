@@ -249,6 +249,33 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
     }
   };
 
+  const syncMessengerProfile = async () => {
+    try {
+      const session = AuthService.getCurrentSession();
+      const response = await fetch('/api/messenger/profile-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.token || ''}` },
+        body: JSON.stringify({
+          config: {
+            pageAccessToken: config.messengerPageAccessToken,
+            appSecret: config.messengerAppSecret,
+            verifyToken: config.messengerVerifyToken,
+            graphApiVersion: config.messengerGraphApiVersion,
+            getStartedEnabled: config.messengerGetStartedEnabled,
+            getStartedPayload: config.messengerGetStartedPayload,
+            greetingText: config.messengerGreetingText,
+            persistentMenu: config.messengerPersistentMenu,
+          },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || 'Messenger profile sync failed.');
+      onShowToast(`✅ Messenger profile synced: ${Array.isArray(data.results) && data.results.length > 0 ? data.results.join(' | ') : 'done'}`);
+    } catch (error: any) {
+      onShowToast(`⚠️ Messenger profile sync failed: ${error?.message || 'check the Page Access Token'}`);
+    }
+  };
+
   const handleTestKey = async (serviceId: string, keyValue?: string, isZeroKey: boolean = false, field?: keyof BotConfig) => {
     const normalizedKey = field ? getKeyDraft(field).trim() : keyValue?.trim() || '';
     const session = AuthService.getCurrentSession();
@@ -1232,6 +1259,93 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 Open Gateways Hub
               </button>
             )}
+          </div>
+
+          {/* 11. Facebook Messenger — Complete Configuration Portal */}
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-blue-500/30 space-y-2.5 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span>💬</span>
+                <span className="font-bold text-slate-200">11. Facebook Messenger API Portal</span>
+              </div>
+              <a
+                href="https://developers.facebook.com/apps"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1"
+              >
+                <ExternalLink className="w-2.5 h-2.5" />
+                <span>Meta for Developers</span>
+              </a>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <input
+                type={revealedFields['messenger-token'] ? 'text' : 'password'}
+                placeholder="EAAG... (Page Access Token)"
+                value={config.messengerPageAccessToken || ''}
+                onChange={(e) => updateField('messengerPageAccessToken', e.target.value)}
+                className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
+              />
+              <button type="button" onClick={() => toggleReveal('messenger-token')} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-xs cursor-pointer" title={revealedFields['messenger-token'] ? 'Mask token' : 'Reveal token'}>
+                {revealedFields['messenger-token'] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+              <button onClick={() => handlePasteKey('messengerPageAccessToken', 'Messenger Page')} className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer">Paste</button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <input
+                type={revealedFields['messenger-secret'] ? 'text' : 'password'}
+                placeholder="App Secret (enables HMAC SHA-256 webhook verification)"
+                value={config.messengerAppSecret || ''}
+                onChange={(e) => updateField('messengerAppSecret', e.target.value)}
+                className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
+              />
+              <button type="button" onClick={() => toggleReveal('messenger-secret')} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-xs cursor-pointer">
+                {revealedFields['messenger-secret'] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-slate-400">Custom Webhook Verify Token:</label>
+                <input value={config.messengerVerifyToken || ''} onChange={(e) => updateField('messengerVerifyToken', e.target.value)} className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono" />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400">Graph API Version:</label>
+                <select value={config.messengerGraphApiVersion || 'v19.0'} onChange={(e) => updateField('messengerGraphApiVersion', e.target.value)} className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white cursor-pointer">
+                  {['v19.0', 'v20.0', 'v21.0', 'v22.0'].map((version) => <option key={version} value={version}>{version}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400">Webhook Callback Endpoint (set in Meta App → Webhooks → Messenger):</label>
+              <div className="flex items-center gap-1.5 mt-1">
+                <input readOnly value={`${window.location.origin}/api/webhooks/messenger`} className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] text-cyan-300 font-mono" />
+                <button type="button" onClick={() => { void navigator.clipboard?.writeText(`${window.location.origin}/api/webhooks/messenger`).catch(() => undefined); onShowToast('📋 Messenger webhook URL copied'); }} className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer">Copy</button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <input type="checkbox" checked={config.messengerGetStartedEnabled} onChange={(e) => updateField('messengerGetStartedEnabled', e.target.checked)} className="w-4 h-4 rounded text-blue-500 cursor-pointer" />
+              <span className="text-[11px] text-slate-300 font-semibold">Enable "Get Started" button</span>
+            </div>
+            <input placeholder="Get Started payload (e.g. GET_STARTED)" value={config.messengerGetStartedPayload || ''} onChange={(e) => updateField('messengerGetStartedPayload', e.target.value)} className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600" />
+
+            <div>
+              <label className="text-[10px] text-slate-400">Auto-Greeting response (max 160 characters):</label>
+              <textarea value={config.messengerGreetingText || ''} onChange={(e) => updateField('messengerGreetingText', e.target.value)} rows={2} className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white resize-none" />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400">Persistent Menu (JSON array — postback / web_url items):</label>
+              <textarea value={config.messengerPersistentMenu || ''} onChange={(e) => updateField('messengerPersistentMenu', e.target.value)} rows={4} className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] text-white font-mono resize-none" />
+            </div>
+
+            <div className="flex justify-end">
+              <button onClick={() => void syncMessengerProfile()} className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold cursor-pointer">Sync Profile to Facebook</button>
+            </div>
           </div>
         </div>
       )}

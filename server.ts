@@ -15,6 +15,9 @@ import { GLOBAL_100_AI_MODELS } from './src/data/aiModels100';
 import { AI_PROVIDER_GATEWAYS_100 } from './src/data/aiProviders100';
 import { GlobalApiKeyStore } from './server/keyStore';
 import { FailoverEngine } from './server/aiFailoverEngine';
+import { StoreKnowledgeEngine } from './server/aiKnowledgeEngine';
+import { MessengerService } from './server/messengerService';
+import { registerCrmRoutes } from './server/crmRoutes';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
@@ -576,7 +579,9 @@ async function getAnalyzerStats(req: express.Request, clientKeys: Record<string,
 
 async function generateConfiguredProviderText(messages: any[], preferredModel?: string): Promise<{ text: string; modelUsed: string } | null> {
   const prompt = String(messages[messages.length - 1]?.content || '').trim();
-  const systemPrompt = 'You are a helpful, natural AI assistant. Answer dynamically in the user\'s input language, including Bengali or Banglish. Return only the answer.';
+  const baseSystemPrompt = 'You are a helpful, natural AI assistant. Answer dynamically in the user\'s input language, including Bengali or Banglish. Return only the answer.';
+  const storeKnowledgeBlock = StoreKnowledgeEngine.buildSystemPromptBlock();
+  const systemPrompt = storeKnowledgeBlock ? `${baseSystemPrompt}\n${storeKnowledgeBlock}` : baseSystemPrompt;
   const aiMessages = [{ role: 'system' as const, content: systemPrompt }, ...messages];
   const configuredCandidates: Array<() => Promise<{ text: string; modelUsed: string } | null>> = [
     () => generateWithGroq(aiMessages, preferredModel || 'llama-3.1-8b-instant'),
@@ -971,6 +976,45 @@ async function startServer() {
   app.post('/api/webhook', webhookHandler);
   app.post('/api/telegram/webhook', webhookHandler);
   app.post('/api/telegram-admin/webhook', webhookHandler);
+
+  // ==========================================
+  // FACEBOOK MESSENGER WEBHOOK (HMAC SHA-256 verified)
+  // Registered BEFORE the generic /api/webhooks/:platform handler so Messenger
+  // traffic is processed by the dedicated engine — Telegram, WhatsApp and all
+  // other channel webhooks below remain 100% untouched.
+  // ==========================================
+  app.get('/api/webhooks/messenger', (req, res) => {
+    try {
+      const challenge = MessengerService.verifyWebhook(
+        String(req.query['hub.mode'] || ''),
+        String(req.query['hub.verify_token'] || ''),
+        String(req.query['hub.challenge'] || ''),
+      );
+      if (challenge === null) return res.status(403).send('Messenger webhook verification failed.');
+      return res.status(200).send(challenge);
+    } catch (error: any) {
+      console.warn('[Messenger Webhook] verification error:', error?.message || error);
+      return res.status(403).send('Messenger webhook verification error.');
+    }
+  });
+  app.post('/api/webhooks/messenger', async (req, res) => {
+    try {
+      const rawBody = (req as express.Request & { rawBody?: string }).rawBody;
+      const signature = String(req.headers['x-hub-signature-256'] || '');
+      const result = await MessengerService.handleWebhookEvent(req.body, rawBody, signature);
+      if (!result.verified) {
+        return res.status(401).json({ ok: false, error: 'Invalid x-hub-signature-256 signature.' });
+      }
+      return res.status(200).json({ ok: true, handled: result.handled });
+    } catch (error: any) {
+      console.warn('[Messenger Webhook] processing notice:', error?.message || error);
+      return res.status(200).json({ ok: true });
+    }
+  });
+
+  // E-commerce CRM + Store Trainer + Messenger Profile APIs (session-protected)
+  registerCrmRoutes(app, requireSession);
+
   const channelWebhookHandler = async (req: express.Request, res: express.Response) => {
     try {
       const platform = req.params.platform || req.path.split('/').pop() || '';
@@ -1210,7 +1254,13 @@ async function startServer() {
       const defaultSysInstruction = isChatAssistant
         ? 'You are the in-app AI Copilot and Expert Assistant for the Universal Multi-Platform Bot Generator & VPS Management Dashboard. Help the user build, troubleshoot, brainstorm bot architectures, configure webhooks, write Telegram/Discord/WhatsApp code snippets, understand 20-AI provider routing, or optimize VPS performance. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.'
         : 'You are a helpful, ultra-fast AI assistant. Always format your response using clean Markdown, clear headings, appropriate emojis, and bullet points to make it look stylish and easy to read on Telegram.';
-      const effectiveSysInstruction = `${HIGH_REASONING_PROMPT}\n${MANDATORY_LANGUAGE_PROMPT}\n${TUTORIAL_LINK_PROMPT}\n${systemPrompt || defaultSysInstruction}\n${APP_KNOWLEDGE_BASE_BN}\n${SECURITY_GUARDRAILS_BN}`;
+      const baseSysInstruction = `${HIGH_REASONING_PROMPT}\n${MANDATORY_LANGUAGE_PROMPT}\n${TUTORIAL_LINK_PROMPT}\n${systemPrompt || defaultSysInstruction}\n${APP_KNOWLEDGE_BASE_BN}\n${SECURITY_GUARDRAILS_BN}`;
+      // 🧠 Dynamically inject the trained store knowledge (Custom AI Store Trainer) so every
+      // channel replies with accurate product details, prices, stock and store policies.
+      const storeKnowledgeBlock = StoreKnowledgeEngine.buildSystemPromptBlock();
+      const effectiveSysInstruction = storeKnowledgeBlock
+        ? `${baseSysInstruction}\n${storeKnowledgeBlock}`
+        : baseSysInstruction;
       const generationStart = Date.now();
 
       // Format contents if history is provided

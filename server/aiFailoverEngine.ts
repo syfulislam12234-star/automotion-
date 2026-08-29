@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { GlobalApiKeyStore, maskKey } from './keyStore';
+import { StoreKnowledgeEngine, KNOWLEDGE_SYSTEM_MARKER } from './aiKnowledgeEngine';
 
 /**
  * Ultra-Fast Millisecond Multi-Model Failover Orchestrator
@@ -161,6 +162,13 @@ export class FailoverEngine {
       .map((message: any) => ({ role: String(message?.role || 'user'), content: String(message?.content ?? message?.text ?? '') }))
       .filter((message) => message.content.trim());
     if (messages.length === 0) return null;
+
+    // 🧠 Dynamic store-knowledge injection (trained in the Custom AI Store Trainer) so every
+    // failover reply quotes real product details, prices, stock and store policies.
+    const knowledgeBlock = StoreKnowledgeEngine.buildSystemPromptBlock();
+    if (knowledgeBlock && !messages.some((message) => message.role === 'system' && message.content.includes(KNOWLEDGE_SYSTEM_MARKER))) {
+      messages.unshift({ role: 'system', content: knowledgeBlock });
+    }
 
     const orderedRoutes = [...PROVIDER_ROUTES].sort((a, b) => {
       const aBoost = preferredProvider && a.id === preferredProvider ? -1000 : 0;

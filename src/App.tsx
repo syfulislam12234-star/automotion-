@@ -22,6 +22,8 @@ import { GmailManager } from './components/GmailManager';
 import { Sidebar, AppView } from './components/Sidebar';
 import { UnifiedChatWorkspace } from './components/UnifiedChatWorkspace';
 import { MultiChannelStudio } from './components/MultiChannelStudio';
+import { EcommerceCrmHub } from './components/EcommerceCrmHub';
+import { CustomAiTrainer } from './components/CustomAiTrainer';
 import { AiBrainVisualizer } from './components/AiBrainVisualizer';
 import { AiAnalyzerModal } from './components/AiAnalyzerModal';
 import { ApiVaultModal } from './components/ApiVaultModal';
@@ -279,6 +281,16 @@ const DEFAULT_CONFIG: BotConfig = {
     onFailover: true,
     onSecurityAlert: true,
   },
+
+  // Facebook Messenger API Configuration
+  messengerPageAccessToken: '',
+  messengerAppSecret: '',
+  messengerVerifyToken: 'automotion_verify_token',
+  messengerGraphApiVersion: 'v19.0',
+  messengerGetStartedEnabled: true,
+  messengerGetStartedPayload: 'GET_STARTED',
+  messengerGreetingText: '👋 Welcome to our store! How can we help you today?',
+  messengerPersistentMenu: '[{"type":"postback","title":"🛍 Browse Products","payload":"MENU_PRODUCTS"},{"type":"postback","title":"📦 Track Order","payload":"MENU_ORDER"},{"type":"web_url","title":"🌐 Visit Website","url":"https://example.com"}]',
 };
 
 const CONFIG_STORAGE_KEY = 'universal_bot_config_v2';
@@ -810,6 +822,34 @@ function AppContent() {
             onShowToast={showToast}
             initialTab="model"
           />
+          </AppErrorBoundary>
+        )}
+
+        {/* View: E-commerce Business Client CRM Hub */}
+        {activeTab === 'ecommerce-crm' && (
+          <AppErrorBoundary fallback={<div className="p-6 rounded-2xl border border-amber-500/30 bg-slate-900 text-sm text-amber-300">E-commerce CRM Hub is temporarily unavailable.</div>}>
+            <EcommerceCrmHub onShowToast={showToast} />
+          </AppErrorBoundary>
+        )}
+
+        {/* View: Custom AI Knowledge Base & Store Trainer */}
+        {activeTab === 'ai-trainer' && (
+          <AppErrorBoundary fallback={<div className="p-6 rounded-2xl border border-amber-500/30 bg-slate-900 text-sm text-amber-300">Custom AI Store Trainer is temporarily unavailable.</div>}>
+            <CustomAiTrainer onShowToast={showToast} />
+          </AppErrorBoundary>
+        )}
+
+        {/* View: Complete Facebook Messenger Configuration Portal */}
+        {activeTab === 'messenger-config' && (
+          <AppErrorBoundary fallback={<div className="p-6 rounded-2xl border border-amber-500/30 bg-slate-900 text-sm text-amber-300">Messenger Configuration is temporarily unavailable.</div>}>
+            <ConfigPanel
+              config={config}
+              onChange={handleConfigChange}
+              onResetToDefaults={handleResetToDefaults}
+              onOpenPortal={handleOpenPortal}
+              onShowToast={showToast}
+              initialTab="messaging"
+            />
           </AppErrorBoundary>
         )}
 

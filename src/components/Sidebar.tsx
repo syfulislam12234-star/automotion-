@@ -31,6 +31,9 @@ import {
   Zap,
   Terminal,
   LayoutDashboard,
+  ShoppingCart,
+  GraduationCap,
+  MessageCircle,
 } from 'lucide-react';
 
 export type AppView =
@@ -59,7 +62,10 @@ export type AppView =
   | 'ch-signal'
   | 'ch-viber'
   | 'ch-teams'
-  | 'ch-webhook';
+  | 'ch-webhook'
+  | 'ecommerce-crm'
+  | 'ai-trainer'
+  | 'messenger-config';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -293,6 +299,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 active={activeView === 'admin'}
                 collapsed={isCollapsed}
                 onClick={() => select('admin')}
+              />
+            </div>
+          </div>
+
+          {/* SECTION 5: BUSINESS & E-COMMERCE SUITE — pinned strictly at the very bottom */}
+          <div>
+            {!isCollapsed && (
+              <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                <span>Business & E-Commerce</span>
+                <span className="text-[9px] font-mono text-emerald-400">CRM</span>
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <SidebarItem
+                icon={<ShoppingCart className="w-4 h-4 text-emerald-400" />}
+                label="🛒 E-commerce CRM Hub"
+                badge="Live"
+                active={activeView === 'ecommerce-crm'}
+                collapsed={isCollapsed}
+                onClick={() => select('ecommerce-crm')}
+              />
+              <SidebarItem
+                icon={<GraduationCap className="w-4 h-4 text-fuchsia-400" />}
+                label="🧠 Custom AI Store Trainer"
+                active={activeView === 'ai-trainer'}
+                collapsed={isCollapsed}
+                onClick={() => select('ai-trainer')}
+              />
+              <SidebarItem
+                icon={<MessageCircle className="w-4 h-4 text-blue-400" />}
+                label="💬 FB Messenger Config"
+                active={activeView === 'messenger-config'}
+                collapsed={isCollapsed}
+                onClick={() => select('messenger-config')}
               />
             </div>
           </div>

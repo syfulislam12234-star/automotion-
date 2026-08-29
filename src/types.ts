@@ -289,6 +289,89 @@ export interface BotConfig {
     onFailover: boolean;
     onSecurityAlert: boolean;
   };
+
+  // Facebook Messenger API Configuration
+  messengerPageAccessToken: string;
+  messengerAppSecret: string;
+  messengerVerifyToken: string;
+  messengerGraphApiVersion: string;
+  messengerGetStartedEnabled: boolean;
+  messengerGetStartedPayload: string;
+  messengerGreetingText: string;
+  messengerPersistentMenu: string;
+}
+
+// ==========================================
+// E-commerce Business Client CRM
+// ==========================================
+export type CrmPlatform = 'messenger' | 'whatsapp' | 'telegram';
+export type CrmOrderStatus = 'pending' | 'confirmed' | 'shipped' | 'delivered';
+export type CrmAgentMode = 'ai' | 'human';
+
+export interface CrmOrder {
+  id: string;
+  productName: string;
+  quantity: number;
+  amount: number;
+  currency: string;
+  status: CrmOrderStatus;
+  createdAt: string;
+}
+
+export interface CrmCustomer {
+  id: string;
+  platform: CrmPlatform;
+  platformUserId: string;
+  name: string;
+  avatarUrl?: string;
+  orderStatus: CrmOrderStatus;
+  agentMode: CrmAgentMode;
+  purchaseHistory: CrmOrder[];
+  createdAt: string;
+  lastActiveAt: string;
+}
+
+export interface CrmMessage {
+  id: string;
+  customerId: string;
+  customerName: string;
+  platform: CrmPlatform;
+  direction: 'inbound' | 'outbound';
+  text: string;
+  createdAt: string;
+}
+
+// ==========================================
+// Custom AI Knowledge Base & Store Trainer
+// ==========================================
+export interface KnowledgeProduct {
+  id: string;
+  name: string;
+  price: string;
+  specs: string;
+  stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock';
+}
+
+export interface StorePolicyInfo {
+  deliveryCharges: string;
+  shippingTime: string;
+  returnPolicy: string;
+  refundPolicy: string;
+}
+
+export interface KnowledgeFaq {
+  id: string;
+  question: string;
+  answer: string;
+}
+
+export interface StoreKnowledge {
+  workspaceId: string;
+  personaPrompt: string;
+  products: KnowledgeProduct[];
+  policies: StorePolicyInfo;
+  faqs: KnowledgeFaq[];
+  updatedAt: string;
 }
 
 export interface AiModelCatalogItem {

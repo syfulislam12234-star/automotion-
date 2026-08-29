@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { UserAccount, AuthSession, BotConfig } from '../src/types';
+import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge } from '../src/types';
 
 interface StoredDb {
   users: UserAccount[];
@@ -9,6 +9,9 @@ interface StoredDb {
   sessions: Record<string, AuthSession>;
   botConfigs: Record<string, { config: BotConfig; updatedAt: string }>;
   pendingRegistrations: Record<string, { name: string; email: string; passwordHash: string; code: string; expiresAt: number }>;
+  crmCustomers: Record<string, CrmCustomer>;
+  crmMessages: CrmMessage[];
+  storeKnowledge: Record<string, StoreKnowledge>;
 }
 
 const DB_FILE = path.join(process.cwd(), 'data_store.json');
@@ -20,13 +23,17 @@ export class ServerDatabase {
     sessions: {},
     botConfigs: {},
     pendingRegistrations: {},
+    crmCustomers: {},
+    crmMessages: [],
+    storeKnowledge: {},
   };
 
   public static init() {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        ServerDatabase.db = JSON.parse(raw);
+        // Merge over defaults so older data files missing newer collections load safely.
+        ServerDatabase.db = { ...ServerDatabase.db, ...(JSON.parse(raw) as StoredDb) };
       } else {
         ServerDatabase.save();
       }
@@ -339,6 +346,132 @@ export class ServerDatabase {
       .map(([targetId, entry]) => ({ targetId, config: entry.config, updatedAt: entry?.updatedAt || '' }));
   }
 
+  // ==========================================
+  // E-commerce CRM & Store Knowledge storage
+  // ==========================================
+  public static getCrmCustomers(): CrmCustomer[] {
+    return Object.values(ServerDatabase.db.crmCustomers || {}).sort(
+      (a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime(),
+    );
+  }
+
+  public static getCrmCustomer(customerId: string): CrmCustomer | null {
+    return ServerDatabase.db.crmCustomers?.[customerId] || null;
+  }
+
+  public static upsertCrmCustomer(platform: CrmCustomer['platform'], platformUserId: string, name?: string, avatarUrl?: string): CrmCustomer {
+    if (!ServerDatabase.db.crmCustomers) ServerDatabase.db.crmCustomers = {};
+    const existing = Object.values(ServerDatabase.db.crmCustomers).find(
+      (customer) => customer.platform === platform && customer.platformUserId === platformUserId,
+    );
+    const now = new Date().toISOString();
+    if (existing) {
+      existing.lastActiveAt = now;
+      if (name && !existing.name.startsWith('Messenger User')) existing.name = name;
+      if (avatarUrl) existing.avatarUrl = avatarUrl;
+      ServerDatabase.save();
+      return existing;
+    }
+    const fallbackPrefix = platform === 'messenger' ? 'Messenger' : platform === 'whatsapp' ? 'WhatsApp' : 'Telegram';
+    const customer: CrmCustomer = {
+      id: 'crm_' + crypto.randomBytes(8).toString('hex'),
+      platform,
+      platformUserId,
+      name: name || `${fallbackPrefix} User ${String(platformUserId).slice(-4)}`,
+      orderStatus: 'pending',
+      agentMode: 'ai',
+      purchaseHistory: [],
+      createdAt: now,
+      lastActiveAt: now,
+    };
+    ServerDatabase.db.crmCustomers[customer.id] = customer;
+    ServerDatabase.save();
+    return customer;
+  }
+
+  public static setCrmOrderStatus(customerId: string, status: CrmOrderStatus): CrmCustomer | null {
+    const customer = ServerDatabase.getCrmCustomer(customerId);
+    if (!customer) return null;
+    customer.orderStatus = status;
+    ServerDatabase.save();
+    return customer;
+  }
+
+  public static setCrmAgentMode(customerId: string, mode: CrmAgentMode): CrmCustomer | null {
+    const customer = ServerDatabase.getCrmCustomer(customerId);
+    if (!customer) return null;
+    customer.agentMode = mode;
+    ServerDatabase.save();
+    return customer;
+  }
+
+  public static addCrmOrder(customerId: string, order: { productName: string; quantity?: number; amount?: number; currency?: string; status?: CrmOrderStatus }): CrmOrder | null {
+    const customer = ServerDatabase.getCrmCustomer(customerId);
+    if (!customer) return null;
+    const created: CrmOrder = {
+      id: 'ord_' + crypto.randomBytes(6).toString('hex'),
+      productName: String(order.productName || 'Custom order').slice(0, 200),
+      quantity: Math.max(1, Number(order.quantity) || 1),
+      amount: Math.max(0, Number(order.amount) || 0),
+      currency: String(order.currency || 'BDT').slice(0, 8),
+      status: order.status || 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    customer.purchaseHistory.unshift(created);
+    customer.purchaseHistory = customer.purchaseHistory.slice(0, 100);
+    ServerDatabase.save();
+    return created;
+  }
+
+  public static addCrmMessage(message: Omit<CrmMessage, 'id' | 'createdAt'>): CrmMessage {
+    if (!Array.isArray(ServerDatabase.db.crmMessages)) ServerDatabase.db.crmMessages = [];
+    const created: CrmMessage = {
+      ...message,
+      id: 'msg_' + crypto.randomBytes(6).toString('hex'),
+      createdAt: new Date().toISOString(),
+    };
+    ServerDatabase.db.crmMessages.unshift(created);
+    ServerDatabase.db.crmMessages = ServerDatabase.db.crmMessages.slice(0, 500);
+    ServerDatabase.save();
+    return created;
+  }
+
+  public static getCrmMessages(customerId?: string, limit = 150): CrmMessage[] {
+    const all = ServerDatabase.db.crmMessages || [];
+    const filtered = customerId ? all.filter((message) => message.customerId === customerId) : all;
+    return filtered.slice(0, Math.max(1, limit));
+  }
+
+  public static getStoreKnowledge(workspaceId = 'default'): StoreKnowledge {
+    const stored = ServerDatabase.db.storeKnowledge?.[workspaceId];
+    return {
+      workspaceId,
+      personaPrompt: String(stored?.personaPrompt || ''),
+      products: Array.isArray(stored?.products) ? stored.products : [],
+      policies: {
+        deliveryCharges: String(stored?.policies?.deliveryCharges || ''),
+        shippingTime: String(stored?.policies?.shippingTime || ''),
+        returnPolicy: String(stored?.policies?.returnPolicy || ''),
+        refundPolicy: String(stored?.policies?.refundPolicy || ''),
+      },
+      faqs: Array.isArray(stored?.faqs) ? stored.faqs : [],
+      updatedAt: String(stored?.updatedAt || ''),
+    };
+  }
+
+  public static saveStoreKnowledge(update: Partial<StoreKnowledge>, workspaceId = 'default'): StoreKnowledge {
+    if (!ServerDatabase.db.storeKnowledge) ServerDatabase.db.storeKnowledge = {};
+    const merged: StoreKnowledge = {
+      ...ServerDatabase.getStoreKnowledge(workspaceId),
+      ...update,
+      workspaceId,
+      updatedAt: new Date().toISOString(),
+    };
+    ServerDatabase.db.storeKnowledge[workspaceId] = merged;
+    ServerDatabase.save();
+    return merged;
+  }
+
   public static saveBotConfig(targetId: string, config: BotConfig): boolean {
     if (!targetId || !config) return false;
     ServerDatabase.db.botConfigs[targetId] = {
@@ -368,7 +501,8 @@ export class ServerDatabase {
     if (!backupData || !backupData.data) {
       return { success: false, message: 'Invalid backup file format.' };
     }
-    ServerDatabase.db = backupData.data;
+    // Merge over defaults so restored backups missing newer collections stay schema-safe.
+    ServerDatabase.db = { ...ServerDatabase.db, ...(backupData.data as StoredDb) };
     ServerDatabase.save();
     return { success: true, message: 'Database backup imported successfully.' };
   }
