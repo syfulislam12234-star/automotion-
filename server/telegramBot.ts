@@ -22,6 +22,8 @@ export class TelegramBotService {
   private static pollingActive = false;
   private static environmentToken = '';
   private static uploadStates = new Map<string, TelegramUploadState>();
+  /** Per-owner registry: ownerId → bot config holding that user's exact Telegram token. */
+  private static userBotRegistry = new Map<string, BotConfig>();
 
   private static ensureYouTubeLink(reply: string, userQuery: string): string {
     const videoIntentKeywords = ['video', 'tutorial', 'youtube', 'ভিডিও', 'টিউটোরিয়াল', 'লিংক', 'link'];
@@ -35,6 +37,106 @@ export class TelegramBotService {
 
   public static setEnvironmentToken(token: string | undefined) {
     TelegramBotService.environmentToken = String(token || '').trim();
+  }
+
+  /** Registers a per-user bot configuration so webhook updates resolve back to its owner's exact token. */
+  public static registerUserBot(ownerId: string, config: BotConfig): void {
+    const id = String(ownerId || '').trim();
+    if (!id || !config || typeof config !== 'object') return;
+    const token = String(config.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+    if (!token) {
+      TelegramBotService.userBotRegistry.delete(id);
+      return;
+    }
+    TelegramBotService.userBotRegistry.set(id, config);
+    console.log(`🤖 [TelegramBotService] Per-user bot registered for ${id} (token …${token.slice(-6)}).`);
+  }
+
+  public static getUserBotToken(ownerId: string): string {
+    const config = TelegramBotService.userBotRegistry.get(String(ownerId || '').trim());
+    return String(config?.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+  }
+
+  public static getRegisteredBotCount(): number {
+    return TelegramBotService.userBotRegistry.size;
+  }
+
+  /**
+   * Calls Telegram's real setWebhook API so updates for this exact bot token are
+   * delivered to the given callback URL. Gracefully reports HTTP 401 / invalid tokens.
+   */
+  public static async registerTelegramWebhook(botToken: string, webhookUrl: string): Promise<{ ok: boolean; description?: string }> {
+    const token = String(botToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+    if (!token) return { ok: false, description: 'Bot token is missing.' };
+    if (!/^https:\/\//i.test(webhookUrl)) {
+      console.warn(`[TelegramBotService] setWebhook skipped — Telegram requires an HTTPS public URL (got: ${webhookUrl}).`);
+      return { ok: false, description: 'Telegram requires an HTTPS public URL for webhooks (set PUBLIC_BASE_URL).' };
+    }
+    const secretToken = String(process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN || process.env.WEBHOOK_SECRET || '').trim();
+    const params = new URLSearchParams({
+      url: webhookUrl,
+      allowed_updates: JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query']),
+      drop_pending_updates: 'true',
+      ...(secretToken ? { secret_token: secretToken } : {}),
+    });
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook?${params.toString()}`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await response.json().catch(() => ({}) as any);
+      if (response.status === 401 || data?.error_code === 401) {
+        console.error('❌ [TelegramBotService] setWebhook → HTTP 401 Unauthorized: the bot token is invalid or revoked. Regenerate it via @BotFather and save it again.');
+        return { ok: false, description: 'Unauthorized (401): bot token is invalid or revoked.' };
+      }
+      if (!response.ok || data?.ok === false) {
+        const description = String(data?.description || `Telegram setWebhook failed (HTTP ${response.status}).`);
+        console.warn(`[TelegramBotService] setWebhook failed for token …${token.slice(-6)}: ${description}`);
+        return { ok: false, description };
+      }
+      console.log(`✅ [TelegramBotService] setWebhook OK for token …${token.slice(-6)} → ${webhookUrl}`);
+      return { ok: true };
+    } catch (error: any) {
+      const description = error?.message || String(error);
+      console.warn(`[TelegramBotService] setWebhook request error for token …${token.slice(-6)}:`, description);
+      return { ok: false, description };
+    }
+  }
+
+  /** Registers (or refreshes) the webhook for one stored per-user bot. */
+  public static async registerUserWebhook(ownerId: string, baseUrl: string): Promise<{ ok: boolean; description?: string; webhookUrl: string }> {
+    const id = String(ownerId || '').trim();
+    const webhookUrl = `${String(baseUrl || '').trim().replace(/\/+$/, '')}/api/webhooks/telegram/${encodeURIComponent(id)}`;
+    const token = TelegramBotService.getUserBotToken(id);
+    if (!token) {
+      return { ok: false, description: 'No Telegram bot token is saved for this user yet.', webhookUrl };
+    }
+    const result = await TelegramBotService.registerTelegramWebhook(token, webhookUrl);
+    return { ...result, webhookUrl };
+  }
+
+  /** Re-registers webhooks for every stored per-user bot (startup / post-save refresh). */
+  public static async registerAllUserWebhooks(baseUrl: string): Promise<void> {
+    for (const ownerId of [...TelegramBotService.userBotRegistry.keys()]) {
+      try {
+        await TelegramBotService.registerUserWebhook(ownerId, baseUrl);
+      } catch (error: any) {
+        console.warn(`[TelegramBotService] Webhook registration failed for ${ownerId}:`, error?.message || error);
+      }
+    }
+  }
+
+  /**
+   * Public, token-explicit reply dispatcher: the response is always sent back through
+   * the exact Telegram Bot instance (per-user or global) that received the update.
+   */
+  public static async sendTelegramMessage(chatId: string | number, responseText: string, botToken?: string): Promise<void> {
+    const token = String(botToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+    if (!token) {
+      console.warn('[TelegramBotService] sendTelegramMessage skipped: no bot token resolved for this chat.');
+      return;
+    }
+    await TelegramBotService.sendMessage(token, chatId, responseText);
   }
 
   public static async init() {
@@ -76,7 +178,7 @@ export class TelegramBotService {
     };
   }
 
-  public static async handleUpdate(update: any, secretHeader?: string) {
+  public static async handleUpdate(update: any, secretHeader?: string, ownerId?: string) {
     try {
       const message = update?.message || update?.edited_message || update?.channel_post;
       const chatId = message?.chat?.id;
@@ -84,7 +186,14 @@ export class TelegramBotService {
       if (!chatId) return { ok: true, ignored: true };
 
       TelegramBotService.processedUpdates++;
-      const token = TelegramBotService.getBotToken();
+
+      // Per-user token resolution: per-owner webhook routes embed the owner id, so the
+      // update is dispatched with the exact bot token that received it (loaded from the
+      // ServerDatabase botConfigs registry). Falls back to the global config/env token.
+      const ownerConfig = ownerId ? TelegramBotService.userBotRegistry.get(String(ownerId)) || null : null;
+      const ownerToken = String(ownerConfig?.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+      const token = ownerToken || TelegramBotService.getBotToken();
+      const effectiveConfig = ownerConfig || TelegramBotService.currentConfig;
       if (!token) {
         TelegramBotService.lastError = 'Telegram bot token is not configured.';
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
@@ -93,7 +202,7 @@ export class TelegramBotService {
       const normalizedText = text.toLowerCase();
       const command = normalizedText.split(/\s+/)[0].split('@')[0];
       const restrictedCommands = new Set(['/admin', '/stats', '/restart', '/broadcast', '/clear_memory', '/whitelist', '/database', '/settings', '/config', '/keys', '/env', '/status_admin', '/telemetry', '/users', '/setkey', '/setenv']);
-      const adminChatId = String(TelegramBotService.currentConfig?.telegramAdminChatId || TelegramBotService.currentConfig?.adminTelegramId || '').trim();
+      const adminChatId = String(effectiveConfig?.telegramAdminChatId || effectiveConfig?.adminTelegramId || '').trim();
       if (restrictedCommands.has(command) && String(chatId) !== adminChatId) {
         await TelegramBotService.sendMessage(token, chatId, 'Access Denied: You do not have authorization for administrative operations.');
         return { ok: true, denied: true };
@@ -178,7 +287,7 @@ export class TelegramBotService {
         }
         try {
           await TelegramBotService.sendMessage(token, chatId, '🔥 Viral AI SEO (title, description, hashtags, tags) তৈরি করে YouTube-এ আপলোড করা হচ্ছে...');
-          const result = await TelegramBotService.uploadTelegramVideo(token, uploadState, normalized === 'kids', chatId);
+          const result = await TelegramBotService.uploadTelegramVideo(token, uploadState, normalized === 'kids', chatId, effectiveConfig);
           TelegramBotService.uploadStates.delete(chatKey);
           await TelegramBotService.sendMessage(token, chatId, `🔥 ভাইরাল AI SEO সহ আপলোড সম্পন্ন: ${result.url}`);
         } catch (error: any) {
@@ -199,7 +308,7 @@ export class TelegramBotService {
       let reply: string | null = null;
       try {
         reply = await Promise.race([
-          TelegramBotService.aiGenerator(text, TelegramBotService.currentConfig?.modelName),
+          TelegramBotService.aiGenerator(text, effectiveConfig?.modelName),
           new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Shared Telegram AI route timed out.')), 20000)),
         ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
@@ -209,7 +318,7 @@ export class TelegramBotService {
       if (!reply?.trim() && TelegramBotService.aiGenerator) {
         // ⚡ Millisecond failover: rapid sequential retries across the entire active provider pool
         const direct = await FailoverEngine.generate([{ role: 'user', content: text }], {
-          preferredModel: TelegramBotService.currentConfig?.modelName || undefined,
+          preferredModel: effectiveConfig?.modelName || undefined,
         }).catch(() => null);
         if (direct?.text?.trim()) reply = direct.text.trim();
       }
@@ -218,7 +327,9 @@ export class TelegramBotService {
           ? '⚡ All active AI routes are momentarily busy. Please resend your message in a few seconds — the failover engine will route it to the next available provider.'
           : 'Please add at least one API key in the API Portal to enable AI features.';
       }
-      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text));
+      // Explicit per-bot dispatch: the reply is always sent via the exact bot token
+      // instance that received this update (per-user token or global fallback).
+      await TelegramBotService.sendTelegramMessage(chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text), token);
       TelegramBotService.lastError = null;
       console.log('🤖 [TelegramBotService] Replied to update:', update?.update_id);
       return { ok: true };
@@ -234,6 +345,14 @@ export class TelegramBotService {
     TelegramBotService.pollingActive = false;
     if (TelegramBotService.pollingTimer) clearTimeout(TelegramBotService.pollingTimer);
     TelegramBotService.pollingTimer = null;
+    // Register the webhook with Telegram's real setWebhook API for the globally
+    // configured token (no-op fallback keeps the previous behavior when unavailable).
+    const globalToken = TelegramBotService.getBotToken();
+    if (globalToken && /^https:\/\//i.test(url)) {
+      const result = await TelegramBotService.registerTelegramWebhook(globalToken, url);
+      if (!result.ok) console.warn('[TelegramBotService] Global webhook registration notice:', result.description);
+      return result.ok;
+    }
     console.log(`🤖 [TelegramBotService] Webhook registered: ${url}`);
     return true;
   }
@@ -274,19 +393,22 @@ export class TelegramBotService {
         signal: AbortSignal.timeout(10000),
       });
       const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        console.error(`❌ [TelegramBotService] sendMessage → HTTP 401 Unauthorized: bot token …${token.slice(-6)} is invalid or revoked. Regenerate it via @BotFather and save it in the Config Panel.`);
+      }
       if (!response.ok || data.ok === false) throw new Error(data.description || `Telegram sendMessage failed (HTTP ${response.status}).`);
     }
   }
 
-  private static async uploadTelegramVideo(token: string, state: TelegramUploadState, madeForKids: boolean, chatId: string | number) {
-    if (!state.fileId || !state.topic || !state.privacyStatus || !TelegramBotService.currentConfig) throw new Error('ভিডিও, topic এবং তিনটি upload setting প্রয়োজন।');
+  private static async uploadTelegramVideo(token: string, state: TelegramUploadState, madeForKids: boolean, chatId: string | number, ownerConfig?: BotConfig | null) {
+    if (!state.fileId || !state.topic || !state.privacyStatus || !(ownerConfig || TelegramBotService.currentConfig)) throw new Error('ভিডিও, topic এবং তিনটি upload setting প্রয়োজন।');
     const fileResponse = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(state.fileId)}`, { signal: AbortSignal.timeout(10000) });
     const filePayload = await fileResponse.json().catch(() => ({}));
     if (!fileResponse.ok || !filePayload.ok || !filePayload.result?.file_path) throw new Error('Telegram video file পাওয়া যায়নি।');
     const downloadResponse = await fetch(`https://api.telegram.org/file/bot${token}/${filePayload.result.file_path}`, { signal: AbortSignal.timeout(120000) });
     if (!downloadResponse.ok) throw new Error('Telegram video download ব্যর্থ হয়েছে।');
     const video = new Uint8Array(await downloadResponse.arrayBuffer());
-    const config = TelegramBotService.currentConfig;
+    const config = ownerConfig || TelegramBotService.currentConfig;
     return uploadYouTubeVideo({
       video,
       mimeType: 'video/mp4',

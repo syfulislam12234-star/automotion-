@@ -787,10 +787,39 @@ async function startServer() {
     return sanitized;
   };
 
+  const resolvePublicBaseUrl = (): string =>
+    (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || process.env.APP_URL || '')
+      .trim()
+      .replace(/\/+$/, '');
+
+  const autoRegisterOwnerWebhook = (ownerId: string, config: any): void => {
+    try {
+      if (!ownerId || !config || typeof config !== 'object') return;
+      const ownerToken = String(config.telegramBotToken || '').trim();
+      if (!ownerToken || config.enableTelegram === false) return;
+      const publicBaseUrl = resolvePublicBaseUrl();
+      if (!publicBaseUrl) return; // No public URL — long-polling still handles updates.
+      void TelegramBotService.registerUserWebhook(ownerId, publicBaseUrl)
+        .then((result: { ok: boolean; description?: string }) => {
+          if (!result.ok) console.warn(`[Telegram Webhook] Auto-registration for ${ownerId}:`, result.description);
+        })
+        .catch((error: any) => console.warn('[Telegram Webhook] Auto-registration error:', error?.message || error));
+    } catch (error: any) {
+      console.warn('[Telegram Webhook] Auto-registration skipped:', error?.message || error);
+    }
+  };
+
   const refreshRuntimeConfig = async (targetId: string, config: any, previousConfig?: any): Promise<void> => {
     try {
       await TelegramBotService.reloadFromConfig(config);
       await multiChannelGateway.syncFromBotConfig(targetId, config);
+      // Per-user Telegram bots: keep the exact token registered for webhook→owner
+      // resolution, and auto-call Telegram's setWebhook whenever the token is new/changed.
+      TelegramBotService.registerUserBot(String(targetId || ''), config);
+      const ownerToken = String(config?.telegramBotToken || '').trim();
+      if (ownerToken && ownerToken !== String(previousConfig?.telegramBotToken || '').trim()) {
+        autoRegisterOwnerWebhook(String(targetId || ''), config);
+      }
     } catch (error) {
       try {
         if (previousConfig) {
@@ -889,6 +918,22 @@ async function startServer() {
     console.error('❌ [TelegramBot] Startup initialization exception:', tgInitErr);
   }
 
+  // Restore every persisted per-user Telegram bot from the database and re-register
+  // its webhook so token→owner routing survives server restarts.
+  try {
+    for (const entry of ServerDatabase.getAllBotConfigs()) {
+      if (entry?.config) TelegramBotService.registerUserBot(entry.targetId, entry.config);
+    }
+    const startupBaseUrl = resolvePublicBaseUrl();
+    if (startupBaseUrl && process.env.RUN_MODE !== 'polling') {
+      void TelegramBotService.registerAllUserWebhooks(startupBaseUrl).catch((error: any) => {
+        console.warn('[TelegramBot] Startup per-user webhook registration failed:', error?.message || error);
+      });
+    }
+  } catch (tgUserSyncErr: any) {
+    console.warn('[TelegramBot] Per-user bot restore skipped:', tgUserSyncErr?.message || tgUserSyncErr);
+  }
+
   // Initialize 3-Hour Background Cron Worker (Bangladesh News, Earthquakes, YouTube Broadcast)
   try {
     CronWorkerService.init();
@@ -976,6 +1021,68 @@ async function startServer() {
   app.post('/api/webhook', webhookHandler);
   app.post('/api/telegram/webhook', webhookHandler);
   app.post('/api/telegram-admin/webhook', webhookHandler);
+
+  // ==========================================
+  // PER-USER TELEGRAM WEBHOOK INGRESS
+  // Each saved user bot token gets its own callback URL:
+  //   https://<SERVER_URL>/api/webhooks/telegram/<USER_OR_BOT_ID>
+  // Incoming updates are resolved back to that user's exact botToken + config
+  // (from the ServerDatabase botConfigs registry) before a reply is dispatched.
+  // ==========================================
+  const ownerWebhookHandler = async (req: express.Request, res: express.Response) => {
+    try {
+      const secretHeader = (req.headers['x-telegram-bot-api-secret-token'] as string) || '';
+      const expectedSecret = String(process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN || process.env.WEBHOOK_SECRET || '').trim();
+      if (expectedSecret && secretHeader !== expectedSecret) {
+        return res.status(403).json({ ok: false, error: 'Webhook authorization failed.' });
+      }
+      const update = req.body;
+      const ownerId = String(req.params.ownerId || '').trim();
+      if (!update || !ownerId) {
+        return res.status(200).json({ ok: true, reason: 'Empty body or owner id.' });
+      }
+      // Process asynchronously so Telegram receives 200 OK immediately.
+      res.status(200).json({ ok: true });
+      TelegramBotService.handleUpdate(update, secretHeader, ownerId).catch((err) => {
+        console.error('❌ [Owner Webhook] Async update processing error:', err);
+      });
+      return;
+    } catch (error: any) {
+      console.warn('[Owner Webhook] Ingress error:', error?.message || error);
+      return res.status(200).json({ ok: true });
+    }
+  };
+  app.post('/api/webhooks/telegram/:ownerId', ownerWebhookHandler);
+
+  // Manual (re-)registration trigger — Config Panel "Webhook" button / automation.
+  app.post('/api/telegram/register-webhook', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const authenticatedUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+      const ownerId = String(authenticatedUser?.id || req.body?.userId || '').trim();
+      if (!ownerId) {
+        return res.status(401).json({ success: false, message: 'Sign in to register your Telegram bot webhook.' });
+      }
+      const saved = ServerDatabase.getBotConfig(ownerId);
+      if (saved?.config) TelegramBotService.registerUserBot(ownerId, saved.config);
+      const requestHost = String(req.headers.host || '').trim();
+      const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+      const requestProto = forwardedProto || String(req.protocol || 'https');
+      const baseUrl = resolvePublicBaseUrl() || (requestHost ? `${requestProto}://${requestHost}` : '');
+      if (!baseUrl) {
+        return res.status(400).json({ success: false, message: 'No public server URL available — set PUBLIC_BASE_URL.' });
+      }
+      const result = await TelegramBotService.registerUserWebhook(ownerId, baseUrl);
+      return res.json({
+        success: result.ok,
+        webhookUrl: result.webhookUrl,
+        description: result.description || (result.ok ? 'Webhook registered with Telegram.' : 'Webhook registration failed.'),
+        registeredBots: TelegramBotService.getRegisteredBotCount(),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error?.message || 'Webhook registration failed.' });
+    }
+  });
 
   // ==========================================
   // FACEBOOK MESSENGER WEBHOOK (HMAC SHA-256 verified)
@@ -1195,7 +1302,9 @@ async function startServer() {
         const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
         const token = typeof req.body?.token === 'string' ? req.body.token.trim() : typeof req.body?.key === 'string' ? req.body.key.trim() : '';
         if (!provider || !token) return res.status(200).json({ success: true, message: 'Configuration persisted' });
-        if (!AI_PROVIDER_GATEWAYS_100.some((entry) => entry.id === provider)) return res.status(200).json({ success: true, message: 'Configuration persisted' });
+        // 'telegram' is a messaging credential (not an AI gateway) but MUST persist here:
+        // saving it triggers refreshRuntimeConfig → per-user setWebhook auto-registration.
+        if (!AI_PROVIDER_GATEWAYS_100.some((entry) => entry.id === provider) && provider !== 'telegram') return res.status(200).json({ success: true, message: 'Configuration persisted' });
 
         // Register instantly into the global active key pool so every backend service
         // (Telegram bot, multi-channel gateway, cron workers) can use it right away.
@@ -1992,6 +2101,7 @@ async function startServer() {
         const legacyKeyByProvider: Record<string, string> = {
           groq: 'groqApiKey', google: 'geminiApiKey', gemini: 'geminiApiKey', cerebras: 'cerebrasApiKey',
           openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', sambanova: 'sambanovaApiKey', github: 'githubToken',
+          telegram: 'telegramBotToken',
         };
         const config = sanitizeDashboardConfig({
           ...existingConfig,

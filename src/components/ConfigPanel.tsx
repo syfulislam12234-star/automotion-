@@ -92,6 +92,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   const [testResults, setTestResults] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid' | 'idle'; latency?: number }>>({});
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
+  const [isRegisteringWebhook, setIsRegisteringWebhook] = useState(false);
   const [draftKeys, setDraftKeys] = useState<Partial<Record<keyof BotConfig, string>>>(() => {
     const savedKeys = (() => {
       try {
@@ -337,6 +338,35 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
       }));
       onShowToast(`🟢 ${serviceId} connected successfully! (${latency}ms)`);
     }, 600);
+  };
+
+  // Calls Telegram's setWebhook API for the signed-in user's saved bot token so the
+  // bot instantly receives updates on this server (no manual curl / BotFather steps).
+  const handleRegisterWebhook = async () => {
+    if (isRegisteringWebhook) return;
+    const session = AuthService.getCurrentSession();
+    if (!session?.token) {
+      onShowToast('⚠️ Please login first to register your bot webhook.');
+      return;
+    }
+    setIsRegisteringWebhook(true);
+    try {
+      const response = await fetch('/api/telegram/register-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.success) {
+        onShowToast('🔗 Webhook registered! Telegram will now deliver your bot updates to this server.');
+      } else {
+        onShowToast(`⚠️ Webhook registration: ${data?.description || data?.message || 'failed — save a valid bot token first.'}`);
+      }
+    } catch (error: any) {
+      onShowToast(`⚠️ Webhook registration error: ${error?.message || 'network request failed.'}`);
+    } finally {
+      setIsRegisteringWebhook(false);
+    }
   };
 
   return (
@@ -1047,6 +1077,15 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
               >
                 Submit
+              </button>
+              <button
+                type="button"
+                onClick={handleRegisterWebhook}
+                disabled={isRegisteringWebhook}
+                className={`px-2.5 py-1.5 rounded-lg text-white text-xs font-semibold cursor-pointer ${isRegisteringWebhook ? 'bg-sky-800' : 'bg-sky-600 hover:bg-sky-500'}`}
+                title="Call Telegram setWebhook so this bot receives updates on this server"
+              >
+                {isRegisteringWebhook ? 'Linking…' : 'Webhook'}
               </button>
             </div>
           </div>
