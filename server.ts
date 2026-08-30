@@ -1056,7 +1056,7 @@ async function startServer() {
         }
       }
       if (!TelegramBotService.getUserBotToken(ownerId)) {
-        console.error(`❌ [Owner Webhook] No Telegram bot token exists for owner "${ownerId}" — update dropped. Isolation guard: the global env token is never used for per-user webhooks.`);
+        console.warn(`⚠️ [Telegram Dispatch] Owner ${ownerId} token missing — update dropped. STRICT RULE: process.env.TELEGRAM_BOT_TOKEN and the global server token are never used for /api/webhooks/telegram/:ownerId routes.`);
         return res.status(200).json({ ok: true, reason: 'No bot token registered for this owner.' });
       }
       // Process asynchronously so Telegram receives 200 OK immediately.

@@ -3,6 +3,7 @@ import { uploadYouTubeVideo } from './youtubeService';
 import { GlobalApiKeyStore } from './keyStore';
 import { FailoverEngine } from './aiFailoverEngine';
 import { StoreKnowledgeEngine } from './aiKnowledgeEngine';
+import { ServerDatabase } from './db';
 
 interface TelegramUploadState {
   step: 'file' | 'privacy' | 'kids';
@@ -189,15 +190,30 @@ export class TelegramBotService {
       TelegramBotService.processedUpdates++;
 
       // Per-user token resolution: per-owner webhook routes embed the owner id, so the
-      // update is dispatched with the exact bot token that received it (loaded from the
-      // ServerDatabase botConfigs registry). STRICT ISOLATION: an owner route never
-      // falls back to the global config/env token — if the owner's token cannot be
-      // resolved, the update is dropped with an explicit error log.
-      const ownerConfig = ownerId ? TelegramBotService.userBotRegistry.get(String(ownerId)) || null : null;
-      const ownerToken = String(ownerConfig?.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+      // update is dispatched with the exact bot token that received it. Resolution order:
+      // (1) in-memory userBotRegistry, (2) direct ServerDatabase.getBotConfig(ownerId)
+      // fallback lookup (which also re-hydrates the registry on demand). STRICT
+      // ISOLATION: an owner route NEVER falls back to the global config/env token — if
+      // the owner's token cannot be resolved, dispatch is skipped with an explicit warning.
+      let ownerConfig = ownerId ? TelegramBotService.userBotRegistry.get(String(ownerId)) || null : null;
+      let ownerToken = String(ownerConfig?.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+      if (ownerId && !ownerToken) {
+        try {
+          const dbEntry = ServerDatabase.getBotConfig(String(ownerId));
+          const dbConfig = dbEntry?.config || null;
+          if (dbConfig?.telegramBotToken) {
+            TelegramBotService.registerUserBot(String(ownerId), dbConfig);
+            ownerConfig = dbConfig;
+            ownerToken = String(dbConfig.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+            console.log(`🔗 [Telegram Dispatch] Owner "${ownerId}" token hydrated from the persistent database on-demand.`);
+          }
+        } catch (dbError: any) {
+          console.warn(`[Telegram Dispatch] Database fallback lookup failed for owner "${ownerId}":`, dbError?.message || dbError);
+        }
+      }
       if (ownerId && !ownerToken) {
         TelegramBotService.lastError = `No Telegram bot token registered for owner "${ownerId}".`;
-        console.error(`❌ [TelegramBotService] Isolation guard: owner "${ownerId}" has no resolvable bot token — update dropped without touching the global env token. Other active users are unaffected.`);
+        console.warn(`⚠️ [Telegram Dispatch] Owner ${ownerId} token missing — update skipped without touching the global env token. Other active users are unaffected.`);
         return { ok: true, skipped: true, reason: 'owner-token-missing' };
       }
       const token = ownerToken || TelegramBotService.getBotToken();
@@ -411,10 +427,19 @@ export class TelegramBotService {
         signal: AbortSignal.timeout(10000),
       });
       const data = await response.json().catch(() => ({}));
-      if (response.status === 401) {
-        console.error(`❌ [TelegramBotService] sendMessage → HTTP 401 Unauthorized: bot token …${token.slice(-6)} is invalid or revoked. Regenerate it via @BotFather and save it in the Config Panel.`);
+      if (!response.ok || data.ok === false) {
+        // Detailed Telegram API error diagnostics — HTTP 400/401/403 ("chat not found",
+        // "invalid token", "bot blocked by user", ...) are logged with the token prefix
+        // so the exact failing bot instance is identifiable without leaking the secret.
+        const description = String(data?.description || `HTTP ${response.status}`);
+        if (response.status === 400 || response.status === 401 || response.status === 403) {
+          console.error(`❌ [Telegram API Error] Failed to reply for bot token ${token.slice(0, 10)}...: ${description}`);
+        }
+        if (response.status === 401) {
+          console.error(`❌ [TelegramBotService] sendMessage → HTTP 401 Unauthorized: bot token …${token.slice(-6)} is invalid or revoked. Regenerate it via @BotFather and save it in the Config Panel.`);
+        }
+        throw new Error(description);
       }
-      if (!response.ok || data.ok === false) throw new Error(data.description || `Telegram sendMessage failed (HTTP ${response.status}).`);
     }
   }
 
