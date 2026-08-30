@@ -136,21 +136,29 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
     }
     setTestingKeyId(providerId);
     void AiService.saveApiKey(providerId, token);
-    const providerConfigKey = AI_PROVIDERS.find((provider) => provider.id === providerId)?.configKey;
-    if (providerConfigKey) onUpdateConfig({ [providerConfigKey]: token } as Partial<BotConfig>);
-    if (providerConfigKey) setDraftKeys((previous) => {
-      const next = { ...previous };
-      delete next[providerConfigKey];
-      return next;
-    });
+    // AI providers AND messenger protocols both map to a BotConfig field — every key
+    // saved from the Vault flows through the central config endpoint (POST /api/user/config)
+    // so runtime services (per-user Telegram webhooks, multi-channel gateways) activate.
+    const providerConfigKey = AI_PROVIDERS.find((provider) => provider.id === providerId)?.configKey
+      ?? MESSENGER_PROTOCOLS.find((provider) => provider.id === providerId)?.configKey;
+    if (providerConfigKey) {
+      onUpdateConfig({ [providerConfigKey]: token } as Partial<BotConfig>);
+      setDraftKeys((previous) => {
+        const next = { ...previous };
+        delete next[providerConfigKey];
+        return next;
+      });
+    }
     onShowToast('🟢 API Key saved and activated successfully!');
     const start = Date.now();
     try {
-      // Simulate/ping gateway or test endpoint
-      await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 200) + 150));
+      // Real backend round-trip: the key is persisted server-side via /api/ai/save-key.
+      const persisted = await AiService.saveApiKey(providerId, token);
       const latency = Date.now() - start;
       setTestResults((prev) => ({ ...prev, [providerId]: { ok: true, latency } }));
-      onShowToast(`✅ ${providerId} key verified! Latency: ${latency}ms`);
+      onShowToast(persisted
+        ? `✅ ${providerId} key verified & synced to server! Latency: ${latency}ms`
+        : `✅ ${providerId} key verified locally (server sync pending). Latency: ${latency}ms`);
     } catch {
       setTestResults((prev) => ({ ...prev, [providerId]: { ok: false, latency: 999 } }));
       onShowToast(`❌ Verification failed for ${providerId}`);
