@@ -25,6 +25,8 @@ export interface FailoverAttemptOptions {
   deadlinePerAttemptMs?: number;
   maxKeysPerProvider?: number;
   maxModelsPerRoute?: number;
+  /** Per-owner knowledge isolation: inject ONLY this workspace's trained store context. */
+  knowledgeWorkspaceId?: string;
 }
 
 export interface FailoverResult {
@@ -165,7 +167,9 @@ export class FailoverEngine {
 
     // 🧠 Dynamic store-knowledge injection (trained in the Custom AI Store Trainer) so every
     // failover reply quotes real product details, prices, stock and store policies.
-    const knowledgeBlock = StoreKnowledgeEngine.buildSystemPromptBlock();
+    // Per-owner isolation: when knowledgeWorkspaceId is provided, ONLY that workspace's
+    // trained context is injected — never another user's, never the global default.
+    const knowledgeBlock = StoreKnowledgeEngine.buildSystemPromptBlock(options.knowledgeWorkspaceId || 'default');
     if (knowledgeBlock && !messages.some((message) => message.role === 'system' && message.content.includes(KNOWLEDGE_SYSTEM_MARKER))) {
       messages.unshift({ role: 'system', content: knowledgeBlock });
     }

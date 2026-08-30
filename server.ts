@@ -743,7 +743,7 @@ async function startServer() {
   });
 
   TelegramBotService.setEnvironmentToken(process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
-  TelegramBotService.setAiGenerator(async (prompt, model) => {
+  TelegramBotService.setAiGenerator(async (prompt, model, systemPromptSuffix) => {
     try {
       const preferredModel = model && /groq|cerebras|llama|instant/i.test(model)
         ? model
@@ -754,7 +754,7 @@ async function startServer() {
         body: JSON.stringify({
           prompt,
           model: preferredModel,
-          systemPrompt: `${MANDATORY_LANGUAGE_PROMPT} Respond naturally in the user's input language, including Bengali or Banglish. Return only the answer to the user's message.`,
+          systemPrompt: `${MANDATORY_LANGUAGE_PROMPT} Respond naturally in the user's input language, including Bengali or Banglish. Return only the answer to the user's message.${systemPromptSuffix ? `\n\n${systemPromptSuffix}` : ''}`,
           enableEnsemble: false,
           platform: 'telegram',
         }),
@@ -924,6 +924,7 @@ async function startServer() {
     for (const entry of ServerDatabase.getAllBotConfigs()) {
       if (entry?.config) TelegramBotService.registerUserBot(entry.targetId, entry.config);
     }
+    console.log(`🤖 [TelegramBot] Restored ${TelegramBotService.getRegisteredBotCount()} per-user bot(s) from the persistent database — restarts and Railway redeploys never lose a registered bot.`);
     const startupBaseUrl = resolvePublicBaseUrl();
     if (startupBaseUrl && process.env.RUN_MODE !== 'polling') {
       void TelegramBotService.registerAllUserWebhooks(startupBaseUrl).catch((error: any) => {
@@ -1040,6 +1041,20 @@ async function startServer() {
       const ownerId = String(req.params.ownerId || '').trim();
       if (!update || !ownerId) {
         return res.status(200).json({ ok: true, reason: 'Empty body or owner id.' });
+      }
+      // On-demand DB fallback: registry miss → immediate direct ServerDatabase lookup by
+      // ownerId, so a fresh restart / cold cache never loses a user's registered bot.
+      if (!TelegramBotService.getUserBotToken(ownerId)) {
+        try {
+          const saved = ServerDatabase.getBotConfig(ownerId)?.config;
+          if (saved) TelegramBotService.registerUserBot(ownerId, saved);
+        } catch (lookupError: any) {
+          console.warn(`[Owner Webhook] DB fallback lookup failed for ${ownerId}:`, lookupError?.message || lookupError);
+        }
+      }
+      if (!TelegramBotService.getUserBotToken(ownerId)) {
+        console.error(`❌ [Owner Webhook] No Telegram bot token exists for owner "${ownerId}" — update dropped. Isolation guard: the global env token is never used for per-user webhooks.`);
+        return res.status(200).json({ ok: true, reason: 'No bot token registered for this owner.' });
       }
       // Process asynchronously so Telegram receives 200 OK immediately.
       res.status(200).json({ ok: true });

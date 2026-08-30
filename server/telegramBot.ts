@@ -2,6 +2,7 @@ import { BotConfig } from '../src/types';
 import { uploadYouTubeVideo } from './youtubeService';
 import { GlobalApiKeyStore } from './keyStore';
 import { FailoverEngine } from './aiFailoverEngine';
+import { StoreKnowledgeEngine } from './aiKnowledgeEngine';
 
 interface TelegramUploadState {
   step: 'file' | 'privacy' | 'kids';
@@ -16,7 +17,7 @@ export class TelegramBotService {
   private static webhookUrl = '';
   private static processedUpdates = 0;
   private static lastError: string | null = null;
-  private static aiGenerator: ((prompt: string, model?: string) => Promise<string | null>) | null = null;
+  private static aiGenerator: ((prompt: string, model?: string, systemPromptSuffix?: string) => Promise<string | null>) | null = null;
   private static pollingTimer: ReturnType<typeof setTimeout> | null = null;
   private static pollingOffset = 0;
   private static pollingActive = false;
@@ -31,7 +32,7 @@ export class TelegramBotService {
     return `${reply}\n\n📺 **সরাসরি ইউটিউব টিউটোরিয়াল দেখতে পারেন:**\nhttps://www.youtube.com/results?search_query=${encodeURIComponent(userQuery)}`;
   }
 
-  public static setAiGenerator(generator: (prompt: string, model?: string) => Promise<string | null>) {
+  public static setAiGenerator(generator: (prompt: string, model?: string, systemPromptSuffix?: string) => Promise<string | null>) {
     TelegramBotService.aiGenerator = generator;
   }
 
@@ -189,9 +190,16 @@ export class TelegramBotService {
 
       // Per-user token resolution: per-owner webhook routes embed the owner id, so the
       // update is dispatched with the exact bot token that received it (loaded from the
-      // ServerDatabase botConfigs registry). Falls back to the global config/env token.
+      // ServerDatabase botConfigs registry). STRICT ISOLATION: an owner route never
+      // falls back to the global config/env token — if the owner's token cannot be
+      // resolved, the update is dropped with an explicit error log.
       const ownerConfig = ownerId ? TelegramBotService.userBotRegistry.get(String(ownerId)) || null : null;
       const ownerToken = String(ownerConfig?.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+      if (ownerId && !ownerToken) {
+        TelegramBotService.lastError = `No Telegram bot token registered for owner "${ownerId}".`;
+        console.error(`❌ [TelegramBotService] Isolation guard: owner "${ownerId}" has no resolvable bot token — update dropped without touching the global env token. Other active users are unaffected.`);
+        return { ok: true, skipped: true, reason: 'owner-token-missing' };
+      }
       const token = ownerToken || TelegramBotService.getBotToken();
       const effectiveConfig = ownerConfig || TelegramBotService.currentConfig;
       if (!token) {
@@ -305,10 +313,15 @@ export class TelegramBotService {
         return { ok: true, skipped: true };
       }
 
+      // 🧠 Per-owner knowledge isolation: this user's bot replies quote ONLY the AI Store
+      // Trainer context trained by THIS owner (workspaceId = ownerId) — never another
+      // user's catalog, policies or FAQ. Untrained owners simply get no knowledge block.
+      const ownerKnowledgeBlock = ownerId ? StoreKnowledgeEngine.buildSystemPromptBlock(String(ownerId)) : null;
+
       let reply: string | null = null;
       try {
         reply = await Promise.race([
-          TelegramBotService.aiGenerator(text, effectiveConfig?.modelName),
+          TelegramBotService.aiGenerator(text, effectiveConfig?.modelName, ownerKnowledgeBlock || undefined),
           new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Shared Telegram AI route timed out.')), 20000)),
         ]);
         if (!reply?.trim()) throw new Error('Primary AI route returned no text.');
@@ -319,6 +332,7 @@ export class TelegramBotService {
         // ⚡ Millisecond failover: rapid sequential retries across the entire active provider pool
         const direct = await FailoverEngine.generate([{ role: 'user', content: text }], {
           preferredModel: effectiveConfig?.modelName || undefined,
+          ...(ownerId ? { knowledgeWorkspaceId: String(ownerId) } : {}),
         }).catch(() => null);
         if (direct?.text?.trim()) reply = direct.text.trim();
       }
@@ -335,7 +349,11 @@ export class TelegramBotService {
       return { ok: true };
     } catch (error: any) {
       TelegramBotService.lastError = error?.message || String(error);
-      console.error('❌ [TelegramBotService] Update handling failed:', error?.message || error);
+      if (ownerId) {
+        console.error(`❌ [TelegramBotService] Owner "${ownerId}" bot failed (token invalid, revoked, or Telegram API error): ${TelegramBotService.lastError}. Other active users are unaffected.`);
+      } else {
+        console.error('❌ [TelegramBotService] Update handling failed:', error?.message || error);
+      }
       return { ok: false, error: TelegramBotService.lastError };
     }
   }
