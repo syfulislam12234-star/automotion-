@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BotConfig } from '../types';
 import { AiService } from '../services/aiService';
+import { AuthService } from '../services/authService';
 import {
   Lock,
   Unlock,
@@ -148,6 +149,27 @@ export const ApiVaultModal: React.FC<ApiVaultModalProps> = ({
         delete next[providerConfigKey];
         return next;
       });
+    }
+    if (providerConfigKey === 'telegramBotToken') {
+      // Auto-register the per-user Telegram webhook the moment a bot token is saved
+      // (session Bearer header attached when signed in; guests fall back to the
+      // default workspace server-side instead of receiving 401).
+      void (async () => {
+        try {
+          const session = AuthService.getCurrentSession();
+          const response = await fetch('/api/telegram/register-webhook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}) },
+            body: JSON.stringify({ botToken: token }),
+          });
+          const data = await response.json().catch(() => ({}));
+          onShowToast(data?.success
+            ? '✅ Telegram Bot Token saved & Webhook successfully registered!'
+            : `⚠️ Telegram webhook: ${data?.description || data?.message || 'registration failed — verify the token.'}`);
+        } catch (error: any) {
+          onShowToast(`⚠️ Telegram webhook registration error: ${error?.message || 'network request failed.'}`);
+        }
+      })();
     }
     onShowToast('🟢 API Key saved and activated successfully!');
     const start = Date.now();

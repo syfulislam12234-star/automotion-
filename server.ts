@@ -21,6 +21,7 @@ import { registerCrmRoutes } from './server/crmRoutes';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
+import { BotConfig } from './src/types';
 
 dotenv.config();
 
@@ -31,6 +32,8 @@ const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM;
 const GMAIL_USER = String(process.env.GMAIL_USER || '').trim();
 const GMAIL_APP_PASSWORD = String(process.env.GMAIL_APP_PASSWORD || '').trim();
 const EMAIL_DELIVERY_TIMEOUT_MS = 8000;
+/** Guest/local workspace fallback — unauthenticated config saves and webhook registrations land here. */
+const DEFAULT_WORKSPACE_ID = 'global_default_user';
 const gmailTransporter = GMAIL_USER && GMAIL_APP_PASSWORD
   ? nodemailer.createTransport({
       service: 'gmail',
@@ -1070,16 +1073,21 @@ async function startServer() {
   app.post('/api/webhooks/telegram/:ownerId', ownerWebhookHandler);
 
   // Manual (re-)registration trigger — Config Panel "Webhook" button / automation.
+  // Guest-friendly: when no auth session exists (local workspace mode) the request
+  // falls back to the default workspace instead of returning 401 Unauthorized.
   app.post('/api/telegram/register-webhook', async (req, res) => {
     try {
       const authHeader = req.headers.authorization;
       const authenticatedUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
-      const ownerId = String(authenticatedUser?.id || req.body?.userId || '').trim();
-      if (!ownerId) {
-        return res.status(401).json({ success: false, message: 'Sign in to register your Telegram bot webhook.' });
-      }
-      const saved = ServerDatabase.getBotConfig(ownerId);
-      if (saved?.config) TelegramBotService.registerUserBot(ownerId, saved.config);
+      const ownerId = String(authenticatedUser?.id || req.body?.userId || '').trim() || DEFAULT_WORKSPACE_ID;
+      const bodyToken = String(req.body?.botToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+      const savedConfig = ServerDatabase.getBotConfig(ownerId)?.config;
+      // A freshly submitted token (not yet persisted) is merged in so the exact
+      // token is registered with Telegram immediately upon save.
+      const effectiveConfig: BotConfig | undefined = bodyToken
+        ? { ...(savedConfig ?? ({} as BotConfig)), telegramBotToken: bodyToken }
+        : savedConfig;
+      if (effectiveConfig) TelegramBotService.registerUserBot(ownerId, effectiveConfig);
       const requestHost = String(req.headers.host || '').trim();
       const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
       const requestProto = forwardedProto || String(req.protocol || 'https');
@@ -1090,6 +1098,7 @@ async function startServer() {
       const result = await TelegramBotService.registerUserWebhook(ownerId, baseUrl);
       return res.json({
         success: result.ok,
+        ownerId,
         webhookUrl: result.webhookUrl,
         description: result.description || (result.ok ? 'Webhook registered with Telegram.' : 'Webhook registration failed.'),
         registeredBots: TelegramBotService.getRegisteredBotCount(),
@@ -2219,7 +2228,7 @@ async function startServer() {
         const user = ServerDatabase.getSessionUser(authHeader);
         if (user) targetId = user.id;
       }
-      if (!targetId) targetId = 'global_default_user';
+      if (!targetId) targetId = DEFAULT_WORKSPACE_ID;
 
       const previousConfig = ServerDatabase.getBotConfig(targetId)?.config;
       ServerDatabase.saveBotConfig(targetId, config);

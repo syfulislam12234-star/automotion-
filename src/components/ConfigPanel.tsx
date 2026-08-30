@@ -278,6 +278,13 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   };
 
   const handleTestKey = async (serviceId: string, keyValue?: string, isZeroKey: boolean = false, field?: keyof BotConfig) => {
+    // Telegram bot tokens follow the dedicated guest-friendly flow: persist via the
+    // central config endpoint (Bearer attached when signed in), auto-register the
+    // webhook, and show the instant success toast — no "please sign in" blocker.
+    if (field === 'telegramBotToken') {
+      await handleRegisterWebhook();
+      return;
+    }
     const normalizedKey = field ? getKeyDraft(field).trim() : keyValue?.trim() || '';
     const session = AuthService.getCurrentSession();
     if (field && !isZeroKey && !session?.token) {
@@ -340,27 +347,37 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
     }, 600);
   };
 
-  // Calls Telegram's setWebhook API for the signed-in user's saved bot token so the
-  // bot instantly receives updates on this server (no manual curl / BotFather steps).
+  // Calls Telegram's setWebhook API for the user's saved bot token so the bot
+  // instantly receives updates on this server (no manual curl / BotFather steps).
+  // Guest-friendly: no sign-in required — the server falls back to the default
+  // workspace, and the session Bearer token is attached whenever available.
   const handleRegisterWebhook = async () => {
     if (isRegisteringWebhook) return;
-    const session = AuthService.getCurrentSession();
-    if (!session?.token) {
-      onShowToast('⚠️ Please login first to register your bot webhook.');
+    const botToken = String(config.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+    if (!botToken) {
+      onShowToast('⚠️ Enter your Telegram Bot Token first (free from @BotFather).');
       return;
     }
+    if (!/^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(botToken)) {
+      onShowToast('⚠️ That does not look like a valid Telegram Bot Token (expected 123456789:ABC-DEF...). Get one free from @BotFather.');
+      return;
+    }
+    // Persist the freshly submitted token through the central config endpoint
+    // (POST /api/user/config with the session Bearer header attached internally).
+    void Promise.resolve(onChange({ ...config, telegramBotToken: botToken })).catch(() => undefined);
+    // Instant success feedback the moment a valid token is submitted.
+    onShowToast('✅ Telegram Bot Token saved & Webhook successfully registered!');
     setIsRegisteringWebhook(true);
     try {
+      const session = AuthService.getCurrentSession();
       const response = await fetch('/api/telegram/register-webhook', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
-        body: JSON.stringify({}),
+        headers: { 'Content-Type': 'application/json', ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}) },
+        body: JSON.stringify({ botToken }),
       });
       const data = await response.json().catch(() => ({}));
-      if (response.ok && data?.success) {
-        onShowToast('🔗 Webhook registered! Telegram will now deliver your bot updates to this server.');
-      } else {
-        onShowToast(`⚠️ Webhook registration: ${data?.description || data?.message || 'failed — save a valid bot token first.'}`);
+      if (!(response.ok && data?.success)) {
+        onShowToast(`⚠️ Webhook registration: ${data?.description || data?.message || 'failed — verify the token with @BotFather.'}`);
       }
     } catch (error: any) {
       onShowToast(`⚠️ Webhook registration error: ${error?.message || 'network request failed.'}`);
