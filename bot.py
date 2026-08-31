@@ -17,6 +17,8 @@ import re
 import json
 import logging
 import asyncio
+import hashlib
+from urllib.parse import unquote
 from typing import Dict, List, Any, Optional
 
 import aiohttp
@@ -41,6 +43,9 @@ RUN_MODE: str = os.getenv("RUN_MODE", "polling").strip().lower()
 PORT: int = int(os.getenv("PORT", "3000"))
 WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "")).strip()
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+# Optional override: root URL of a (self-hosted) Telegram Bot API server.
+# Empty string means the official https://api.telegram.org endpoint.
+TELEGRAM_API_BASE_URL: str = os.getenv("TELEGRAM_API_BASE_URL", "").strip().rstrip("/")
 
 # AI Provider Credentials
 GROQ_API_KEYS: List[str] = [
@@ -84,6 +89,10 @@ class ChatMemory:
 chat_memories: Dict[int, ChatMemory] = {}
 telegram_sessions: Dict[str, "Application"] = {}
 telegram_session_lock = asyncio.Lock()
+# Per-user tokens that run in dynamic webhook mode (instead of polling mode)
+webhook_sessions: set = set()
+# Derived, URL-safe webhook session id -> bot token routing table
+webhook_routes: Dict[str, str] = {}
 MAX_MEMORY_TURNS: int = 16
 MAX_CHAR_BUDGET: int = 12000
 start_time: float = 0.0
@@ -865,6 +874,17 @@ def _is_valid_bot_token(token: str) -> bool:
     return bool(token and not token.startswith("YOUR_") and ":" in token and len(token) >= 15)
 
 
+def _session_webhook_id(token: str) -> str:
+    """Deterministic, URL-safe webhook session id derived from a bot token."""
+    return hashlib.sha256(("automotion-webhook:" + token).encode("utf-8")).hexdigest()[:24]
+
+
+def _session_webhook_secret(token: str) -> str:
+    """Deterministic per-session webhook secret (Telegram echoes it back verbatim)."""
+    material = f"{WEBHOOK_SECRET}|automotion|{token}" if WEBHOOK_SECRET else f"automotion|{token}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 async def start_telegram_session(token: str) -> Application:
     """Initialize and start an isolated polling session for one bot token."""
     normalized_token = token.strip()
@@ -897,6 +917,54 @@ async def start_telegram_session(token: str) -> Application:
         return app
 
 
+async def start_telegram_webhook_session(token: str, base_url: str) -> Application:
+    """Initialize an isolated per-user bot session and register its dynamic HTTPS webhook."""
+    normalized_token = token.strip()
+    if not _is_valid_bot_token(normalized_token):
+        raise ValueError("A valid Telegram bot token is required.")
+    base = (base_url or PUBLIC_BASE_URL).rstrip("/")
+    if not base.startswith("https://"):
+        raise ValueError("An HTTPS PUBLIC_BASE_URL is required to register dynamic Telegram webhooks.")
+
+    async with telegram_session_lock:
+        existing = telegram_sessions.get(normalized_token)
+        if existing and normalized_token in webhook_sessions:
+            return existing
+
+        app = build_telegram_application(normalized_token)
+        webhook_id = _session_webhook_id(normalized_token)
+        webhook_url = f"{base}/webhook/{webhook_id}"
+        try:
+            if existing:
+                # Upgrade an existing polling session to webhook mode.
+                if existing.updater and existing.updater.running:
+                    await existing.updater.stop()
+                await existing.stop()
+                await existing.shutdown()
+                telegram_sessions.pop(normalized_token, None)
+            await app.initialize()
+            await app.bot.get_me()
+            await app.start()
+            await app.bot.set_webhook(
+                url=webhook_url,
+                secret_token=_session_webhook_secret(normalized_token),
+                allowed_updates=list(Update.ALL_TYPES),
+                drop_pending_updates=True,
+            )
+        except Exception:
+            if app.updater and app.updater.running:
+                await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+            raise
+
+        telegram_sessions[normalized_token] = app
+        webhook_sessions.add(normalized_token)
+        webhook_routes[webhook_id] = normalized_token
+        logger.info("Telegram webhook session registered for token ...%s -> %s", normalized_token[-6:], webhook_url)
+        return app
+
+
 async def stop_telegram_session(token: str) -> bool:
     """Stop and remove one token-scoped Telegram session."""
     normalized_token = token.strip()
@@ -904,11 +972,19 @@ async def stop_telegram_session(token: str) -> bool:
         app = telegram_sessions.pop(normalized_token, None)
         if not app:
             return False
+        was_webhook = normalized_token in webhook_sessions
+        webhook_sessions.discard(normalized_token)
+        webhook_routes.pop(_session_webhook_id(normalized_token), None)
         if app.updater and app.updater.running:
             await app.updater.stop()
+        if was_webhook:
+            try:
+                await app.bot.delete_webhook(drop_pending_updates=False)
+            except Exception as err:
+                logger.warning("Dynamic webhook deregistration failed for ...%s: %s", normalized_token[-6:], err)
         await app.stop()
         await app.shutdown()
-        logger.info("Telegram polling session stopped for token ending in ...%s", normalized_token[-6:])
+        logger.info("Telegram session stopped for token ending in ...%s (webhook=%s)", normalized_token[-6:], was_webhook)
         return True
 
 
@@ -928,6 +1004,7 @@ def create_web_application(tg_app: Optional[Application] = None) -> web.Applicat
                 "mode": RUN_MODE,
                 "activeChatBuffers": len(chat_memories),
                 "activeSessions": len(telegram_sessions),
+                "activeWebhookSessions": len(webhook_sessions),
             },
             "aiProviders": {
                 "groq": bool(GROQ_API_KEYS),
@@ -953,6 +1030,16 @@ def create_web_application(tg_app: Optional[Application] = None) -> web.Applicat
             return web.json_response({"ok": False, "error": "Missing Telegram bot token."}, status=400)
 
         try:
+            if RUN_MODE == "webhook" and PUBLIC_BASE_URL:
+                app = await start_telegram_webhook_session(token, PUBLIC_BASE_URL)
+                bot = await app.bot.get_me()
+                return web.json_response({
+                    "ok": True,
+                    "running": True,
+                    "mode": "webhook",
+                    "webhookUrl": f"{PUBLIC_BASE_URL}/webhook/{_session_webhook_id(token.strip())}",
+                    "bot": {"id": bot.id, "username": bot.username, "name": bot.first_name},
+                })
             app = await start_telegram_session(token)
             bot = await app.bot.get_me()
             return web.json_response({
@@ -1013,6 +1100,42 @@ def create_web_application(tg_app: Optional[Application] = None) -> web.Applicat
             logger.error(f"❌ Webhook update processing error: {err}")
             return web.json_response({"ok": False, "error": str(err)}, status=200)
 
+    async def dynamic_webhook_handler(request: web.Request) -> web.Response:
+        """Handle incoming Telegram webhook updates for a dynamic per-user bot session."""
+        webhook_id = unquote(request.match_info.get("token", "")).strip().strip("/")
+        token = webhook_routes.get(webhook_id)
+        if not token or not _is_valid_bot_token(token):
+            return web.json_response({"ok": False, "error": "Unknown webhook session."}, status=404)
+
+        app = telegram_sessions.get(token)
+        if not app:
+            return web.json_response({"ok": False, "error": "Telegram session is not active."}, status=404)
+
+        if request.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != _session_webhook_secret(token):
+            logger.warning("⛔ Dynamic webhook rejected: secret mismatch for token ...%s", token[-6:])
+            return web.json_response({"ok": False, "error": "Unauthorized secret token"}, status=403)
+
+        try:
+            body = await request.json()
+            if not body:
+                return web.json_response({"ok": True, "notice": "Empty payload"})
+
+            update = Update.de_json(data=body, bot=app.bot)
+            if update:
+                task = asyncio.create_task(app.process_update(update))
+                task.add_done_callback(
+                    lambda completed_task: logger.error(
+                        "❌ Dynamic webhook update processing error: %s",
+                        completed_task.exception(),
+                    )
+                    if not completed_task.cancelled() and completed_task.exception()
+                    else None
+                )
+            return web.json_response({"ok": True}, status=200)
+        except Exception as err:
+            logger.error(f"❌ Dynamic webhook update processing error: {err}")
+            return web.json_response({"ok": False, "error": str(err)}, status=200)
+
     # Register both standard and prefixed routes for compatibility
     web_app.router.add_get("/", health_handler)
     web_app.router.add_get("/health", health_handler)
@@ -1022,6 +1145,8 @@ def create_web_application(tg_app: Optional[Application] = None) -> web.Applicat
 
     web_app.router.add_post("/webhook", webhook_handler)
     web_app.router.add_post("/api/webhook", webhook_handler)
+    web_app.router.add_post("/webhook/{token}", dynamic_webhook_handler)
+    web_app.router.add_post("/api/webhook/{token}", dynamic_webhook_handler)
 
     return web_app
 
@@ -1036,7 +1161,10 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     if not _is_valid_bot_token(normalized_token):
         raise ValueError("Telegram bot token is missing or invalid.")
 
-    app = Application.builder().token(normalized_token).build()
+    builder = Application.builder().token(normalized_token)
+    if TELEGRAM_API_BASE_URL:
+        builder = builder.base_url(f"{TELEGRAM_API_BASE_URL}/bot")
+    app = builder.build()
 
     # Register Command Handlers
     app.add_handler(CommandHandler("start", start_command))

@@ -356,9 +356,9 @@ const PROTECTED_CREDENTIAL_FIELDS: Array<keyof BotConfig> = [
  */
 const mergeConfigsPreservingCredentials = (previous: BotConfig, incoming: Partial<BotConfig>): BotConfig => {
   const merged: BotConfig = { ...previous, ...incoming };
-  const incomingRecord = incoming as Record<string, unknown>;
-  const previousRecord = previous as Record<string, unknown>;
-  const mergedRecord = merged as Record<string, unknown>;
+  const incomingRecord = incoming as unknown as Record<string, unknown>;
+  const previousRecord = previous as unknown as Record<string, unknown>;
+  const mergedRecord = merged as unknown as Record<string, unknown>;
   for (const field of PROTECTED_CREDENTIAL_FIELDS) {
     const incomingValue = String(incomingRecord?.[field] ?? '').trim();
     const previousValue = String(previousRecord?.[field] ?? '').trim();
@@ -927,6 +927,7 @@ function AppContent() {
           <AdminControlPanel
             config={config}
             onChange={handleConfigChange}
+            onOpenPortal={handleOpenPortal}
             onShowToast={showToast}
             onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
           />

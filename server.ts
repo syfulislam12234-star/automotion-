@@ -36,11 +36,12 @@ const EMAIL_DELIVERY_TIMEOUT_MS = 8000;
 const DEFAULT_WORKSPACE_ID = 'global_default_user';
 const gmailTransporter = GMAIL_USER && GMAIL_APP_PASSWORD
   ? nodemailer.createTransport({
-      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       connectionTimeout: 8000,
       greetingTimeout: 5000,
       socketTimeout: 10000,
-      pool: false,
       auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
     })
   : null;
@@ -1272,8 +1273,9 @@ async function startServer() {
   });
 
   app.get('/api/ai/models', async (_req, res) => {
+    let models: Awaited<ReturnType<typeof getConfiguredModelCatalog>> = [];
     try {
-      const models = await getConfiguredModelCatalog();
+      models = await getConfiguredModelCatalog();
       return res.json({ success: true, count: models.length, models });
     } catch (error: any) {
       console.warn('[AI Catalog] Catalog request failed:', error?.message || error);
@@ -1355,7 +1357,7 @@ async function startServer() {
         GlobalApiKeyStore.register(provider, token, 'runtime');
 
         const targetId = user?.id || 'guest_api_key_user';
-        const existingConfig = ServerDatabase.getBotConfig(targetId)?.config || {};
+        const existingConfig: Partial<BotConfig> = ServerDatabase.getBotConfig(targetId)?.config || {};
         const legacyKeyByProvider: Record<string, string> = {
           groq: 'groqApiKey', google: 'geminiApiKey', gemini: 'geminiApiKey', cerebras: 'cerebrasApiKey',
           openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', sambanova: 'sambanovaApiKey',
@@ -2133,7 +2135,7 @@ async function startServer() {
       const isSingleKeyRequest = typeof req.body?.provider === 'string';
       try {
       const authHeader = req.headers.authorization;
-      const { config: rawConfig, userId } = req.body;
+      const { config, userId } = req.body;
       const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim().toLowerCase() : '';
       const token = typeof req.body?.token === 'string' ? req.body.token.trim() : typeof req.body?.key === 'string' ? req.body.key.trim() : '';
       const authenticatedUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
@@ -2141,7 +2143,7 @@ async function startServer() {
       let targetId = authenticatedUser?.id || userId;
       if (isSingleKeyRequest) {
         targetId = authenticatedUser?.id || 'guest_api_key_user';
-        const existingConfig = ServerDatabase.getBotConfig(targetId)?.config || {};
+        const existingConfig: Partial<BotConfig> = ServerDatabase.getBotConfig(targetId)?.config || {};
         const legacyKeyByProvider: Record<string, string> = {
           groq: 'groqApiKey', google: 'geminiApiKey', gemini: 'geminiApiKey', cerebras: 'cerebrasApiKey',
           openrouter: 'openrouterApiKey', mistral: 'mistralApiKey', sambanova: 'sambanovaApiKey', github: 'githubToken',
