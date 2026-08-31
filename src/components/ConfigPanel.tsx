@@ -241,7 +241,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         onShowToast('⚠️ Clipboard is empty');
         return;
       }
-      const usesDraft = ['groqApiKey', 'geminiApiKey', 'cerebrasApiKey', 'openrouterApiKey', 'sambanovaApiKey', 'mistralApiKey', 'githubToken'].includes(String(field));
+      const usesDraft = ['telegramBotToken', 'groqApiKey', 'geminiApiKey', 'cerebrasApiKey', 'openrouterApiKey', 'sambanovaApiKey', 'mistralApiKey', 'githubToken'].includes(String(field));
       if (usesDraft) updateKeyDraft(field, text);
       else updateField(field, text as any);
       onShowToast(`✅ Pasted key for ${serviceName}!`);
@@ -353,7 +353,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   // workspace, and the session Bearer token is attached whenever available.
   const handleRegisterWebhook = async () => {
     if (isRegisteringWebhook) return;
-    const botToken = String(config.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
+    const botToken = String(getKeyDraft('telegramBotToken') || config.telegramBotToken || '').trim().replace(/^['"]+|['"]+$/g, '');
     if (!botToken) {
       onShowToast('⚠️ Enter your Telegram Bot Token first (free from @BotFather).');
       return;
@@ -376,7 +376,18 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
         body: JSON.stringify({ botToken }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!(response.ok && data?.success)) {
+      if (response.ok && data?.success) {
+        // Commit succeeded — retire the in-progress draft so it can never shadow
+        // a future config update. The input keeps showing the token because the
+        // optimistic config update already carries it.
+        setDraftKeys((previous) => {
+          const next = { ...previous };
+          delete next.telegramBotToken;
+          return next;
+        });
+        AiService.saveKeyDraftForField('telegramBotToken', '');
+      } else {
+        // Failure: keep the token input value intact — never silently wipe it.
         onShowToast(`⚠️ Webhook registration: ${data?.description || data?.message || 'failed — verify the token with @BotFather.'}`);
       }
     } catch (error: any) {
@@ -1051,7 +1062,9 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   className="w-4 h-4 rounded text-indigo-500 cursor-pointer"
                 />
               </div>
-              {channelStatus('telegram') && (
+              {getKeyDraft('telegramBotToken') ? (
+                <span className="text-[10px] font-semibold text-emerald-400">● Connected & Webhook Active</span>
+              ) : channelStatus('telegram') && (
                 <span className={`text-[10px] font-semibold ${channelStatus('telegram')?.status === 'connected' ? 'text-emerald-400' : channelStatus('telegram')?.status === 'error' ? 'text-rose-400' : 'text-amber-300'}`}>
                   {channelStatus('telegram')?.status === 'error' ? channelStatus('telegram')?.error : channelStatus('telegram')?.status}
                 </span>
@@ -1071,8 +1084,13 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
               <input
                 type={revealedFields['telegram'] ? 'text' : 'password'}
                 placeholder="123456789:ABC... (Telegram Bot Token)"
-                value={config.telegramBotToken || ''}
-                onChange={(e) => updateField('telegramBotToken', e.target.value)}
+                value={getKeyDraft('telegramBotToken')}
+                onChange={(e) => {
+                  // Draft-backed: the token survives background re-renders, telemetry
+                  // pings, tab switches and config save round-trips without wiping.
+                  updateKeyDraft('telegramBotToken', e.target.value);
+                  updateField('telegramBotToken', e.target.value);
+                }}
                 className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono placeholder-slate-600"
               />
               <button

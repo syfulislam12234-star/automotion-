@@ -804,7 +804,11 @@ async function startServer() {
       if (!publicBaseUrl) return; // No public URL — long-polling still handles updates.
       void TelegramBotService.registerUserWebhook(ownerId, publicBaseUrl)
         .then((result: { ok: boolean; description?: string }) => {
-          if (!result.ok) console.warn(`[Telegram Webhook] Auto-registration for ${ownerId}:`, result.description);
+          if (result.ok) {
+            console.log(`✅ [Telegram Setup] Bot token saved & webhook active for user: ${ownerId}`);
+          } else {
+            console.warn(`[Telegram Webhook] Auto-registration for ${ownerId}:`, result.description);
+          }
         })
         .catch((error: any) => console.warn('[Telegram Webhook] Auto-registration error:', error?.message || error));
     } catch (error: any) {
@@ -1087,7 +1091,20 @@ async function startServer() {
       const effectiveConfig: BotConfig | undefined = bodyToken
         ? { ...(savedConfig ?? ({} as BotConfig)), telegramBotToken: bodyToken }
         : savedConfig;
-      if (effectiveConfig) TelegramBotService.registerUserBot(ownerId, effectiveConfig);
+      if (effectiveConfig) {
+        // Instant in-memory mapping — incoming messages route without a restart.
+        TelegramBotService.registerUserBot(ownerId, effectiveConfig);
+        if (bodyToken) {
+          // Durable persistence: the freshly submitted token survives restarts and
+          // redeploys even if the client's /api/user/config round-trip failed or
+          // was skipped. Registration must never depend on that round-trip.
+          try {
+            ServerDatabase.saveBotConfig(ownerId, sanitizeDashboardConfig(effectiveConfig));
+          } catch (persistError: any) {
+            console.warn('[Telegram Setup] Token registered live; durable persistence deferred:', persistError?.message || persistError);
+          }
+        }
+      }
       const requestHost = String(req.headers.host || '').trim();
       const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
       const requestProto = forwardedProto || String(req.protocol || 'https');
@@ -1096,6 +1113,9 @@ async function startServer() {
         return res.status(400).json({ success: false, message: 'No public server URL available — set PUBLIC_BASE_URL.' });
       }
       const result = await TelegramBotService.registerUserWebhook(ownerId, baseUrl);
+      if (result.ok) {
+        console.log(`✅ [Telegram Setup] Bot token saved & webhook active for user: ${ownerId}`);
+      }
       return res.json({
         success: result.ok,
         ownerId,
