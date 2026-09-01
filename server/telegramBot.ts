@@ -12,6 +12,11 @@ interface TelegramUploadState {
   privacyStatus?: 'public' | 'private' | 'unlisted';
 }
 
+/** Interactive menu context: which inline-keyboard flow a chat is currently in. */
+interface CallbackQueryContext {
+  flow: 'menu' | 'settings';
+}
+
 export class TelegramBotService {
   private static isRunning = false;
   private static currentConfig: BotConfig | null = null;
@@ -24,8 +29,11 @@ export class TelegramBotService {
   private static pollingActive = false;
   private static environmentToken = '';
   private static uploadStates = new Map<string, TelegramUploadState>();
+  private static callbackQueryStates = new Map<string, CallbackQueryContext>();
   /** Per-owner registry: ownerId → bot config holding that user's exact Telegram token. */
   private static userBotRegistry = new Map<string, BotConfig>();
+  /** Owner ids whose per-user webhook is currently registered with Telegram. */
+  private static userWebhooks = new Set<string>();
 
   private static ensureYouTubeLink(reply: string, userQuery: string): string {
     const videoIntentKeywords = ['video', 'tutorial', 'youtube', 'ভিডিও', 'টিউটোরিয়াল', 'লিংক', 'link'];
@@ -61,6 +69,11 @@ export class TelegramBotService {
 
   public static getRegisteredBotCount(): number {
     return TelegramBotService.userBotRegistry.size;
+  }
+
+  /** Whether a per-user webhook URL is currently registered for this owner. */
+  public static hasUserWebhook(ownerId: string): boolean {
+    return TelegramBotService.userWebhooks.has(String(ownerId || '').trim());
   }
 
   /**
@@ -114,6 +127,7 @@ export class TelegramBotService {
       return { ok: false, description: 'No Telegram bot token is saved for this user yet.', webhookUrl };
     }
     const result = await TelegramBotService.registerTelegramWebhook(token, webhookUrl);
+    if (result.ok) TelegramBotService.userWebhooks.add(id);
     return { ...result, webhookUrl };
   }
 
@@ -125,6 +139,154 @@ export class TelegramBotService {
       } catch (error: any) {
         console.warn(`[TelegramBotService] Webhook registration failed for ${ownerId}:`, error?.message || error);
       }
+    }
+  }
+
+  // ==========================================
+  // INTERACTIVE SLASH COMMANDS & INLINE MENUS
+  // ==========================================
+
+  /** Main interactive menu keyboard (YouTube Upload / AI SEO / Status / Settings). */
+  private static buildMainMenuKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '📤 YouTube Upload', callback_data: 'menu:upload' },
+          { text: '🔥 AI SEO', callback_data: 'menu:seo' },
+        ],
+        [
+          { text: '📊 Status', callback_data: 'menu:status' },
+          { text: '⚙️ Settings', callback_data: 'menu:settings' },
+        ],
+      ],
+    };
+  }
+
+  /** Settings menu keyboard (Auto-Upload ON/OFF toggle + back to main menu). */
+  private static buildSettingsKeyboard(config: BotConfig | null): Record<string, any> {
+    const autoUpload = config?.enableYtAutoUploadQueue !== false;
+    return {
+      inline_keyboard: [
+        [{ text: `🔄 Auto-Upload: ${autoUpload ? 'ON ✅' : 'OFF ❌'}`, callback_data: 'settings:toggle_autoupload' }],
+        [{ text: '⬅️ Back to Main Menu', callback_data: 'menu:home' }],
+      ],
+    };
+  }
+
+  private static buildWelcomeText(): string {
+    return [
+      '**🤖 AUTOMOTION AI — WELCOME**',
+      '',
+      'Your multi-platform AI automation studio. Pick an action below, or just send me any message to chat.',
+      '',
+      '📤 **YouTube Upload** — attach a video and it is published with viral AI SEO.',
+      '🔥 **AI SEO** — high-CTR titles, descriptions, hashtags & ranking tags, generated automatically.',
+      '📊 **Status** — live engine + YouTube connection report.',
+      '⚙️ **Settings** — Auto-Upload ON/OFF and preferences.',
+      '',
+      'Quick commands: /upload • /youtube • /status • /settings • /help',
+    ].join('\n');
+  }
+
+  /** Sends the welcome message together with the interactive inline main menu. */
+  private static async sendMainMenu(token: string, chatId: string | number): Promise<void> {
+    await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildWelcomeText(), TelegramBotService.buildMainMenuKeyboard());
+  }
+
+  /** Builds the user's connected YouTube OAuth token status report from their saved config. */
+  private static getYoutubeStatusReport(config: BotConfig | null): string {
+    const hasOAuth = Boolean(config?.youtubeClientId && config?.youtubeClientSecret && config?.youtubeRefreshToken);
+    const lines = [
+      '**📺 YouTube Connection Status**',
+      '',
+      `OAuth 2.0: **${hasOAuth ? '✅ Connected' : '❌ Not connected'}**`,
+    ];
+    if (hasOAuth) {
+      lines.push(`Client ID: **${TelegramBotService.escapeHtml(String(config!.youtubeClientId).slice(0, 24))}…**`);
+    }
+    lines.push(
+      `Channel ID: **${config?.youtubeChannelId ? TelegramBotService.escapeHtml(String(config.youtubeChannelId)) : 'default channel'}**`,
+      `Default privacy: **${TelegramBotService.escapeHtml(String(config?.youtubeDefaultPrivacy || 'public'))}**`,
+      `Auto SEO: **${config?.enableYtAutoSeo !== false ? 'ON ✅' : 'OFF ❌'}**`,
+      `Auto-Upload queue: **${config?.enableYtAutoUploadQueue !== false ? 'ON ✅' : 'OFF ❌'}**`,
+      '',
+      hasOAuth
+        ? 'Ready: send /upload to attach a video and publish with viral AI SEO.'
+        : 'To connect: Web App → Config Panel → YouTube OAuth (Client ID, Secret, Refresh Token), then save.',
+    );
+    return lines.join('\n');
+  }
+
+  /** Answers a Telegram callback query (stops the button spinner). */
+  private static async answerCallbackQuery(token: string, callbackQueryId: string, text?: string): Promise<void> {
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callbackQueryId, show_alert: false, ...(text ? { text } : {}) }),
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (error: any) {
+      console.warn('[TelegramBotService] answerCallbackQuery failed:', error?.message || error);
+    }
+  }
+
+  /** Routes inline-keyboard callback queries for the interactive menus. */
+  private static async handleCallbackQuery(
+    callbackQuery: any,
+    token: string,
+    chatId: string | number,
+    effectiveConfig: BotConfig | null,
+  ): Promise<void> {
+    const data = String(callbackQuery?.data || '').trim();
+    await TelegramBotService.answerCallbackQuery(token, String(callbackQuery?.id || ''));
+    switch (data) {
+      case 'menu:upload':
+        TelegramBotService.uploadStates.set(String(chatId), { step: 'file' });
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '📤 **Upload a Video**\n\nPlease attach your video file now (send it as a video or document). Put your topic in the message caption if you like.\n\nNext: privacy → kids settings → publish with viral AI SEO.',
+          TelegramBotService.buildMainMenuKeyboard(),
+        );
+        return;
+      case 'menu:seo':
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '🔥 **AI SEO**\n\nEvery upload automatically gets a high-CTR viral title, an engagement-focused description, hashtags and ranking search tags — generated by the multi-model AI cascade. Just start with /upload.',
+          TelegramBotService.buildMainMenuKeyboard(),
+        );
+        return;
+      case 'menu:status':
+        await TelegramBotService.sendMessage(token, chatId, TelegramBotService.getYoutubeStatusReport(effectiveConfig), TelegramBotService.buildMainMenuKeyboard());
+        return;
+      case 'menu:settings':
+        TelegramBotService.callbackQueryStates.set(String(chatId), { flow: 'settings' });
+        await TelegramBotService.sendMessage(token, chatId, '⚙️ **Settings**\n\nTap the toggle to change it:', TelegramBotService.buildSettingsKeyboard(effectiveConfig));
+        return;
+      case 'settings:toggle_autoupload': {
+        if (effectiveConfig && typeof effectiveConfig === 'object') {
+          effectiveConfig.enableYtAutoUploadQueue = !(effectiveConfig.enableYtAutoUploadQueue !== false);
+          TelegramBotService.callbackQueryStates.set(String(chatId), { flow: 'settings' });
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            `⚙️ Auto-Upload is now **${effectiveConfig.enableYtAutoUploadQueue ? 'ON ✅' : 'OFF ❌'}**\n\n(Runtime preference for this session — save the Config Panel to persist it.)`,
+            TelegramBotService.buildSettingsKeyboard(effectiveConfig),
+          );
+        } else {
+          await TelegramBotService.sendMessage(token, chatId, 'Settings are unavailable: no bot configuration found.');
+        }
+        return;
+      }
+      case 'menu:home':
+        TelegramBotService.callbackQueryStates.delete(String(chatId));
+        await TelegramBotService.sendMainMenu(token, chatId);
+        return;
+      default:
+        await TelegramBotService.sendMainMenu(token, chatId);
+        return;
     }
   }
 
@@ -182,7 +344,8 @@ export class TelegramBotService {
 
   public static async handleUpdate(update: any, secretHeader?: string, ownerId?: string) {
     try {
-      const message = update?.message || update?.edited_message || update?.channel_post;
+      const callbackQuery = update?.callback_query || null;
+      const message = update?.message || update?.edited_message || update?.channel_post || callbackQuery?.message || null;
       const chatId = message?.chat?.id;
       const text = typeof message?.text === 'string' ? message.text.trim() : '';
       if (!chatId) return { ok: true, ignored: true };
@@ -223,23 +386,47 @@ export class TelegramBotService {
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
         return { ok: true, skipped: true };
       }
-      const normalizedText = text.toLowerCase();
+      // Interactive inline-keyboard callback queries (main menu / settings buttons).
+      if (callbackQuery) {
+        await TelegramBotService.handleCallbackQuery(callbackQuery, token, chatId, effectiveConfig || null);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+
+      // Command extraction: prefer message.text, then fall back to Telegram command
+      // ENTITIES (bot_command) so "/cmd@BotName" style commands always route, even
+      // when the command arrives through caption_entities instead of plain text.
+      let commandSource = text;
+      if (!commandSource) {
+        const caption = typeof message?.caption === 'string' ? message.caption.trim() : '';
+        const entityList: any[] = Array.isArray(message?.entities) ? message.entities : Array.isArray(message?.caption_entities) ? message.caption_entities : [];
+        const commandEntity = entityList.find((entity) => entity?.type === 'bot_command' && Number(entity?.offset) === 0);
+        if (commandEntity && caption.startsWith('/')) {
+          commandSource = caption.slice(0, Number(commandEntity.length) || caption.length);
+        }
+      }
+      const normalizedText = commandSource.toLowerCase();
       const command = normalizedText.split(/\s+/)[0].split('@')[0];
-      const restrictedCommands = new Set(['/admin', '/stats', '/restart', '/broadcast', '/clear_memory', '/whitelist', '/database', '/settings', '/config', '/keys', '/env', '/status_admin', '/telemetry', '/users', '/setkey', '/setenv']);
+      const restrictedCommands = new Set(['/admin', '/stats', '/restart', '/broadcast', '/clear_memory', '/whitelist', '/database', '/config', '/keys', '/env', '/status_admin', '/telemetry', '/users', '/setkey', '/setenv']);
       const adminChatId = String(effectiveConfig?.telegramAdminChatId || effectiveConfig?.adminTelegramId || '').trim();
       if (restrictedCommands.has(command) && String(chatId) !== adminChatId) {
         await TelegramBotService.sendMessage(token, chatId, 'Access Denied: You do not have authorization for administrative operations.');
         return { ok: true, denied: true };
       }
+      // /start — welcome message with the interactive inline main menu.
+      if (command === '/start') {
+        await TelegramBotService.sendMainMenu(token, chatId);
+        return { ok: true };
+      }
       const asksForHelp = ['help', 'assistance', 'what can you do', 'setup', 'api setup', 'guide'].includes(normalizedText);
-      if (command === '/help' || command === '/start' || command === '/setup' || asksForHelp) {
+      if (command === '/help' || command === '/setup' || asksForHelp) {
         await TelegramBotService.sendMessage(token, chatId,
           '**🤖 AUTOMOTION AI — MASTER GUIDE**\n\n' +
           '**📜 COMMANDS**\n' +
           '/start — Activate the AI assistant\n' +
           '/help or /setup — Show this master guide\n' +
           '/status — Live AI engine, provider pool and key status\n' +
-          '/yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
+          '/upload or /yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
           'Send any text — Chat with the multi-model AI brain (instant failover)\n\n' +
           '**🔑 STEP 1 — ADD AI API KEYS (unlocks AI replies)**\n' +
           '1️⃣ Google Gemini (FREE): open https://aistudio.google.com/app/apikey → sign in → Create API key → copy\n' +
@@ -275,6 +462,28 @@ export class TelegramBotService {
           `Mode: <b>${status.mode}</b>\n` +
           `Updates processed: <b>${status.totalUpdatesProcessed}</b>\n` +
           `Primary route: <b>${TelegramBotService.escapeHtml(status.aiCascade.primary)}</b>`);
+        return { ok: true };
+      }
+      // /youtube — report the user's connected YouTube OAuth token status (DB-backed config).
+      if (command === '/youtube') {
+        await TelegramBotService.sendMessage(token, chatId, TelegramBotService.getYoutubeStatusReport(effectiveConfig), TelegramBotService.buildMainMenuKeyboard());
+        return { ok: true };
+      }
+      // /settings — interactive configuration options (Auto-Upload ON/OFF).
+      if (command === '/settings') {
+        TelegramBotService.callbackQueryStates.set(String(chatId), { flow: 'settings' });
+        await TelegramBotService.sendMessage(token, chatId, '⚙️ **Settings**\n\nTap the toggle to change it:', TelegramBotService.buildSettingsKeyboard(effectiveConfig));
+        return { ok: true };
+      }
+      // /upload — ask the user to attach their video file (topic optional as arguments).
+      if (command === '/upload') {
+        TelegramBotService.uploadStates.set(String(chatId), { step: 'file', topic: commandSource.slice('/upload'.length).trim() || undefined });
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '📤 **Upload a Video**\n\nPlease attach your video file now (send it as a video or document). Put your topic in the message caption if you like.\n\nNext: privacy → kids settings → publish with viral AI SEO.',
+          TelegramBotService.buildMainMenuKeyboard(),
+        );
         return { ok: true };
       }
       const chatKey = String(chatId);
@@ -417,13 +626,20 @@ export class TelegramBotService {
     return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  private static async sendMessage(token: string, chatId: string | number, text: string): Promise<void> {
+  private static async sendMessage(token: string, chatId: string | number, text: string, replyMarkup?: Record<string, any>): Promise<void> {
     const formattedText = TelegramBotService.formatTelegramHtml(text);
     for (let index = 0; index < formattedText.length; index += 3900) {
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: formattedText.slice(index, index + 3900), parse_mode: 'HTML', disable_web_page_preview: true }),
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: formattedText.slice(index, index + 3900),
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          // Attach the inline keyboard to the first chunk so long replies keep a single menu.
+          ...(index === 0 && replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }),
         signal: AbortSignal.timeout(10000),
       });
       const data = await response.json().catch(() => ({}));
@@ -494,7 +710,7 @@ export class TelegramBotService {
   private static async pollLoop(token: string): Promise<void> {
     while (TelegramBotService.pollingActive) {
       try {
-        const response = await fetch(`https://api.telegram.org/bot${token}/getUpdates?timeout=25&allowed_updates=${encodeURIComponent(JSON.stringify(['message', 'edited_message', 'channel_post']))}&offset=${TelegramBotService.pollingOffset}`, {
+        const response = await fetch(`https://api.telegram.org/bot${token}/getUpdates?timeout=25&allowed_updates=${encodeURIComponent(JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query']))}&offset=${TelegramBotService.pollingOffset}`, {
           signal: AbortSignal.timeout(35000),
         });
         const data = await response.json().catch(() => ({}));

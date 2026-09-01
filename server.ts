@@ -886,7 +886,12 @@ async function startServer() {
       // resolution, and auto-call Telegram's setWebhook whenever the token is new/changed.
       TelegramBotService.registerUserBot(String(targetId || ''), config);
       const ownerToken = String(config?.telegramBotToken || '').trim();
-      if (ownerToken && ownerToken !== String(previousConfig?.telegramBotToken || '').trim()) {
+      const tokenChanged = Boolean(ownerToken) && ownerToken !== String(previousConfig?.telegramBotToken || '').trim();
+      // Idempotent zero-break auto-setup: register the webhook whenever a bot token
+      // is saved — on a NEW/CHANGED token, and also when the owner has no active
+      // webhook yet (e.g. PUBLIC_BASE_URL was configured after the token was saved,
+      // or a previous registration attempt failed).
+      if (ownerToken && (tokenChanged || !TelegramBotService.hasUserWebhook(String(targetId || '')))) {
         autoRegisterOwnerWebhook(String(targetId || ''), config);
       }
     } catch (error) {

@@ -16,6 +16,10 @@ What this harness proves (no real Telegram credentials or internet needed):
      and replies are attributed to the correct token.
   6. POST /api/telegram/disconnect deletes the Telegram webhook and removes
      the dynamic route (subsequent deliveries -> 404).
+  7. Slash commands: /start (welcome + interactive inline menu), /upload
+      (asks to attach a video), /youtube (YouTube OAuth status report),
+      /settings (Auto-Upload ON/OFF) and inline-keyboard callback queries.
+  8. Commands sent as bot_command entities with an @botname mention parse.
 
 bot.py is launched as a subprocess and pointed at a local MOCK Telegram Bot
 API via TELEGRAM_API_BASE_URL; the mock records every Bot API call.
@@ -224,15 +228,20 @@ async def wait_for_message(mock: MockTelegramAPI, token: str, chat_id: int, time
 
 
 def user_update(update_id: int, chat_id: int, text: str) -> dict:
+    message = {
+        "message_id": update_id,
+        "from": {"id": chat_id, "is_bot": False, "first_name": "Tester", "username": "tester"},
+        "chat": {"id": chat_id, "type": "private", "first_name": "Tester"},
+        "date": 1700000000,
+        "text": text,
+    }
+    if isinstance(text, str) and text.startswith("/"):
+        # Real Telegram always marks /commands with a bot_command entity; PTB's
+        # CommandHandler requires it to route the update to the command handler.
+        message["entities"] = [{"offset": 0, "length": len(text.split()[0]), "type": "bot_command"}]
     return {
         "update_id": update_id,
-        "message": {
-            "message_id": update_id,
-            "from": {"id": chat_id, "is_bot": False, "first_name": "Tester", "username": "tester"},
-            "chat": {"id": chat_id, "type": "private", "first_name": "Tester"},
-            "date": 1700000000,
-            "text": text,
-        },
+        "message": message,
     }
 
 
@@ -322,6 +331,116 @@ async def run_verification() -> int:
               "no sendMessage recorded for tokenB" if msg_b is None else str(msg_b[2])[:80])
         check("reply attribution isolated per user",
               msg_b is not None and not any(m[0] == TOKEN_A and m[1] == 5151 for m in mock.messages))
+
+        # -- Slash commands & interactive inline menus (bot B) ------------------
+        def reply_markups(chat_id):
+            """Parsed reply_markup payloads from bot B's sendMessage calls to a chat."""
+            found = []
+            for _, method, payload in mock.calls_for(TOKEN_B, "sendMessage"):
+                if method != "sendMessage" or payload.get("chat_id") not in (chat_id, str(chat_id)):
+                    continue
+                raw = payload.get("reply_markup")
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except Exception:
+                        raw = None
+                if isinstance(raw, dict) and raw.get("inline_keyboard"):
+                    found.append(raw)
+            return found
+
+        async def wait_for_message_with(base_token, chat_id, needle, timeout=40.0):
+            deadline = asyncio.get_event_loop().time() + timeout
+            while asyncio.get_event_loop().time() < deadline:
+                hits = [m for m in mock.messages
+                        if m[0] == base_token and m[1] == chat_id and needle.lower() in str(m[2]).lower()]
+                if hits:
+                    return hits[-1]
+                await asyncio.sleep(0.4)
+            return None
+
+        def callback_payload(update_id, chat_id, data):
+            return {
+                "update_id": update_id,
+                "callback_query": {
+                    "id": "cbq-%d" % update_id,
+                    "chat_instance": "harness-callback-instance",
+                    "from": {"id": chat_id, "is_bot": False, "first_name": "Tester", "username": "tester"},
+                    "message": {"message_id": 9000 + update_id,
+                                "chat": {"id": chat_id, "type": "private", "first_name": "Tester"},
+                                "date": 1700000000},
+                    "data": data,
+                },
+            }
+
+        # /start -> welcome + interactive main menu
+        status, _ = await post_json(base, "/webhook/%s" % id_b, user_update(2101, 6101, "/start"), hdr_b)
+        msg_start = await wait_for_message_with(TOKEN_B, 6101, "welcome")
+        if msg_start is None:
+            msg_start = await wait_for_message_with(TOKEN_B, 6101, "platform")
+        check("/start replies with a welcome message", status == 200 and msg_start is not None,
+              "no welcome reply" if msg_start is None else str(msg_start[2])[:80])
+        menus = reply_markups(6101)
+        check("/start shows the interactive inline menu", bool(menus), "no inline keyboard recorded")
+        buttons = [btn.get("callback_data") for kb in menus for row in kb["inline_keyboard"] for btn in row]
+        check("menu buttons: YouTube Upload / AI SEO / Status / Settings",
+              {"menu:upload", "menu:seo", "menu:status", "menu:settings"}.issubset(set(buttons)), str(buttons))
+
+        # /upload -> asks the user to attach a video
+        status, _ = await post_json(base, "/webhook/%s" % id_b, user_update(2102, 6102, "/upload"), hdr_b)
+        msg_up = await wait_for_message_with(TOKEN_B, 6102, "attach")
+        check("/upload asks the user to attach their video file",
+              msg_up is not None and "video" in str(msg_up[2]).lower(),
+              "no upload prompt" if msg_up is None else str(msg_up[2])[:80])
+
+        # /youtube -> YouTube OAuth token status report
+        status, _ = await post_json(base, "/webhook/%s" % id_b, user_update(2103, 6103, "/youtube"), hdr_b)
+        msg_yt = await wait_for_message_with(TOKEN_B, 6103, "oauth")
+        if msg_yt is None:
+            msg_yt = await wait_for_message_with(TOKEN_B, 6103, "youtube")
+        check("/youtube reports the YouTube OAuth connection status",
+              msg_yt is not None and "connected" in str(msg_yt[2]).lower(),
+              "no status report" if msg_yt is None else str(msg_yt[2])[:80])
+
+        # /settings -> configuration options + Auto-Upload toggle round-trip
+        status, _ = await post_json(base, "/webhook/%s" % id_b, user_update(2104, 6104, "/settings"), hdr_b)
+        msg_set = await wait_for_message_with(TOKEN_B, 6104, "auto-upload")
+        check("/settings returns configuration options (Auto-Upload)", msg_set is not None, "no settings reply")
+
+        status, _ = await post_json(base, "/webhook/%s" % id_b,
+                                    callback_payload(2105, 6104, "settings:toggle_autoupload"), hdr_b)
+        answered = False
+        _cb_deadline = asyncio.get_event_loop().time() + 15.0
+        while asyncio.get_event_loop().time() < _cb_deadline:
+            if mock.calls_for(TOKEN_B, "answerCallbackQuery"):
+                answered = True
+                break
+            await asyncio.sleep(0.4)
+        check("callback query answered via answerCallbackQuery", status == 200 and answered)
+        msg_toggle = await wait_for_message_with(TOKEN_B, 6104, "auto-upload is now")
+        check("settings toggle flips Auto-Upload ON/OFF", msg_toggle is not None, "no toggle confirmation")
+
+        # Menu Status button -> status report
+        status, _ = await post_json(base, "/webhook/%s" % id_b, callback_payload(2106, 6105, "menu:status"), hdr_b)
+        msg_cb_status = await wait_for_message_with(TOKEN_B, 6105, "youtube")
+        check("menu Status button returns the status report", msg_cb_status is not None, "no status reply")
+
+        # Command sent as a bot_command entity with an @botname mention
+        mention = "/youtube@mock_222000222"
+        status, _ = await post_json(base, "/webhook/%s" % id_b, {
+            "update_id": 2107,
+            "message": {
+                "message_id": 2107,
+                "from": {"id": 6106, "is_bot": False, "first_name": "Tester", "username": "tester"},
+                "chat": {"id": 6106, "type": "private", "first_name": "Tester"},
+                "date": 1700000000,
+                "text": mention,
+                "entities": [{"offset": 0, "length": len(mention), "type": "bot_command"}],
+            },
+        }, hdr_b)
+        msg_mention = await wait_for_message_with(TOKEN_B, 6106, "connected")
+        check("command via bot_command entity + @botname mention parsed",
+              status == 200 and msg_mention is not None, "entity command not routed")
 
         # -- Idempotent reconnect ----------------------------------------------
         before = len(mock.calls_for(TOKEN_A, "setWebhook"))

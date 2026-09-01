@@ -97,12 +97,24 @@ MAX_MEMORY_TURNS: int = 16
 MAX_CHAR_BUDGET: int = 12000
 start_time: float = 0.0
 
+# Owner-level YouTube connection & preference state surfaced through /youtube and
+# /settings. Populated from the environment (durable) and mutable at runtime via
+# the interactive settings menu (Auto-Upload ON/OFF toggle).
+OWNER_SETTINGS: Dict[str, object] = {
+    "youtubeClientId": os.getenv("OWNER_YOUTUBE_CLIENT_ID", "").strip(),
+    "youtubeClientSecret": os.getenv("OWNER_YOUTUBE_CLIENT_SECRET", "").strip(),
+    "youtubeRefreshToken": os.getenv("OWNER_YOUTUBE_REFRESH_TOKEN", "").strip(),
+    "youtubeChannelId": os.getenv("OWNER_YOUTUBE_CHANNEL_ID", "").strip(),
+    "autoUpload": os.getenv("OWNER_AUTO_UPLOAD", "on").strip().lower() in ("1", "on", "true", "yes"),
+}
+
 # Lazy-loaded python-telegram-bot modules
 try:
-    from telegram import Update
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.constants import ParseMode, ChatAction
     from telegram.ext import (
         Application,
+        CallbackQueryHandler,
         CommandHandler,
         MessageHandler,
         ContextTypes,
@@ -359,15 +371,27 @@ def chunk_text(text: str, max_len: int = 3900) -> List[str]:
 # TELEGRAM BOT COMMAND HANDLERS
 # ==========================================
 
-async def safe_reply(update: Update, text: str, parse_mode: Optional[str] = ParseMode.MARKDOWN) -> None:
+async def safe_reply(
+    update: Update,
+    text: str,
+    parse_mode: Optional[str] = ParseMode.MARKDOWN,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+) -> None:
     """Send text in chunks with automatic fallback to plain text if parsing errors occur."""
     if not update.effective_message:
         return
 
     chunks = chunk_text(text, 3900)
-    for chunk in chunks:
+    for index, chunk in enumerate(chunks):
         try:
-            await update.effective_message.reply_text(chunk, parse_mode=parse_mode, disable_web_page_preview=True)
+            await update.effective_message.reply_text(
+                chunk,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True,
+                # Attach the inline keyboard to the first chunk only so long
+                # replies keep a single interactive menu.
+                reply_markup=reply_markup if index == 0 else None,
+            )
         except Exception as e:
             logger.warning(f"Parse error with mode {parse_mode}: {e}. Retrying as plain text.")
             try:
@@ -376,6 +400,68 @@ async def safe_reply(update: Update, text: str, parse_mode: Optional[str] = Pars
                 await update.effective_message.reply_text(clean_chunk, disable_web_page_preview=True)
             except Exception as retry_err:
                 logger.error(f"Failed to send plain text message: {retry_err}")
+
+
+def _youtube_connected() -> bool:
+    """Whether the owner's YouTube OAuth credentials are configured."""
+    return bool(OWNER_SETTINGS.get("youtubeClientId") and OWNER_SETTINGS.get("youtubeClientSecret") and OWNER_SETTINGS.get("youtubeRefreshToken"))
+
+
+def youtube_status_text() -> str:
+    """Report the connected YouTube OAuth token status."""
+    connected = _youtube_connected()
+    lines = [
+        "📺 <b>YouTube Connection Status</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"• OAuth 2.0: <b>{'✅ Connected' if connected else '❌ Not connected'}</b>",
+    ]
+    if connected:
+        lines.append(f"• Client ID: <code>{str(OWNER_SETTINGS.get('youtubeClientId'))[:24]}…</code>")
+    channel = str(OWNER_SETTINGS.get("youtubeChannelId") or "")
+    lines.append(f"• Channel ID: <code>{channel if channel else 'default channel'}</code>")
+    lines.append(f"• Auto-Upload: <b>{'ON ✅' if OWNER_SETTINGS.get('autoUpload') else 'OFF ❌'}</b>")
+    lines.append("")
+    lines.append(
+        "Ready: send /upload to attach a video and publish with viral AI SEO."
+        if connected
+        else "To connect: Web App → Config Panel → YouTube OAuth (Client ID, Secret, Refresh Token), then save."
+    )
+    return "\n".join(lines)
+
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Interactive main menu (YouTube Upload / AI SEO / Status / Settings)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📤 YouTube Upload", callback_data="menu:upload"),
+            InlineKeyboardButton("🔥 AI SEO", callback_data="menu:seo"),
+        ],
+        [
+            InlineKeyboardButton("📊 Status", callback_data="menu:status"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings"),
+        ],
+    ])
+
+
+def settings_keyboard() -> InlineKeyboardMarkup:
+    """Settings menu with the Auto-Upload ON/OFF toggle."""
+    auto = bool(OWNER_SETTINGS.get("autoUpload"))
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🔄 Auto-Upload: {'ON ✅' if auto else 'OFF ❌'}", callback_data="settings:toggle_autoupload")],
+        [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="menu:home")],
+    ])
+
+
+def welcome_menu_text() -> str:
+    return (
+        "🤖 <b>Universal Multi-Provider AI Bot Platform</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Pick an action below, send /upload to publish a video, or just chat with me.\n\n"
+        "• 📤 <b>YouTube Upload</b> — attach a video, published with viral AI SEO\n"
+        "• 🔥 <b>AI SEO</b> — titles, descriptions, hashtags & tags, auto-generated\n"
+        "• 📊 <b>Status</b> — engine + YouTube connection report\n"
+        "• ⚙️ <b>Settings</b> — Auto-Upload ON/OFF"
+    )
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -400,7 +486,81 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• ⏰ <b>Reminders:</b> <code>/remind &lt;minutes&gt; &lt;task&gt;</code>\n\n"
         f"💬 <i>Send any message to chat with the AI, or type <code>/help</code> for the full command list!</i>"
     )
-    await safe_reply(update, welcome_msg, parse_mode=ParseMode.HTML)
+    await safe_reply(update, welcome_msg, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
+
+
+async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /upload — ask the user to attach their video file with a caption."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    msg = (
+        "📤 <b>Upload a Video</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Please <b>attach your video file</b> now (send it as a video or document).\n\n"
+        "💡 <i>Tip: put your topic or description in the message caption — the AI SEO engine will use it.</i>\n\n"
+        "Next: choose Public / Private / Unlisted and Made-for-Kids, then the video is published with viral AI SEO."
+    )
+    await safe_reply(update, msg, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
+
+
+async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /youtube — report the connected YouTube OAuth token status."""
+    if not update.effective_message:
+        return
+    await safe_reply(update, youtube_status_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /settings — interactive configuration options (Auto-Upload ON/OFF)."""
+    if not update.effective_message:
+        return
+    msg = (
+        "⚙️ <b>Settings</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• Auto-Upload: <b>{'ON ✅' if OWNER_SETTINGS.get('autoUpload') else 'OFF ❌'}</b>\n"
+        "Tap the toggle below to change it."
+    )
+    await safe_reply(update, msg, parse_mode=ParseMode.HTML, reply_markup=settings_keyboard())
+
+
+async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline-keyboard button presses for the interactive menus."""
+    query = update.callback_query
+    if not query:
+        return
+    data = (query.data or "").strip()
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    if update.effective_chat is None:
+        return
+    chat_id = update.effective_chat.id
+
+    if data == "menu:upload":
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="📤 <b>Upload a Video</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nPlease <b>attach your video file</b> now (as a video or document). Put your topic in the caption if you like.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard(),
+        )
+    elif data == "menu:seo":
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🔥 <b>AI SEO</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nEvery upload automatically gets a high-CTR viral title, engagement-focused description, hashtags and ranking tags — powered by the multi-model AI cascade. Start with /upload.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard(),
+        )
+    elif data == "menu:status":
+        await context.bot.send_message(chat_id=chat_id, text=youtube_status_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
+    elif data == "menu:settings":
+        await context.bot.send_message(chat_id=chat_id, text="⚙️ <b>Settings</b>\n\nTap the toggle to change it:", parse_mode=ParseMode.HTML, reply_markup=settings_keyboard())
+    elif data == "settings:toggle_autoupload":
+        OWNER_SETTINGS["autoUpload"] = not bool(OWNER_SETTINGS.get("autoUpload"))
+        state = "ON ✅" if OWNER_SETTINGS["autoUpload"] else "OFF ❌"
+        await context.bot.send_message(chat_id=chat_id, text=f"⚙️ Auto-Upload is now <b>{state}</b>", parse_mode=ParseMode.HTML, reply_markup=settings_keyboard())
+    else:  # menu:home and any unknown payload
+        await context.bot.send_message(chat_id=chat_id, text=welcome_menu_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -462,6 +622,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"• [Tier 3] OpenRouter (DeepSeek R1): <code>{'ACTIVE 🟢' if has_or else 'STANDBY ⚪'}</code>\n"
         f"• [Tier 4] Cerebras LPU ({CEREBRAS_MODEL}): <code>{'ACTIVE 🟢' if has_cerebras else 'STANDBY ⚪'}</code>\n"
         f"• [Tier 5] Pollinations AI (Zero Key): <code>ACTIVE 🟢 (Always Available)</code>\n\n"
+        f"📺 <b>YouTube Connection:</b> <code>{'CONNECTED ✅' if _youtube_connected() else 'NOT CONNECTED ❌'}</code>\n"
         f"• <b>HTTP Ingress:</b> <code>0.0.0.0:{PORT} (OK)</code>"
     )
     await safe_reply(update, status_msg, parse_mode=ParseMode.HTML)
@@ -1181,6 +1342,12 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("remind", remind_command))
+
+    # Register Slash Commands for Upload / YouTube / Settings + Interactive Menus
+    app.add_handler(CommandHandler("upload", upload_command))
+    app.add_handler(CommandHandler("youtube", youtube_command))
+    app.add_handler(CommandHandler("settings", settings_command))
+    app.add_handler(CallbackQueryHandler(menu_callback_handler))
 
     # Register General Text Message Handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
