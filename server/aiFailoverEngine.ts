@@ -63,12 +63,39 @@ interface ProviderRoute {
 const DEFAULT_ATTEMPT_DEADLINE_MS = Math.max(1500, Number(process.env.AI_FAILOVER_DEADLINE_MS) || 2500);
 const RATE_LIMIT_COOLDOWN_MS = Math.max(5000, Number(process.env.AI_KEY_COOLDOWN_MS) || 20000);
 const INVALID_KEY_COOLDOWN_MS = 120000;
+/** Cooldown for a key+model pair that returned HTTP 404 (model not available for this key). */
+const MODEL_NOT_FOUND_COOLDOWN_MS = Math.max(30_000, Number(process.env.AI_MODEL_NOT_FOUND_COOLDOWN_MS) || 300_000);
+
+/**
+ * 🛡️ Strict provider isolation: Gemini requests must ONLY ever carry genuine Gemini
+ * identifiers (e.g. `gemini-1.5-flash`, `gemini-2.0-flash`, `gemini-2.5-flash`). Any
+ * Llama / OpenAI / Claude / catalog string is dropped before it can reach the API.
+ */
+const GEMINI_MODEL_PATTERN = /^gemini-[a-z0-9.\-]+$/;
+function sanitizeGeminiModel(preferredModel: string): string {
+  const model = String(preferredModel || '').trim();
+  return GEMINI_MODEL_PATTERN.test(model) ? model : '';
+}
+
+/** 🛡️ Strict Groq isolation: only genuine Groq production identifiers are forwarded. */
+const GROQ_MODEL_PATTERN = /^(llama|mixtral|gemma|qwen|deepseek|kimi|moonshot)[a-z0-9.\-_]*$/i;
+const GROQ_MODEL_ALLOWLIST = new Set([
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'llama3-8b-8192',
+  'mixtral-8x7b-32768',
+]);
+function sanitizeGroqModel(preferredModel: string): string {
+  const model = String(preferredModel || '').trim();
+  if (!model || /[\s/:@]/.test(model)) return '';
+  return GROQ_MODEL_ALLOWLIST.has(model) || GROQ_MODEL_PATTERN.test(model) ? model : '';
+}
 
 /** High-speed provider route table (OpenAI-compatible unless noted). Ordered by speed tier. */
 const PROVIDER_ROUTES: ProviderRoute[] = [
-  { id: 'groq', name: 'Groq Cloud LPU', style: 'openai', baseUrl: 'https://api.groq.com/openai/v1', path: '/chat/completions', models: ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'], priority: 10 },
+  { id: 'groq', name: 'Groq Cloud LPU', style: 'openai', baseUrl: 'https://api.groq.com/openai/v1', path: '/chat/completions', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama3-8b-8192', 'mixtral-8x7b-32768'], priority: 10 },
   { id: 'cerebras', name: 'Cerebras LPU', style: 'openai', baseUrl: 'https://api.cerebras.ai/v1', path: '/chat/completions', models: ['llama-3.1-8b', 'llama-3.3-70b'], priority: 12 },
-  { id: 'google', name: 'Google Gemini', style: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models', path: '', models: ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.6-flash'], priority: 14 },
+  { id: 'google', name: 'Google Gemini', style: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models', path: '', models: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'], priority: 14 },
   { id: 'sambanova', name: 'SambaNova RDU', style: 'openai', baseUrl: 'https://api.sambanova.ai/v1', path: '/chat/completions', models: ['Meta-Llama-3.3-70B-Instruct'], priority: 16 },
   { id: 'openrouter', name: 'OpenRouter', style: 'openai', baseUrl: 'https://openrouter.ai/api/v1', path: '/chat/completions', models: ['deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'], priority: 18 },
   { id: 'deepseek', name: 'DeepSeek', style: 'openai', baseUrl: 'https://api.deepseek.com/v1', path: '/chat/completions', models: ['deepseek-chat'], priority: 20 },
@@ -104,22 +131,46 @@ interface NormalizedMessage {
 }
 
 export class FailoverEngine {
+  /** In-memory cooldown registry: `${providerId}::${keyHash}` for key-wide cooldowns and
+   * `${providerId}::${keyHash}::${model}` for key+model pair cooldowns (HTTP 404). */
   private static cooldownUntil = new Map<string, number>();
 
   private static hashKey(key: string): string {
     return crypto.createHash('sha1').update(key).digest('hex').slice(0, 12);
   }
 
-  private static isCoolingDown(providerId: string, key: string): boolean {
-    const until = FailoverEngine.cooldownUntil.get(`${providerId}::${FailoverEngine.hashKey(key)}`) || 0;
+  private static cooldownId(providerId: string, key: string, model?: string): string {
+    return `${providerId}::${FailoverEngine.hashKey(key)}${model ? `::${model}` : ''}`;
+  }
+
+  /**
+   * True when a key (or a specific key+model pair) is cooling down. Key-level cooldowns
+   * come from HTTP 429/402 (quota) and 401/403 (invalid); pair-level from HTTP 404
+   * (model not available for that key). Checked before any network call so rotation to
+   * the next active key or fallback provider happens with zero added latency.
+   */
+  public static isCoolingDown(providerId: string, key: string, model?: string): boolean {
+    if (model) {
+      const pairUntil = FailoverEngine.cooldownUntil.get(FailoverEngine.cooldownId(providerId, key, model)) || 0;
+      if (pairUntil > Date.now()) return true;
+    }
+    const until = FailoverEngine.cooldownUntil.get(FailoverEngine.cooldownId(providerId, key)) || 0;
     return until > Date.now();
   }
 
-  private static noteFailure(providerId: string, key: string, kind: number | 'timeout' | 'network' | 'empty'): void {
+  private static noteFailure(providerId: string, key: string, kind: number | 'timeout' | 'network' | 'empty', model?: string): void {
     if (kind === 429 || kind === 402) {
-      FailoverEngine.cooldownUntil.set(`${providerId}::${FailoverEngine.hashKey(key)}`, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+      // Quota / rate-limit / out-of-credits: the whole key is throttled, so cool down
+      // every model on it at once and let the loop rotate to the next active key.
+      const until = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+      FailoverEngine.cooldownUntil.set(FailoverEngine.cooldownId(providerId, key), until);
+      if (model) FailoverEngine.cooldownUntil.set(FailoverEngine.cooldownId(providerId, key, model), until);
+    } else if (kind === 404) {
+      // Model not found: only this key+model pair is dead — the key stays usable for
+      // the route's other validated models.
+      FailoverEngine.cooldownUntil.set(FailoverEngine.cooldownId(providerId, key, model), Date.now() + MODEL_NOT_FOUND_COOLDOWN_MS);
     } else if (kind === 401 || kind === 403) {
-      FailoverEngine.cooldownUntil.set(`${providerId}::${FailoverEngine.hashKey(key)}`, Date.now() + INVALID_KEY_COOLDOWN_MS);
+      FailoverEngine.cooldownUntil.set(FailoverEngine.cooldownId(providerId, key), Date.now() + INVALID_KEY_COOLDOWN_MS);
     }
   }
 
@@ -198,13 +249,27 @@ export class FailoverEngine {
         const rotatedKeys = [...allKeys.slice(offset), ...allKeys.slice(0, offset)];
         const keys = rotatedKeys.slice(0, maxKeysPerProvider);
 
-        const candidateModels = route.id === preferredProvider && preferredModel
-          ? Array.from(new Set([preferredModel, ...route.models])).slice(0, maxModelsPerRoute + 1)
-          : route.models.slice(0, maxModelsPerRoute);
+        // 🛡️ Strict provider isolation: the preferred model is only forwarded when it is a
+        // valid identifier for THIS provider — Gemini never receives Llama/OpenAI strings,
+        // Groq never receives foreign catalog ids. Invalid preferences fall back to the
+        // route's own validated model list.
+        const sanitizeModelForRoute = route.style === 'gemini'
+          ? sanitizeGeminiModel
+          : route.id === 'groq'
+            ? sanitizeGroqModel
+            : (model: string) => model.trim();
+        const preferredCandidate = route.id === preferredProvider && preferredModel ? sanitizeModelForRoute(preferredModel) : '';
+        const candidateModels = Array.from(new Set([
+          ...(preferredCandidate ? [preferredCandidate] : []),
+          ...route.models,
+        ])).slice(0, maxModelsPerRoute + (preferredCandidate ? 1 : 0));
 
         for (const apiKey of keys) {
+          // Instant rotation: skip quota/invalid-cooled keys without any network call.
           if (!ignoreCooldowns && FailoverEngine.isCoolingDown(route.id, apiKey)) continue;
           for (const model of candidateModels) {
+            // Instant rotation: skip key+model pairs cooled down by HTTP 404 responses.
+            if (!ignoreCooldowns && FailoverEngine.isCoolingDown(route.id, apiKey, model)) continue;
             attempts += 1;
             const attemptLabel = `${route.id}/${model}`;
             try {
@@ -240,6 +305,63 @@ export class FailoverEngine {
       }
     }
 
+    // 🛟 System fallback AI key pool — zero-break net: when every user-supplied key has
+    // failed or exceeded quota, attempt the platform's own environment keys directly
+    // (covers keys the global store may have skipped, e.g. non-standard env names).
+    // Env keys already registered in the store were covered by sweeps 1-2 above, so
+    // only genuinely fresh system keys run here — no duplicate network calls.
+    const SYSTEM_ENV_FALLBACK_NAMES: Record<string, string[]> = {
+      google: ['GEMINI_API_KEY', 'GOOGLE_AI_KEY', 'GOOGLE_API_KEY'],
+      groq: ['GROQ_API_KEY'],
+      cerebras: ['CEREBRAS_API_KEY'],
+      openrouter: ['OPENROUTER_API_KEY'],
+      sambanova: ['SAMBANOVA_API_KEY'],
+      openai: ['OPENAI_API_KEY'],
+      anthropic: ['ANTHROPIC_API_KEY'],
+      deepseek: ['DEEPSEEK_API_KEY'],
+      mistral: ['MISTRAL_API_KEY'],
+      together: ['TOGETHER_API_KEY'],
+      'xai-grok': ['XAI_API_KEY', 'GROK_API_KEY'],
+    };
+    for (const route of orderedRoutes) {
+      const envNames = SYSTEM_ENV_FALLBACK_NAMES[route.id];
+      if (!envNames) continue;
+      const registeredKeys = new Set(GlobalApiKeyStore.getKeysForProvider(route.id));
+      const systemKeys = envNames
+        .map((name) => String(process.env[name] || '').trim())
+        .filter((key) => key && !key.startsWith('YOUR_') && !registeredKeys.has(key));
+      for (const apiKey of systemKeys) {
+        for (const model of route.models.slice(0, maxModelsPerRoute)) {
+          attempts += 1;
+          const attemptLabel = `${route.id}/system-fallback/${model}`;
+          try {
+            const text = route.style === 'anthropic'
+              ? await FailoverEngine.attemptAnthropic(route, apiKey, model, messages, deadlineMs)
+              : route.style === 'gemini'
+                ? await FailoverEngine.attemptGemini(route, apiKey, model, messages, deadlineMs)
+                : await FailoverEngine.attemptOpenAiStyle(route, apiKey, model, messages, deadlineMs);
+            if (text && text.trim()) {
+              trail.push(`${attemptLabel} ✓ (${Date.now() - startedAt}ms)`);
+              console.warn(`[FailoverEngine] User AI pool exhausted — served cleanly by the system fallback AI key pool (${route.id}/${model}).`);
+              return {
+                text: text.trim(),
+                providerId: route.id,
+                providerName: `${route.name} (system fallback)`,
+                model,
+                attempts,
+                latencyMs: Date.now() - startedAt,
+                trail,
+                activeProviders: activeProviderIds,
+              };
+            }
+            trail.push(`${attemptLabel} ✗ (empty response)`);
+          } catch {
+            trail.push(`${attemptLabel} ✗ (error)`);
+          }
+        }
+      }
+    }
+
     GlobalApiKeyStore.advanceRotation(1);
     console.warn(`[FailoverEngine] Active pool exhausted after ${attempts} attempt(s) in ${Date.now() - startedAt}ms.`);
     return null;
@@ -270,7 +392,7 @@ export class FailoverEngine {
         signal,
       });
       if (!response.ok) {
-        FailoverEngine.noteFailure(route.id, apiKey, response.status);
+        FailoverEngine.noteFailure(route.id, apiKey, response.status, model);
         console.warn(`[FailoverEngine] ${route.name} (${maskKey(apiKey)}) HTTP ${response.status}; failing over instantly.`);
         return null;
       }
@@ -303,7 +425,7 @@ export class FailoverEngine {
         signal,
       });
       if (!response.ok) {
-        FailoverEngine.noteFailure(route.id, apiKey, response.status);
+        FailoverEngine.noteFailure(route.id, apiKey, response.status, model);
         console.warn(`[FailoverEngine] ${route.name} (${maskKey(apiKey)}) HTTP ${response.status}; failing over instantly.`);
         return null;
       }
@@ -335,7 +457,7 @@ export class FailoverEngine {
         signal,
       });
       if (!response.ok) {
-        FailoverEngine.noteFailure(route.id, apiKey, response.status);
+        FailoverEngine.noteFailure(route.id, apiKey, response.status, model);
         console.warn(`[FailoverEngine] ${route.name} (${maskKey(apiKey)}) HTTP ${response.status}; failing over instantly.`);
         return null;
       }

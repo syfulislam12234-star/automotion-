@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -130,6 +131,57 @@ function ensureYouTubeTutorialLink(response: string, userQuery: string): string 
 let freeModelStatusCache: { checkedAt: number; statuses: Array<{ modelId: string; status: 'active' | 'inactive'; reason?: string }> } | null = null;
 let openRouterFreeModelCache: { checkedAt: number; models: string[] } | null = null;
 
+// ⚡ Provider-isolated in-memory cooldown registry — when a key hits HTTP 429 (quota /
+// rate limit), 404 (model not found) or 401/403 (invalid), the exact key or key+model
+// pair is cooled down instantly in memory so the cascade rotates to the next active key
+// or fallback provider without any added latency (no sleeps, no retries on dead keys).
+const PROVIDER_KEY_COOLDOWNS = new Map<string, number>();
+const QUOTA_COOLDOWN_MS = Math.max(10_000, Number(process.env.AI_QUOTA_COOLDOWN_MS) || 60_000);
+const MODEL_NOT_FOUND_COOLDOWN_MS = Math.max(30_000, Number(process.env.AI_MODEL_NOT_FOUND_COOLDOWN_MS) || 600_000);
+const INVALID_KEY_COOLDOWN_MS = 1_800_000;
+
+function hashProviderKey(apiKey: string): string {
+  return crypto.createHash('sha1').update(String(apiKey)).digest('hex').slice(0, 12);
+}
+
+function markProviderCooldown(providerId: string, apiKey: string, model: string | undefined, ms: number): void {
+  const base = `${providerId}:${hashProviderKey(apiKey)}`;
+  PROVIDER_KEY_COOLDOWNS.set(model ? `${base}:${model}` : base, Date.now() + ms);
+}
+
+function isProviderCoolingDown(providerId: string, apiKey: string, model?: string): boolean {
+  const base = `${providerId}:${hashProviderKey(apiKey)}`;
+  if (model && (PROVIDER_KEY_COOLDOWNS.get(`${base}:${model}`) || 0) > Date.now()) return true;
+  return (PROVIDER_KEY_COOLDOWNS.get(base) || 0) > Date.now();
+}
+
+/** Records an HTTP failure with the correct cooldown scope (key-wide vs key+model pair). */
+function noteProviderHttpFailure(providerId: string, apiKey: string, model: string | undefined, status: number): void {
+  if (status === 429 || status === 402) {
+    markProviderCooldown(providerId, apiKey, undefined, QUOTA_COOLDOWN_MS); // quota throttles the whole key
+  } else if (status === 404) {
+    markProviderCooldown(providerId, apiKey, model, MODEL_NOT_FOUND_COOLDOWN_MS); // only this model is unavailable
+  } else if (status === 401 || status === 403) {
+    markProviderCooldown(providerId, apiKey, undefined, INVALID_KEY_COOLDOWN_MS);
+  }
+}
+
+// 🛡️ Strict provider isolation helpers: a preferred model string is only forwarded to a
+// provider when it is a valid identifier for THAT provider. Gemini APIs must never see
+// Llama/OpenAI/Claude strings, and Groq must never receive foreign catalog ids.
+const GEMINI_VALID_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest'];
+const GROQ_VALID_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama3-8b-8192', 'mixtral-8x7b-32768'];
+
+function isGeminiModelIdentifier(model: unknown): boolean {
+  return /^gemini-[a-z0-9.\-]+$/.test(String(model || '').trim());
+}
+
+function isGroqModelIdentifier(model: unknown): boolean {
+  const value = String(model || '').trim();
+  if (!value || /[\s/:@]/.test(value)) return false;
+  return /^(llama|mixtral|gemma|qwen|deepseek|kimi|moonshot)[a-z0-9.\-_]*$/i.test(value);
+}
+
 function requestsSensitiveInternals(prompt: unknown): boolean {
   const text = String(prompt || '').toLowerCase();
   return /(system\s*prompt|hidden\s*instruction|reveal.*prompt|show.*(source|backend|code)|api\s*key|environment\s*token|secret\s*(admin|setting)|database\s*(string|url|credential)|সিস্টেম.?প্রম্পট|কোড দেখ|এপিআই.?কি|টোকেন|গোপন|অভ্যন্তরীণ প্রযুক্তিগত)/i.test(text);
@@ -181,27 +233,21 @@ async function generateWithGemini(
   const geminiKeys = getProviderApiKeys(['GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3']);
   if (geminiKeys.length === 0) return null;
 
-  // Prioritize active and available models (gemini-3.6-flash, gemini-3.1-flash-lite)
-  const cleanPreferred = preferredModel && !preferredModel.includes('2.5') && !preferredModel.includes('2.0') && !preferredModel.includes('1.5')
-    ? preferredModel
-    : undefined;
-
-  const candidateModels = Array.from(
-    new Set([
-      cleanPreferred,
-      'gemini-3.6-flash',
-      'gemini-3.1-flash-lite',
-      'gemini-flash-latest',
-      'gemini-3.7-flash',
-      'gemini-3.1-pro-preview',
-    ])
-  ).filter(Boolean) as string[];
+  // 🛡️ Strict isolation: only genuine Gemini identifiers may reach Gemini APIs. A
+  // preferred model like `llama-3.3-70b-versatile` (or any OpenAI/Claude string) is
+  // dropped here and the request runs on the validated Gemini candidates instead.
+  const cleanPreferred = isGeminiModelIdentifier(preferredModel) ? String(preferredModel).trim() : '';
+  const candidateModels = Array.from(new Set([cleanPreferred, ...GEMINI_VALID_MODELS])).filter(Boolean);
 
   for (const apiKey of geminiKeys) {
+    // Quota/invalid-key cooldown → rotate to the next key instantly (no network call).
+    if (isProviderCoolingDown('google', apiKey)) continue;
     try {
       const client = new GoogleGenAI({ apiKey });
 
       for (const modelName of candidateModels) {
+        // 404-cooled key+model pair (model not available for this key) → skip instantly.
+        if (isProviderCoolingDown('google', apiKey, modelName)) continue;
         try {
           const generatePromise = client.models.generateContent({
             model: modelName,
@@ -224,6 +270,10 @@ async function generateWithGemini(
           }
         } catch (err: any) {
           const errMsg = err?.message || String(err);
+          // Mark cooldowns from SDK error text (the GenAI SDK surfaces the status there):
+          // 429/RESOURCE_EXHAUSTED → whole key; 404/NOT_FOUND → this key+model pair only.
+          if (/429|quota|resource.?exhausted|rate.?limit/i.test(errMsg)) markProviderCooldown('google', apiKey, undefined, QUOTA_COOLDOWN_MS);
+          else if (/404|not[_ ]?found|is not supported|invalid model/i.test(errMsg)) markProviderCooldown('google', apiKey, modelName, MODEL_NOT_FOUND_COOLDOWN_MS);
           console.warn(`[Gemini Cascade] Model ${modelName} on key ${apiKey.slice(0, 6)}... (${errMsg.slice(0, 90)}). Trying next candidate...`);
         }
       }
@@ -243,36 +293,47 @@ async function generateWithGroq(
   const groqKeys = getProviderApiKeys(['GROQ_API_KEY', 'GROQ_API_KEY_1', 'GROQ_API_KEY_2', 'GROQ_API_KEY_3']);
   if (groqKeys.length === 0) return null;
 
-  const model = preferredModel || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  // 🛡️ Strict isolation + valid fallbacks: only genuine Groq identifiers are forwarded;
+  // anything else (Gemini/OpenAI/Claude catalog ids) falls back to the validated list.
+  const preferredGroqModel = isGroqModelIdentifier(preferredModel) ? String(preferredModel).trim() : '';
+  const envGroqModel = isGroqModelIdentifier(process.env.GROQ_MODEL) ? String(process.env.GROQ_MODEL).trim() : '';
+  const candidateModels = Array.from(new Set([preferredGroqModel, envGroqModel, ...GROQ_VALID_MODELS])).filter(Boolean);
 
-  for (const apiKey of groqKeys) {
-    try {
-      const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: 0.7,
-          max_tokens: 2048,
-        }),
-      });
+  for (const model of candidateModels) {
+    for (const apiKey of groqKeys) {
+      // Instant rotation: quota/invalid keys and 404-dead key+model pairs are skipped
+      // in memory with zero added latency.
+      if (isProviderCoolingDown('groq', apiKey, model)) continue;
+      try {
+        const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: 0.7,
+            max_tokens: 2048,
+          }),
+        });
 
-      if (resp.ok) {
-        const data = await resp.json();
-        const reply = data.choices?.[0]?.message?.content;
-        if (reply && reply.trim()) {
-          return { text: reply.trim(), modelUsed: model };
+        if (resp.ok) {
+          const data = await resp.json();
+          const reply = data.choices?.[0]?.message?.content;
+          if (reply && reply.trim()) {
+            return { text: reply.trim(), modelUsed: model };
+          }
+        } else {
+          // HTTP 429 (quota) → cool the whole key; 404 → cool only this key+model pair.
+          noteProviderHttpFailure('groq', apiKey, model, resp.status);
+          const reason = resp.status === 429 ? 'quota exceeded' : resp.status === 404 ? 'model not available' : 'error';
+          console.warn(`[Groq Cascade] Key ${apiKey.slice(0, 6)}... returned HTTP ${resp.status} (${reason}) on ${model}; rotating instantly to the next key/model.`);
         }
-      } else {
-        const errText = await resp.text();
-        console.warn(`[Groq Cascade] Key ${apiKey.slice(0, 6)}... returned HTTP ${resp.status}: ${errText.slice(0, 100)}. Trying next key...`);
+      } catch (err: any) {
+        console.warn(`[Groq Cascade] Network exception with key: ${err?.message || err}`);
       }
-    } catch (err: any) {
-      console.warn(`[Groq Cascade] Network exception with key: ${err?.message || err}`);
     }
   }
 
