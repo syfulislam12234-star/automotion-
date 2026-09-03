@@ -4,6 +4,9 @@ import {
   getChannelStatsAndAudit,
   getChannelAnalytics,
   getChannelSeoContext,
+  getRecentVideoHistory,
+  getViralVideoPredictions,
+  type ViralVideoPrediction,
   extractYouTubeCredentials,
   YouTubeAnalyticsError,
   formatCompactNumber,
@@ -241,7 +244,7 @@ export class TelegramBotService {
     return extracted.refreshToken;
   }
 
-  /** Inline quick actions attached to the /yt_check analytics report. */
+    /** Inline quick actions attached to the /yt_check analytics report. */
   private static buildYtCheckKeyboard(): Record<string, any> {
     return {
       inline_keyboard: [
@@ -251,6 +254,7 @@ export class TelegramBotService {
         ],
         [
           { text: '📤 Upload Video', callback_data: 'menu:upload' },
+          { text: '🔮 Viral Ideas', callback_data: 'yt:viral' },
           { text: '⬅️ Main Menu', callback_data: 'menu:home' },
         ],
       ],
@@ -447,7 +451,99 @@ export class TelegramBotService {
     }
   }
 
-  /** Answers a Telegram callback query (stops the button spinner). */
+  /** Inline keyboard for the /yt_viral report. */
+  private static buildYtViralKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '📤 Use for New Upload', callback_data: 'menu:upload' },
+          { text: '📊 Video History', callback_data: 'yt:analytics' },
+        ],
+        [
+          { text: '🔁 Regenerate Ideas', callback_data: 'yt:viral' },
+          { text: '🔥 AI SEO Boost', callback_data: 'yt:seo' },
+        ],
+        [
+          { text: '⬅️ Main Menu', callback_data: 'menu:home' },
+        ],
+      ],
+    };
+  }
+
+  /** Formats the AI viral video prediction report for /yt_viral. */
+  private static formatYtViralReport(
+    channelName: string,
+    predictions: ViralVideoPrediction[],
+    videoCount: number,
+  ): string {
+    const lines: string[] = [
+      '🔮 **AI Viral Video Predictions**',
+      '',
+      `📺 **${TelegramBotService.escapeHtml(channelName)}** — based on ${videoCount} recent videos`,
+      '',
+    ];
+    predictions.forEach((prediction, index) => {
+      lines.push(
+        `**🔥 Concept ${index + 1}: ${TelegramBotService.escapeHtml(prediction.title)}**`,
+        `🎣 **Hook:** ${TelegramBotService.escapeHtml(prediction.hook)}`,
+        `⏱ **Length:** ${TelegramBotService.escapeHtml(prediction.recommendedLength)} (${TelegramBotService.escapeHtml(prediction.format)})`,
+        `👥 **Audience:** ${TelegramBotService.escapeHtml(prediction.targetAudienceInterest)}`,
+        `📅 **Timing:** ${TelegramBotService.escapeHtml(prediction.uploadTiming)}`,
+        `💡 **Why:** ${TelegramBotService.escapeHtml(prediction.whyItWillPerform)}`,
+        '',
+      );
+    });
+    lines.push('⚡ Quick actions below — use a concept for upload, view analytics, or regenerate.');
+    return lines.join('\n');
+  }
+
+  /** /yt_viral — AI-powered viral video concept predictions for the channel. */
+  private static async handleYtViralCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
+    const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
+    if (!credentials) {
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
+      return;
+    }
+    if (!TelegramBotService.aiGenerator) {
+      await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /yt_viral again.');
+      return;
+    }
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '🔮 AI ভিরাল ভিডিও ধারণা বিশ্লেষণ করা হচ্ছে... এক মুহূর্ত!');
+    try {
+      const [stats, videoHistory] = await Promise.all([
+        getChannelStatsAndAudit(credentials),
+        getRecentVideoHistory(credentials, 15),
+      ]);
+      const predictions = await getViralVideoPredictions(
+        credentials,
+        TelegramBotService.aiGenerator,
+        effectiveConfig?.modelName || undefined,
+      );
+      if (!predictions || !predictions.length) {
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '⚠️ AI কোনো ভিরাল ধারণা তৈরি করতে পারল না। চ্যানেলটি যথেষ্ট ডেটা নিয়ে গঠন করুন, তারপর আবার চেষ্টা করুন।',
+          TelegramBotService.buildMainMenuKeyboard(),
+        );
+        return;
+      }
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        TelegramBotService.formatYtViralReport(stats.title, predictions, videoHistory.length),
+        TelegramBotService.buildYtViralKeyboard(),
+      );
+    } catch (error: any) {
+      const authorizationIssue = error instanceof YouTubeAnalyticsError && error.authorizationIssue;
+      const message = authorizationIssue
+        ? '🔐 YouTube OAuth token টি expired বা invalid। Config Panel → YouTube Studio-তে নতুন Refresh Token যোগ করে আবার চেষ্টা করুন।'
+        : `⚠️ ভিরাল প্রকল্পন তৈরিতে ব্যর্য: ${TelegramBotService.escapeHtml(String(error?.message || error))}`;
+      await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
+    }
+  }
+
   private static async answerCallbackQuery(token: string, callbackQueryId: string, text?: string): Promise<void> {
     try {
       await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
@@ -498,8 +594,11 @@ export class TelegramBotService {
       case 'yt:analytics':
         await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig);
         return;
-      case 'yt:seo':
+            case 'yt:seo':
         await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig);
+        return;
+      case 'yt:viral':
+        await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig);
         return;
       case 'settings:toggle_autoupload': {
         if (effectiveConfig && typeof effectiveConfig === 'object') {
@@ -665,6 +764,7 @@ export class TelegramBotService {
           '/upload or /yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
           '/yt_check or /analytics — Live channel views, impressions, CTR, watch time & health audit\n' +
           '/yt_seo — AI-generated channel keywords, viral bio, tags & SEO recommendations\n' +
+          '/yt_viral — AI-powered viral video concept predictions for your channel\n' +
           'Send any text — Chat with the multi-model AI brain (instant failover)\n\n' +
           '**🔑 STEP 1 — ADD AI API KEYS (unlocks AI replies)**\n' +
           '1️⃣ Google Gemini (FREE): open https://aistudio.google.com/app/apikey → sign in → Create API key → copy\n' +
@@ -716,6 +816,12 @@ export class TelegramBotService {
       // /yt_seo — AI channel SEO audit through the failover AI cascade.
       if (command === '/yt_seo') {
         await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig || null);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // /yt_viral — AI-powered viral video concept predictions for the channel.
+      if (command === '/yt_viral') {
+        await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig || null);
         TelegramBotService.lastError = null;
         return { ok: true };
       }

@@ -1,13 +1,13 @@
-/**
+﻿/**
  * YouTube Analytics & Status Service (Multi-Tenant)
  *
  * OAuth-backed fetchers built on:
- *   • YouTube Data API v3        — channel statistics, snippet and status/audit signals
- *   • YouTube Analytics API v2   — impressions, impression CTR, watch time, traffic sources
+ *   â€¢ YouTube Data API v3        â€” channel statistics, snippet and status/audit signals
+ *   â€¢ YouTube Analytics API v2   â€” impressions, impression CTR, watch time, traffic sources
  *
  * Every call exchanges the user's saved OAuth refresh token for a short-lived access
  * token (cached in memory until just before its Google-issued expiry, then silently
- * re-refreshed). Tokens are strictly scoped to the credentials passed in — a caller
+ * re-refreshed). Tokens are strictly scoped to the credentials passed in â€” a caller
  * can only ever read the channel that its own saved tokens own.
  */
 
@@ -114,7 +114,7 @@ const YOUTUBE_TIMEOUT_MS = 30000;
 // OAUTH ACCESS TOKEN RESOLUTION (AUTO-REFRESH)
 // ==========================================
 
-/** refresh token → cached access token. Refreshed silently before Google expiry. */
+/** refresh token â†’ cached access token. Refreshed silently before Google expiry. */
 const accessTokenCache = new Map<string, { token: string; expiresAt: number }>();
 /** Refresh the access token at least this many ms before Google's reported expiry. */
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 5 * 60 * 1000;
@@ -127,7 +127,7 @@ export function clearAccessTokenCache(): void {
 /**
  * Resolves a fresh (or cached) OAuth2 access token for the exact credentials passed in.
  * Multi-tenant safe: the cache key is the tenant's own refresh token, so two users with
- * different channels never share — or leak — an access token.
+ * different channels never share â€” or leak â€” an access token.
  */
 export async function resolveAccessToken(credentials: YouTubeCredentials): Promise<string> {
   if (!credentials.clientId || !credentials.clientSecret || !credentials.refreshToken) {
@@ -225,7 +225,7 @@ function formatCount(value: number): string {
   return Math.round(value).toLocaleString('en-US');
 }
 
-/** 1234567 → "1.23M" (used in AI prompts and compact UI labels). */
+/** 1234567 â†’ "1.23M" (used in AI prompts and compact UI labels). */
 export function formatCompactNumber(value: number | null | undefined): string {
   const num = Number(value);
   if (!Number.isFinite(num)) return '0';
@@ -254,7 +254,7 @@ function trafficSourceLabel(source: string): string {
 }
 
 // ==========================================
-// YOUTUBE DATA API v3 — CHANNEL RESOURCE
+// YOUTUBE DATA API v3 â€” CHANNEL RESOURCE
 // ==========================================
 
 interface ChannelResource {
@@ -292,7 +292,7 @@ function buildChannelAudit(resource: ChannelResource): ChannelAudit {
   const longUploadsStatus = String(status.longUploadsStatus || 'longUploadsUnspecified');
   const madeForKids = typeof status.madeForKids === 'boolean' ? status.madeForKids : null;
 
-  if (!isLinked) notes.push('Channel is not linked to a Brand Account — some Studio features may be limited.');
+  if (!isLinked) notes.push('Channel is not linked to a Brand Account â€” some Studio features may be limited.');
   if (privacyStatus && privacyStatus !== 'public') notes.push(`Channel visibility is "${privacyStatus}".`);
   if (longUploadsStatus === 'longUploadsUnspecified') notes.push('Long uploads (>15 min) are not enabled for this channel yet.');
 
@@ -301,12 +301,12 @@ function buildChannelAudit(resource: ChannelResource): ChannelAudit {
   const uploadBlocked = Object.values(status || {}).some((v) => String(v) === 'blocked' || String(v) === 'terminated');
   const restricted = uploadBlocked || String(status.channelState || '').toLowerCase() === 'terminated';
   const health: ChannelAudit['health'] = restricted ? 'restricted' : notes.length ? 'warning' : 'clean';
-  if (restricted) notes.unshift('Restriction signals detected on the channel status — review Studio → Community Guidelines.');
+  if (restricted) notes.unshift('Restriction signals detected on the channel status â€” review Studio â†’ Community Guidelines.');
   if (health === 'clean') notes.push('No restriction signals found: channel is in good standing.');
 
   return {
     health,
-    healthEmoji: health === 'clean' ? '✅' : health === 'warning' ? '⚠️' : '⛔',
+    healthEmoji: health === 'clean' ? 'âœ…' : health === 'warning' ? 'âš ï¸' : 'â›”',
     communityGuidelineStrikes: 0,
     copyrightStatus: restricted ? 'review' : 'clean',
     privacyStatus: privacyStatus || 'public',
@@ -318,7 +318,7 @@ function buildChannelAudit(resource: ChannelResource): ChannelAudit {
 }
 
 // ==========================================
-// PUBLIC FETCHER 1 — CHANNEL STATS & AUDIT
+// PUBLIC FETCHER 1 â€” CHANNEL STATS & AUDIT
 // ==========================================
 
 /**
@@ -355,7 +355,7 @@ export async function getChannelStatsAndAudit(credentials: YouTubeCredentials | 
 }
 
 // ==========================================
-// YOUTUBE ANALYTICS API v2 — CORE REPORTING
+// YOUTUBE ANALYTICS API v2 â€” CORE REPORTING
 // ==========================================
 
 /** One flattened row of an Analytics API report. */
@@ -374,7 +374,7 @@ async function runAnalyticsQuery(accessToken: string, params: Record<string, str
   if (!ok) {
     const reason = String(data?.error?.errors?.[0]?.reason || data?.error?.message || `HTTP ${status}`);
     // Forbidden/quota errors on Analytics usually mean the OAuth token lacks the
-    // yt-analytics readonly scope — degrade gracefully rather than throwing.
+    // yt-analytics readonly scope â€” degrade gracefully rather than throwing.
     console.warn('[YouTubeAnalyticsService] Analytics query skipped:', reason);
     return null;
   }
@@ -403,7 +403,7 @@ async function runAnalyticsQuery(accessToken: string, params: Record<string, str
 }
 
 // ==========================================
-// PUBLIC FETCHER 2 — CHANNEL ANALYTICS REPORT
+// PUBLIC FETCHER 2 â€” CHANNEL ANALYTICS REPORT
 // ==========================================
 
 /**
@@ -434,8 +434,8 @@ export async function getChannelAnalytics(credentials: YouTubeCredentials | stri
     ...(filters ? { filters } : {}),
   });
 
-  // Window fallback: 90d → 28d (brand-new channels or restricted scopes may only
-  // support the shorter window). Scope fallback: extended → base metrics.
+  // Window fallback: 90d â†’ 28d (brand-new channels or restricted scopes may only
+  // support the shorter window). Scope fallback: extended â†’ base metrics.
   const windows = [90, 28];
   let summary: { row: AnalyticsRow | null; windowDays: number } | null = null;
   for (const days of windows) {
@@ -511,7 +511,7 @@ export async function getChannelAnalytics(credentials: YouTubeCredentials | stri
   if (!metricRow) {
     note = 'Watch-time analytics are unavailable for this token (the YouTube Analytics readonly scope may be missing). Re-generate the refresh token with yt-analytics.readonly to unlock full reporting.';
   } else if (impressions === null) {
-    note = 'Impression metrics are not available for this account/scope — Views, CTR and watch time below still reflect live data.';
+    note = 'Impression metrics are not available for this account/scope â€” Views, CTR and watch time below still reflect live data.';
   }
 
   const averageViewPercentage = impressions !== null && impressions > 0
@@ -533,7 +533,7 @@ export async function getChannelAnalytics(credentials: YouTubeCredentials | stri
 }
 
 // ==========================================
-// PUBLIC FETCHER 3 — CHANNEL SEO CONTEXT (SNIPPET + LATEST VIDEOS)
+// PUBLIC FETCHER 3 â€” CHANNEL SEO CONTEXT (SNIPPET + LATEST VIDEOS)
 // ==========================================
 
 /** Fetches the channel snippet plus its latest public uploads for the AI SEO engine. */
@@ -591,13 +591,13 @@ export async function getChannelSeoContext(credentials: YouTubeCredentials | str
     console.warn('[YouTubeAnalyticsService] Latest uploads fetch skipped:', error?.message || error);
   }
 
-  // Channel keywords arrive as a quoted-string list — parse both quoted and plain forms.
+  // Channel keywords arrive as a quoted-string list â€” parse both quoted and plain forms.
   const rawKeywords = String(snippet?.keywords || '');
   const keywords: string[] = rawKeywords.includes('"')
     ? (rawKeywords.match(/"[^"]+"/g) || []).map((keyword) => keyword.slice(1, -1).trim()).filter(Boolean)
     : rawKeywords.split(',').map((keyword) => keyword.trim()).filter(Boolean);
 
-  return {
+    return {
     channelId,
     title: String(snippet?.title || 'Unknown Channel'),
     description: String(snippet?.description || ''),
@@ -610,5 +610,229 @@ export async function getChannelSeoContext(credentials: YouTubeCredentials | str
     keywords,
     latestVideos,
   };
+}
+
+// ==========================================
+// YOUTUBE DATA API v3 â€” VIDEO HISTORY & AI VIRAL PREDICTOR
+// ==========================================
+
+export interface VideoHistoryItem {
+  id: string;
+  title: string;
+  publishedAt: string;
+  views: number;
+  likes: number;
+  comments: number;
+  duration: string;             // ISO 8601 (e.g. "PT1M30S")
+  durationText: string;         // Human readable (e.g. "1:30")
+  thumbnailUrl: string;
+  performanceTag: 'ðŸ”¥ High' | 'ðŸ“Š Normal' | 'ðŸ“‰ Low';
+  performanceScore: number;     // 0-100 relative to channel average (50 = channel avg)
+}
+
+/** Parse an ISO 8601 duration (PT1H2M3S) into a human-readable mm:ss / hh:mm:ss string. */
+function formatDuration(iso8601: string): string {
+  if (!iso8601) return '';
+  const match = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i.exec(iso8601);
+  if (!match) return '';
+  const hours = parseInt(match[1] || '0', 10);
+  const minutes = parseInt(match[2] || '0', 10);
+  const seconds = parseInt(match[3] || '0', 10);
+  if (hours > 0) return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Fetches the tenant's recent uploaded videos (up to `limit`, capped at 50 per
+ * API page), hydrates each with snippet + statistics + contentDetails, and
+ * computes a performance score + tag relative to the channel's average view count.
+ */
+export async function getRecentVideoHistory(
+  credentials: YouTubeCredentials | string,
+  limit: number = 10,
+): Promise<VideoHistoryItem[]> {
+  const normalized = normalizeCredentials(credentials);
+  const accessToken = await resolveAccessToken(normalized);
+  const resource = await fetchOwnChannelResource(accessToken);
+
+  // Resolve the uploads playlist id (the authenticated channel resource carries it).
+  let uploadsPlaylistId = String(resource?.contentDetails?.relatedPlaylists?.uploads || '');
+  if (!uploadsPlaylistId) {
+    const channelId = String(resource.id || '');
+    const details = await googleApiGetJson(
+      `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${encodeURIComponent(channelId)}`,
+      accessToken,
+    );
+    uploadsPlaylistId = String(details?.data?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads || '');
+  }
+  if (!uploadsPlaylistId) return [];
+
+  const pageSize = Math.min(Math.max(limit, 1), 50);
+  const playlistUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=${encodeURIComponent(uploadsPlaylistId)}&maxResults=${pageSize}`;
+  const playlistReport = await googleApiGetJson(playlistUrl, accessToken);
+  const videoIds: string[] = (Array.isArray(playlistReport?.data?.items) ? playlistReport.data.items : [])
+    .map((item: any) => String(item?.contentDetails?.videoId || ''))
+    .filter(Boolean);
+  if (!videoIds.length) return [];
+
+  const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoIds.map((id) => encodeURIComponent(id)).join(',')}&maxResults=${videoIds.length}`;
+  const videosReport = await googleApiGetJson(videosUrl, accessToken);
+  const items: any[] = Array.isArray(videosReport?.data?.items) ? videosReport.data.items : [];
+
+  // Channel average views (from the videos we actually fetched).
+  let avgViews = 0;
+  for (const item of items) {
+    const stats = item?.statistics || {};
+    avgViews += toNumber(stats.viewCount);
+  }
+  avgViews = items.length ? avgViews / items.length : 0;
+
+  return items.map((item) => {
+    const snippet = item?.snippet || {};
+    const stats = item?.statistics || {};
+    const contentDetails = item?.contentDetails || {};
+    const duration = String(contentDetails?.duration || '');
+    const views = toNumber(stats.viewCount);
+    let tag: 'ðŸ”¥ High' | 'ðŸ“Š Normal' | 'ðŸ“‰ Low';
+    if (avgViews > 0) {
+      const ratio = views / avgViews;
+      tag = ratio >= 1.5 ? 'ðŸ”¥ High' : ratio <= 0.5 ? 'ðŸ“‰ Low' : 'ðŸ“Š Normal';
+    } else {
+      tag = 'ðŸ“Š Normal';
+    }
+    // Performance score: 0-100 where 50 = channel average, 0 = no views, 100 = 2Ã— average.
+    const score = avgViews > 0 ? Math.max(0, Math.min(100, Math.round((views / avgViews) * 50))) : 50;
+
+    const thumbnails = snippet?.thumbnails || {};
+    const thumbnailUrl = thumbnails?.high?.url || thumbnails?.medium?.url || thumbnails?.default?.url || '';
+
+    return {
+      id: String(item?.id || ''),
+      title: String(snippet?.title || ''),
+      publishedAt: String(snippet?.publishedAt || ''),
+      views,
+      likes: toNumber(stats.likeCount),
+      comments: toNumber(stats.commentCount),
+      duration,
+      durationText: formatDuration(duration),
+      thumbnailUrl,
+      performanceTag: tag,
+      performanceScore: score,
+    };
+  });
+}
+
+// ==========================================
+// AI VIRAL VIDEO PREDICTOR
+// ==========================================
+
+export interface ViralVideoPrediction {
+  title: string;
+  hook: string;
+  recommendedLength: string;
+  format: string;
+  targetAudienceInterest: string;
+  uploadTiming: string;
+  whyItWillPerform: string;
+}
+
+/** AI generator signature used by getViralVideoPredictions (matches the bot's cascade). */
+export type AiGeneratorFn = (prompt: string, model?: string, systemPromptSuffix?: string) => Promise<string | null>;
+
+/**
+ * Generates 3-5 high-potential viral video concepts for the tenant's channel
+ * by passing channel niche, top-performing video themes, and traffic sources
+ * through the AI failover cascade. Returns a structured array on success, or
+ * null when the AI cascade cannot fulfil the request (the caller should degrade).
+ */
+export async function getViralVideoPredictions(
+  credentials: YouTubeCredentials | string,
+  aiGenerator: AiGeneratorFn,
+  modelName?: string,
+): Promise<ViralVideoPrediction[] | null> {
+  // Gather supporting context (token is cached per refresh token — safe to parallelise).
+  const [stats, videoHistory, seoContext] = await Promise.all([
+    getChannelStatsAndAudit(credentials),
+    getRecentVideoHistory(credentials, 15),
+    getChannelSeoContext(credentials),
+  ]);
+
+  // Analytics traffic sources are best-effort (scope may be missing).
+  let analytics: ChannelAnalytics | null = null;
+  try { analytics = await getChannelAnalytics(credentials); } catch { analytics = null; }
+
+  const sortedByViews = [...videoHistory].sort((a, b) => b.views - a.views);
+  const topPerformers = sortedByViews.slice(0, 5);
+  const recentVideos = videoHistory.slice(0, 10);
+  const trafficSources = analytics?.trafficSources
+    ? analytics.trafficSources.map((ts) => `${ts.label} (${formatCompactNumber(ts.views)} views)`).join(', ')
+    : 'data unavailable';
+
+  const prompt = [
+    'You are an elite YouTube growth strategist. Analyze this channel\'s content history and performance data, then generate 3-5 high-potential viral video concepts that will maximize views, watch time, and click-through rate. Return ONLY valid JSON (no markdown fences) with this exact shape:',
+    '{"concepts":[',
+    '{"title":"Proposed video title that grabs attention (max 70 chars)","hook":"The viral hook - first 15 seconds that will stop the scroll","recommendedLength":"e.g. \'8-10 min long-form\' or \'Short (<60s)\'","format":"e.g. \'long-form tutorial\' or \'Short\'","targetAudienceInterest":"What specific need/curiosity this taps into and why the channel\'s audience will engage","uploadTiming":"Best day/time to post based on audience patterns","whyItWillPerform":"Why this concept will outperform the channel\'s current average"},',
+    ']}',
+    '',
+    `CHANNEL: ${stats.title} (${stats.customUrl || 'n/a'})`,
+    `Niche/Description: ${(stats.description || 'n/a').slice(0, 500)}`,
+    `Channel keywords: ${seoContext.keywords.join(', ') || 'none'}`,
+    `Stats: ${stats.subscriberCountHidden ? 'subscribers hidden' : formatCompactNumber(stats.subscriberCount || 0)} subscribers · ${formatCompactNumber(stats.totalViews)} total views · ${formatCompactNumber(stats.videoCount)} videos`,
+    '',
+    'TOP-PERFORMING VIDEOS (by views):',
+    topPerformers.map((v) => `- "${v.title}" — ${formatCompactNumber(v.views)} views, ${v.performanceTag} ${v.publishedAt}`).join('\n'),
+    '',
+    'RECENT VIDEOS:',
+    recentVideos.map((v) => `- "${v.title}" — ${formatCompactNumber(v.views)} views (${v.durationText}) ${v.performanceTag}`).join('\n'),
+    '',
+    'TRAFFIC SOURCES:',
+    trafficSources,
+  ].join('\n');
+
+  const aiText = await aiGenerator(prompt, modelName);
+  if (!aiText || !aiText.trim()) return null;
+
+  // Tolerant JSON extraction (strips fences / prose).
+  const fenced = aiText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced ? fenced[1] : aiText).trim();
+
+  let concepts: any[] = [];
+  // Try array format first.
+  const arrStart = candidate.indexOf('[');
+  const arrEnd = candidate.lastIndexOf(']');
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    try {
+      const parsed = JSON.parse(candidate.slice(arrStart, arrEnd + 1));
+      if (Array.isArray(parsed)) concepts = parsed;
+    } catch { /* fall through to object format */ }
+  }
+  // Try object format { "concepts": [...] }.
+  if (!concepts.length) {
+    const objStart = candidate.indexOf('{');
+    const objEnd = candidate.lastIndexOf('}');
+    if (objStart !== -1 && objEnd > objStart) {
+      try {
+        const parsed = JSON.parse(candidate.slice(objStart, objEnd + 1));
+        if (parsed && Array.isArray((parsed as any).concepts)) concepts = (parsed as any).concepts;
+        else if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) concepts = [parsed];
+      } catch { /* fall through */ }
+    }
+  }
+
+  if (!concepts.length) return null;
+
+  return concepts
+    .filter((c: any) => c && typeof c === 'object')
+    .map((c: any) => ({
+      title: String(c.title || '').trim(),
+      hook: String(c.hook || '').trim(),
+      recommendedLength: String(c.recommendedLength || '').trim(),
+      format: String(c.format || '').trim(),
+      targetAudienceInterest: String(c.targetAudienceInterest || '').trim(),
+      uploadTiming: String(c.uploadTiming || '').trim(),
+      whyItWillPerform: String(c.whyItWillPerform || '').trim(),
+    }))
+    .filter((p) => p.title || p.hook)
+    .slice(0, 5);
 }
 

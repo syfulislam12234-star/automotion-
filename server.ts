@@ -25,6 +25,10 @@ import { uploadYouTubeVideo } from './server/youtubeService';
 import {
   getChannelStatsAndAudit,
   getChannelAnalytics,
+  getRecentVideoHistory,
+  getViralVideoPredictions,
+  type ViralVideoPrediction,
+  type AiGeneratorFn,
   extractYouTubeCredentials,
   YouTubeAnalyticsError,
 } from './server/youtubeAnalyticsService';
@@ -2357,10 +2361,125 @@ async function startServer() {
     })();
   };
 
-  // Get authenticated user's exact real-time YouTube metrics for the Studio Dashboard.
+    // Get authenticated user's exact real-time YouTube metrics for the Studio Dashboard.
   app.get('/api/youtube/analytics', handleYouTubeAnalyticsRequest);
   // Alias kept for the dashboard client contract (studio-analytics).
   app.get('/api/youtube/studio-analytics', handleYouTubeAnalyticsRequest);
+
+  // ==========================================
+  // YOUTUBE STUDIO HISTORY & VIRAL PREDICTIONS (WEB APP DASHBOARD)
+  // ==========================================
+
+  /** 60s per-user cache for the studio-history endpoint. */
+  const youtubeHistoryRouteCache = new Map<string, { fetchedAt: number; payload: any }>();
+  const YOUTUBE_HISTORY_CACHE_MS = 60_000;
+
+  const handleYouTubeHistoryRequest = (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const authHeader = req.headers.authorization;
+        const sessionUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+        if (!sessionUser) {
+          return res.status(401).json({ success: false, message: 'Authentication required. Sign in to load your YouTube video history.' });
+        }
+        const savedConfig = (ServerDatabase.getBotConfig(sessionUser.id)?.config
+          || ServerDatabase.getBotConfig(sessionUser.email)?.config
+          || null) as unknown as Record<string, unknown> | null;
+        const credentials = extractYouTubeCredentials(savedConfig);
+        if (!credentials) {
+          return res.json({
+            success: true,
+            connected: false,
+            message: 'YouTube is not connected yet. Add your OAuth credentials in Config Panel → YouTube Studio tab.',
+          });
+        }
+        const now = Date.now();
+        const cached = youtubeHistoryRouteCache.get(sessionUser.id);
+        if (cached && now - cached.fetchedAt < YOUTUBE_HISTORY_CACHE_MS) {
+          return res.json(cached.payload);
+        }
+        const limit = Math.min(Math.max(parseInt(String(req.query.limit || '10')) || 10, 1), 50);
+        const recentVideos = await getRecentVideoHistory(credentials, limit);
+        const payload = {
+          success: true,
+          connected: true,
+          recentVideos,
+          count: recentVideos.length,
+          generatedAt: new Date().toISOString(),
+        };
+        youtubeHistoryRouteCache.set(sessionUser.id, { fetchedAt: now, payload });
+        return res.json(payload);
+      } catch (error: any) {
+        const authorizationIssue = error instanceof YouTubeAnalyticsError ? error.authorizationIssue : false;
+        console.warn('[YouTube History Route] Failed:', error?.message || error);
+        return res.status(authorizationIssue ? 401 : 502).json({
+          success: false,
+          connected: true,
+          message: String(error?.message || 'YouTube video history temporarily unavailable.'),
+        });
+      }
+    })();
+  };
+
+  /** 60s per-user cache for the viral-predictions endpoint. */
+  const youtubeViralRouteCache = new Map<string, { fetchedAt: number; payload: any }>();
+  const YOUTUBE_VIRAL_CACHE_MS = 60_000;
+
+  const handleYouTubeViralRequest = (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const authHeader = req.headers.authorization;
+        const sessionUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+        if (!sessionUser) {
+          return res.status(401).json({ success: false, message: 'Authentication required. Sign in to load viral predictions.' });
+        }
+        const savedConfig = (ServerDatabase.getBotConfig(sessionUser.id)?.config
+          || ServerDatabase.getBotConfig(sessionUser.email)?.config
+          || null) as unknown as Record<string, unknown> | null;
+        const credentials = extractYouTubeCredentials(savedConfig);
+        if (!credentials) {
+          return res.json({
+            success: true,
+            connected: false,
+            message: 'YouTube is not connected yet. Add your OAuth credentials in Config Panel → YouTube Studio tab.',
+          });
+        }
+        const now = Date.now();
+        const cached = youtubeViralRouteCache.get(sessionUser.id);
+        if (cached && now - cached.fetchedAt < YOUTUBE_VIRAL_CACHE_MS) {
+          return res.json(cached.payload);
+        }
+        // Adapt the configured AI cascade to the AiGeneratorFn signature.
+        const aiGenerator: AiGeneratorFn = async (prompt, model) => {
+          const result = await generateConfiguredProviderText([{ role: 'user', content: prompt }], model);
+          return result?.text || null;
+        };
+        const predictions = await getViralVideoPredictions(credentials, aiGenerator);
+        const payload = {
+          success: true,
+          connected: true,
+          predictions: predictions || [],
+          count: predictions?.length || 0,
+          generatedAt: new Date().toISOString(),
+        };
+        youtubeViralRouteCache.set(sessionUser.id, { fetchedAt: now, payload });
+        return res.json(payload);
+      } catch (error: any) {
+        const authorizationIssue = error instanceof YouTubeAnalyticsError ? error.authorizationIssue : false;
+        console.warn('[YouTube Viral Route] Failed:', error?.message || error);
+        return res.status(authorizationIssue ? 401 : 502).json({
+          success: false,
+          connected: true,
+          message: String(error?.message || 'Viral predictions temporarily unavailable.'),
+        });
+      }
+    })();
+  };
+
+  // Get authenticated user's recent video history for the Studio Dashboard.
+  app.get('/api/youtube/studio-history', handleYouTubeHistoryRequest);
+  // Get authenticated user's AI viral video predictions for the Studio Dashboard.
+  app.get('/api/youtube/viral-predictions', handleYouTubeViralRequest);
 
   // Get User's Bot Configuration from Server DB
   app.get('/api/user/config', (req, res) => {

@@ -463,6 +463,7 @@ def yt_check_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📤 Upload Video", callback_data="menu:upload"),
+            InlineKeyboardButton("🔮 Viral Ideas", callback_data="yt:viral"),
             InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
         ],
     ])
@@ -477,6 +478,23 @@ def yt_seo_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🔥 Regenerate SEO", callback_data="yt:seo"),
+            InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+def yt_viral_keyboard() -> InlineKeyboardMarkup:
+    """Quick actions attached to the /yt_viral predictions report."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📤 Use for New Upload", callback_data="menu:upload"),
+            InlineKeyboardButton("📊 Video History", callback_data="yt:analytics"),
+        ],
+        [
+            InlineKeyboardButton("🔁 Regenerate Ideas", callback_data="yt:viral"),
+            InlineKeyboardButton("🔥 AI SEO Boost", callback_data="yt:seo"),
+        ],
+        [
             InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
         ],
     ])
@@ -787,7 +805,105 @@ async def fetch_channel_seo_context() -> dict:
         "videoCount": int(float(stats.get("videoCount") or 0)),
         "keywords": keywords,
         "latestVideos": latest_videos,
-    }
+        }
+
+
+def _format_iso_duration(iso8601: str) -> str:
+    """PT1H2M3S -> 'H:MM:SS' or 'MM:SS'."""
+    if not iso8601:
+        return ""
+    match = re.match(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", iso8601, re.IGNORECASE)
+    if not match:
+        return ""
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes}:{seconds:02d}"
+
+
+async def fetch_recent_video_history(limit: int = 10) -> List[Dict[str, object]]:
+    """Data API v3: channel uploads playlist -> hydrated video metadata + performance score."""
+    token = await _youtube_access_token()
+    base = "https://www.googleapis.com/youtube/v3"
+    channel_id = str(OWNER_SETTINGS.get("youtubeChannelId") or "").strip()
+    channel_url = (
+        f"{base}/channels?part=snippet,statistics,contentDetails,status"
+        + (f"&id={channel_id}" if channel_id else "&mine=true")
+    )
+    data = await _yt_get_json(channel_url, token)
+    items = data.get("items") or []
+    if not items:
+        raise RuntimeError("No YouTube channel found for these credentials.")
+    channel = items[0]
+    uploads_playlist = ((channel.get("contentDetails", {}) or {}).get("relatedPlaylists", {}) or {}).get("uploads", "")
+    if not uploads_playlist:
+        return []
+
+    page_size = min(max(limit, 1), 50)
+    playlist_url = f"{base}/playlistItems?part=contentDetails&playlistId={uploads_playlist}&maxResults={page_size}"
+    playlist_data = await _yt_get_json(playlist_url, token)
+    video_ids = [
+        str(item.get("contentDetails", {}).get("videoId", ""))
+        for item in (playlist_data.get("items") or [])
+        if item.get("contentDetails")
+    ]
+    video_ids = [vid for vid in video_ids if vid]
+    if not video_ids:
+        return []
+
+    details_url = f"{base}/videos?part=snippet,statistics,contentDetails&id=" + ",".join(video_ids)
+    details_data = await _yt_get_json(details_url, token)
+    raw_items = (details_data.get("items") or [])[:]
+
+    # Channel average views for performance scoring.
+    avg_views = 0.0
+    for item in raw_items:
+        item_stats = item.get("statistics", {}) or {}
+        avg_views += float(item_stats.get("viewCount") or 0)
+    avg_views = avg_views / len(raw_items) if raw_items else 0.0
+
+    result: List[Dict[str, object]] = []
+    for item in raw_items:
+        snippet = item.get("snippet", {}) or {}
+        item_stats = item.get("statistics", {}) or {}
+        content_det = item.get("contentDetails", {}) or {}
+        iso_dur = str(content_det.get("duration", "") or "")
+        views = int(float(item_stats.get("viewCount") or 0))
+        duration_text = _format_iso_duration(iso_dur)
+
+        if avg_views > 0:
+            ratio = views / avg_views
+            if ratio >= 1.5:
+                tag = "🔥 High"
+            elif ratio <= 0.5:
+                tag = "📉 Low"
+            else:
+                tag = "📊 Normal"
+            score = max(0, min(100, round((views / avg_views) * 50)))
+        else:
+            tag = "📊 Normal"
+            score = 50
+
+        thumbnails = item.get("snippet", {}).get("thumbnails", {}) or {}
+        thumb_url = (((thumbnails.get("high") or {}).get("url", ""))
+                     or (thumbnails.get("medium", {}) or {}).get("url", "")
+                     or (thumbnails.get("default", {}) or {}).get("url", ""))
+        result.append({
+            "id": str(item.get("id", "")),
+            "title": str(snippet.get("title", "") or ""),
+            "publishedAt": str(snippet.get("publishedAt", "") or ""),
+            "views": views,
+            "likes": int(float(item_stats.get("likeCount") or 0)) if item_stats.get("likeCount") else 0,
+            "comments": int(float(item_stats.get("commentCount") or 0)) if item_stats.get("commentCount") else 0,
+            "duration": iso_dur,
+            "durationText": duration_text,
+            "thumbnailUrl": thumb_url,
+            "performanceTag": tag,
+            "performanceScore": score,
+        })
+    return result
 
 
 def welcome_menu_text() -> str:
@@ -1043,6 +1159,155 @@ async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await safe_reply(update, "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=yt_seo_keyboard())
 
 
+async def fetch_viral_video_predictions() -> List[Dict[str, object]]:
+    """AI-powered viral video concept predictions using the multi-tier AI cascade."""
+    video_history = await fetch_recent_video_history(15)
+    channel_stats = await fetch_channel_stats_and_audit()
+    try:
+        analytics = await fetch_channel_analytics()
+    except Exception:
+        analytics = None
+
+    sorted_by_views = sorted(video_history, key=lambda v: int(v.get("views") or 0), reverse=True)
+    top_performers = sorted_by_views[:5]
+    recent = video_history[:10]
+    traffic = (analytics or {}).get("trafficSources") or [] if isinstance(analytics, dict) else []
+    traffic_str = ", ".join(f"{t.get('label', t.get('source', ''))} ({_fmt_compact(t.get('views', 0))} views)" for t in traffic) or "data unavailable"
+
+    title = channel_stats.get("title", "Unknown channel") if channel_stats else "your channel"
+    custom_url = channel_stats.get("customUrl", "n/a") if channel_stats else "n/a"
+    description = str(channel_stats.get("description", "") or "n/a")[:500] if channel_stats else "n/a"
+    subscriber_count = channel_stats.get("subscriberCount") if channel_stats else None
+    total_views = channel_stats.get("totalViews", 0) if channel_stats else 0
+    video_count = channel_stats.get("videoCount", 0) if channel_stats else 0
+    sub_text = "subscribers hidden" if channel_stats.get("subscriberCountHidden") else _fmt_compact(subscriber_count or 0)
+
+    prompt = (
+        "You are an elite YouTube growth strategist. Analyze this channel's content history "
+        "and performance data, then generate 3-5 high-potential viral video concepts that will "
+        "maximize views, watch time, and click-through rate. Return ONLY valid JSON (no markdown "
+        'fences) with this exact shape: {"concepts":[{'
+        '"title":"Proposed video title (max 70 chars)","hook":"The viral hook - first 15 seconds",'
+        '"recommendedLength":"e.g. \'8-10 min long-form\' or \'Short (<60s)\'","format":"e.g. \'long-form tutorial\' or \'Short\'",'
+        '"targetAudienceInterest":"What need/curiosity this taps into and why audience will engage",'
+        '"uploadTiming":"Best day/time to post","whyItWillPerform":"Why it will outperform current average"}]}\n\n'
+        f"CHANNEL: {title} ({custom_url})\n"
+        f"Niche/Description: {description}\n"
+        f"Stats: {sub_text} subscribers, {_fmt_compact(total_views)} total views, {video_count} videos\n"
+        "TOP-PERFORMING VIDEOS:\n" + "\n".join(f'- "{v.get("title", "")}" — {_fmt_compact(v.get("views", 0))} views, {v.get("performanceTag", "")} {v.get("publishedAt", "")}' for v in top_performers) + "\n"
+        "RECENT VIDEOS:\n" + "\n".join(f'- "{v.get("title", "")}" — {_fmt_compact(v.get("views", 0))} views ({v.get("durationText", "")}) {v.get("performanceTag", "")}' for v in recent) + "\n"
+        f"TRAFFIC SOURCES: {traffic_str}"
+    )
+
+    ai_text = await generate_ai_reply(0, prompt)
+    if not ai_text or not ai_text.strip():
+        return []
+
+    candidate = ai_text.strip()
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", candidate, re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1)
+
+    concepts: List[Dict[str, object]] = []
+    arr_start = candidate.find("[")
+    arr_end = candidate.rfind("]")
+    if arr_start != -1 and arr_end > arr_start:
+        try:
+            parsed = json.loads(candidate[arr_start:arr_end + 1])
+            if isinstance(parsed, list):
+                concepts = parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    if not concepts:
+        obj_start = candidate.find("{")
+        obj_end = candidate.rfind("}")
+        if obj_start != -1 and obj_end > obj_start:
+            try:
+                parsed = json.loads(candidate[obj_start:obj_end + 1])
+                if isinstance(parsed, dict) and isinstance(parsed.get("concepts"), list):
+                    concepts = parsed["concepts"]
+                elif isinstance(parsed, dict) and parsed:
+                    concepts = [parsed]
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    result = []
+    for concept in concepts:
+        if not isinstance(concept, dict):
+            continue
+        entry = {
+            "title": str(concept.get("title", "")).strip(),
+            "hook": str(concept.get("hook", "")).strip(),
+            "recommendedLength": str(concept.get("recommendedLength", "")).strip(),
+            "format": str(concept.get("format", "")).strip(),
+            "targetAudienceInterest": str(concept.get("targetAudienceInterest", "")).strip(),
+            "uploadTiming": str(concept.get("uploadTiming", "")).strip(),
+            "whyItWillPerform": str(concept.get("whyItWillPerform", "")).strip(),
+        }
+        if entry["title"] or entry["hook"]:
+            result.append(entry)
+        return result[:5]
+
+
+def _format_viral_report(channel_name: str, predictions: List[Dict[str, object]], video_count: int) -> str:
+    """Format the AI viral video prediction report for /yt_viral (HTML parse mode)."""
+    lines = [
+        "🔮 <b>AI Viral Video Predictions</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"📺 <b>{html.escape(str(channel_name))}</b> — based on {video_count} recent videos",
+        "",
+    ]
+    for index, prediction in enumerate(predictions, start=1):
+        lines.append(f"🔥 <b>Concept {index}: {html.escape(str(prediction.get('title', '')))}</b>")
+        lines.append(f"🎣 <b>Hook:</b> {html.escape(str(prediction.get('hook', '')))}")
+        lines.append(f"? <b>Length:</b> {html.escape(str(prediction.get('recommendedLength', '')))} ({html.escape(str(prediction.get('format', '')))})")
+        lines.append(f"👥 <b>Audience:</b> {html.escape(str(prediction.get('targetAudienceInterest', '')))}")
+        lines.append(f"📅 <b>Timing:</b> {html.escape(str(prediction.get('uploadTiming', '')))}")
+        lines.append(f"💡 <b>Why:</b> {html.escape(str(prediction.get('whyItWillPerform', '')))}")
+        lines.append("")
+    lines.append("⚡ Tip: /yt_seo for channel SEO, or /upload to publish with viral AI SEO.")
+    return "\n".join(lines)
+
+
+async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /yt_viral — AI-powered viral video concept predictions for the channel."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    if not OWNER_SETTINGS.get("youtubeRefreshToken"):
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
+        return
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    try:
+        stats = await fetch_channel_stats_and_audit()
+        video_history = await fetch_recent_video_history(15)
+        predictions = await fetch_viral_video_predictions()
+        if not predictions:
+            await safe_reply(
+                update,
+                "⚠️ <b>AI could not generate viral ideas.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "The channel may not have enough video data yet. Upload a few videos and try /yt_viral again.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        await safe_reply(
+            update,
+            _format_viral_report(stats.get("title", "your channel"), predictions, len(video_history)),
+            parse_mode=ParseMode.HTML,
+            reply_markup=yt_viral_keyboard(),
+        )
+    except Exception as err:
+        logger.warning("⚠️ /yt_viral failed: %s", err)
+        await safe_reply(
+            update,
+            f"⚠️ <b>Could not generate viral predictions.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n<code>{html.escape(str(err))}</code>\n\nCheck your OAuth credentials and try /yt_viral again.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /settings — interactive configuration options (Auto-Upload ON/OFF)."""
     if not update.effective_message:
@@ -1096,6 +1361,8 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await yt_check_command(update, context)
     elif data == "yt:seo":
         await yt_seo_command(update, context)
+    elif data == "yt:viral":
+        await yt_viral_command(update, context)
     else:  # menu:home and any unknown payload
         await context.bot.send_message(chat_id=chat_id, text=welcome_menu_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
@@ -1121,7 +1388,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• <code>/id</code> - Show your Chat ID and user metadata\n\n"
         "🔹 <b>YouTube Studio:</b>\n"
         "• <code>/yt_check</code> or <code>/analytics</code> - Live channel analytics & health audit\n"
-        "• <code>/yt_seo</code> - AI channel keywords, viral bio, tags & SEO plan\n"
+                "• <code>/yt_seo</code> - AI channel keywords, viral bio, tags & SEO plan\n"
+        "• <code>/yt_viral</code> - AI-powered viral video concept predictions\n"
         "• <code>/upload</code> - Publish a video with viral AI SEO\n\n"
         "💡 <i>Tip: Reply to any message with <code>/summarize</code> or <code>/translate Spanish</code>!</i>"
     )
@@ -1889,6 +2157,7 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler("youtube", youtube_command))
     app.add_handler(CommandHandler(["yt_check", "analytics"], yt_check_command))
     app.add_handler(CommandHandler("yt_seo", yt_seo_command))
+    app.add_handler(CommandHandler("yt_viral", yt_viral_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CallbackQueryHandler(menu_callback_handler))
 
