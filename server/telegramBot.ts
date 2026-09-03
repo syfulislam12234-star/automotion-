@@ -1,5 +1,14 @@
 import { BotConfig } from '../src/types';
 import { uploadYouTubeVideo } from './youtubeService';
+import {
+  getChannelStatsAndAudit,
+  getChannelAnalytics,
+  getChannelSeoContext,
+  extractYouTubeCredentials,
+  YouTubeAnalyticsError,
+  formatCompactNumber,
+  type YouTubeCredentials,
+} from './youtubeAnalyticsService';
 import { GlobalApiKeyStore } from './keyStore';
 import { FailoverEngine } from './aiFailoverEngine';
 import { StoreKnowledgeEngine } from './aiKnowledgeEngine';
@@ -217,6 +226,227 @@ export class TelegramBotService {
     return lines.join('\n');
   }
 
+  /**
+   * Multi-tenant YouTube credential resolution: reads ONLY this user's saved OAuth
+   * credentials (never another tenant's). Returns null when the user has not
+   * connected a channel yet.
+   */
+  private static resolveTenantYouTubeCredentials(config: BotConfig | null): YouTubeCredentials | string | null {
+    const extracted = extractYouTubeCredentials(config as unknown as Record<string, unknown> | null);
+    if (!extracted) return null;
+    // Client credentials missing → pass the bare refresh token so the analytics
+    // service can fall back to the deployment's OAuth client. The refresh token
+    // itself remains the isolation boundary (access tokens cache per refresh token).
+    if (extracted.clientId && extracted.clientSecret) return extracted;
+    return extracted.refreshToken;
+  }
+
+  /** Inline quick actions attached to the /yt_check analytics report. */
+  private static buildYtCheckKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '🔄 Refresh', callback_data: 'yt:analytics' },
+          { text: '🔥 AI SEO Boost', callback_data: 'yt:seo' },
+        ],
+        [
+          { text: '📤 Upload Video', callback_data: 'menu:upload' },
+          { text: '⬅️ Main Menu', callback_data: 'menu:home' },
+        ],
+      ],
+    };
+  }
+
+  /** Inline quick actions attached to the /yt_seo AI recommendations. */
+  private static buildSeoActionsKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '📤 Upload with this SEO', callback_data: 'menu:upload' },
+          { text: '📊 View Analytics', callback_data: 'yt:analytics' },
+        ],
+        [
+          { text: '🔥 Regenerate SEO', callback_data: 'yt:seo' },
+          { text: '⬅️ Main Menu', callback_data: 'menu:home' },
+        ],
+      ],
+    };
+  }
+
+  /** Not-connected guide shown instead of analytics when the tenant has no OAuth tokens. */
+  private static buildYtConnectGuide(): string {
+    return [
+      '**📺 YouTube Not Connected Yet**',
+      '',
+      'To unlock live analytics and AI SEO I need your YouTube OAuth credentials:',
+      '',
+      '1️⃣ Open https://console.cloud.google.com → enable **YouTube Data API v3**',
+      '2️⃣ OAuth consent screen → External → add your Google account as a Test user',
+      '3️⃣ Credentials → **OAuth Client ID** → Web application → copy ID + Secret',
+      '4️⃣ Generate a **Refresh Token** (the Google OAuth 2.0 Playground works great)',
+      '5️⃣ Web App → Config Panel → YouTube Studio tab → paste → Save',
+      '',
+      'Then send /yt_check again for your live channel report! ✨',
+    ].join('\n');
+  }
+
+  /** Emojis for a single traffic source id (falls back to a generic bar). */
+  private static trafficSourceEmoji(source: string): string {
+    const emojiMap: Record<string, string> = {
+      YT_SEARCH: '🔎', SUBSCRIBER: '👥', RELATED_VIDEO: '🔗', YT_CHANNEL: '📺',
+      NOTIFICATION: '🔔', PLAYLIST: '🎧', EXT_URL: '🌐', SHORTS: '⚡',
+      ADVERTISING: '💰', YT_OTHER_PAGE: '📄', NO_LINK_OTHER: '🔗', HASHTAGS: '#️⃣',
+    };
+    return emojiMap[source] || '📈';
+  }
+
+
+  /** Formats the full /yt_check channel analytics + health report. */
+  private static formatYtCheckReport(stats: import('./youtubeAnalyticsService').ChannelStatsAndAudit, analytics: import('./youtubeAnalyticsService').ChannelAnalytics): string {
+    const lines: string[] = [
+      '**📊 YouTube Channel Analytics & Health**',
+      '',
+      `📺 **${TelegramBotService.escapeHtml(stats.title)}**${stats.customUrl ? ` (${TelegramBotService.escapeHtml(stats.customUrl)})` : ''}`,
+      '',
+      '**👀 Performance**',
+      `• Total Views: **${formatCompactNumber(stats.totalViews)}**`,
+      `• Impressions (window): **${analytics.impressions === null ? 'N/A' : formatCompactNumber(analytics.impressions)}**`,
+      `• Impression CTR: **${analytics.impressionCtr === null ? 'N/A' : `${analytics.impressionCtr.toFixed(2)}%`}**`,
+      `• Watch Time: **${formatCompactNumber(Math.round(analytics.watchTimeMinutes))} min** (~${(analytics.watchTimeMinutes / 60).toFixed(1)} hrs)`,
+      `• Avg. View Duration: **${Math.round(analytics.averageViewDurationSeconds)}s**`,
+      `• Subscribers: **${stats.subscriberCountHidden ? 'hidden' : formatCompactNumber(stats.subscriberCount || 0)}**`,
+      `• Videos: **${formatCompactNumber(stats.videoCount)}**`,
+      '',
+      '**🩺 Channel Health**',
+      `• Status: ${stats.audit.healthEmoji} **${stats.audit.health === 'clean' ? 'Clean — no restriction signals' : stats.audit.health === 'warning' ? 'Warning — check audit notes' : 'Restricted'}**`,
+      `• Community guideline strikes: **${stats.audit.communityGuidelineStrikes}**`,
+      `• Copyright status: **${TelegramBotService.escapeHtml(stats.audit.copyrightStatus)}**`,
+    ];
+    if (stats.audit.auditNotes.length) {
+      lines.push(`• Notes: ${stats.audit.auditNotes.map((note) => TelegramBotService.escapeHtml(note)).join(' · ')}`);
+    }
+    if (analytics.trafficSources.length) {
+      lines.push('', '**🚦 Top Traffic Sources**');
+      for (const source of analytics.trafficSources.slice(0, 5)) {
+        lines.push(`${TelegramBotService.trafficSourceEmoji(source.source)} ${TelegramBotService.escapeHtml(source.label)}: **${formatCompactNumber(source.views)}** views`);
+      }
+    }
+    lines.push('', `📅 Window: ${analytics.startDate} → ${analytics.endDate}`);
+    if (analytics.note) lines.push(`ℹ️ ${TelegramBotService.escapeHtml(analytics.note)}`);
+    lines.push('', '💡 Tip: run /yt_seo to let the AI optimize your channel metadata.');
+    return lines.join('\n');
+  }
+
+  /** /yt_check (alias /analytics) — live channel stats, impressions, CTR and security audit. */
+  private static async handleYtCheckCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
+    const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
+    if (!credentials) {
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
+      return;
+    }
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '📊 লাইভ YouTube অ্যানালিটিক্স আনা হচ্ছে... এক মুহূর্ত!');
+    try {
+      const [stats, analytics] = await Promise.all([
+        getChannelStatsAndAudit(credentials),
+        getChannelAnalytics(credentials),
+      ]);
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.formatYtCheckReport(stats, analytics), TelegramBotService.buildYtCheckKeyboard());
+    } catch (error: any) {
+      const authorizationIssue = error instanceof YouTubeAnalyticsError && error.authorizationIssue;
+      const message = authorizationIssue
+        ? '🔐 YouTube OAuth token টি expired বা invalid। অনুগ্রহ করে Web App → Config Panel → YouTube Studio-তে একটি নতুন Refresh Token যোগ করুন, তারপর আবার /yt_check পাঠান।'
+        : `⚠️ YouTube analytics আনতে ব্যর্থ: ${TelegramBotService.escapeHtml(String(error?.message || error))}`;
+      await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
+    }
+  }
+
+  /** Tolerant JSON extraction from an AI response (strips fences / prose). */
+  private static extractJsonObject(raw: string): Record<string, any> | null {
+    if (!raw) return null;
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = (fenced ? fenced[1] : raw).trim();
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start === -1 || end <= start) return null;
+    try {
+      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** /yt_seo — AI channel SEO audit: keywords, viral bio, tags and structural recommendations. */
+  private static async handleYtSeoCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
+    const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
+    if (!credentials) {
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
+      return;
+    }
+    if (!TelegramBotService.aiGenerator) {
+      await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /yt_seo again.');
+      return;
+    }
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '🔥 AI SEO অডিট চলছে... চ্যানেল স্নিপেট ও সর্বশেষ ভিডিও বিশ্লেষণ করা হচ্ছে!');
+    try {
+      const context = await getChannelSeoContext(credentials);
+      const latest = context.latestVideos.slice(0, 5).map((video) => ({
+        title: video.title, publishedAt: video.publishedAt, tags: video.tags.slice(0, 10), views: video.viewCount,
+      }));
+      const seoPrompt = [
+        'You are an elite YouTube growth strategist. Audit this channel and return ONLY valid JSON (no markdown fences) with this exact shape:',
+        '{"keywords":["10 high-converting channel keywords"],"bio":"viral channel description/bio (2-4 short paragraphs, hooks + value + CTA, include hashtags)","tags":["15 ranking tags mixing broad and long-tail"],"recommendations":["5 structural SEO recommendations (playlists, titles formula, upload cadence, shorts strategy, community tab)"]}',
+        '',
+        'CHANNEL CONTEXT:',
+        `Name: ${context.title}`,
+        `Handle: ${context.customUrl || 'n/a'}`,
+        `Current description: ${(context.description || 'empty').slice(0, 600)}`,
+        `Current channel keywords: ${context.keywords.join(', ') || 'none set'}`,
+        `Country: ${context.country || 'n/a'} | Created: ${context.publishedAt}`,
+        `Stats: ${context.subscriberCount ?? '?'} subscribers, ${context.totalViews} total views, ${context.videoCount} videos`,
+        `Latest videos: ${JSON.stringify(latest)}`,
+      ].join('\n');
+      const aiText = await TelegramBotService.aiGenerator(seoPrompt, effectiveConfig?.modelName || undefined);
+      if (!aiText || !aiText.trim()) throw new Error('AI engine returned an empty SEO plan.');
+      const parsed = TelegramBotService.extractJsonObject(aiText);
+      const lines: string[] = [
+        '**🔥 AI Channel SEO Recommendations**',
+        '',
+        `📺 **${TelegramBotService.escapeHtml(context.title)}** — ${formatCompactNumber(context.subscriberCount || 0)} subs · ${formatCompactNumber(context.videoCount)} videos`,
+      ];
+      if (parsed) {
+        const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.map(String).filter(Boolean) : [];
+        const tags: string[] = Array.isArray(parsed.tags) ? parsed.tags.map(String).filter(Boolean) : [];
+        const recommendations: string[] = Array.isArray(parsed.recommendations) ? parsed.recommendations.map(String).filter(Boolean) : [];
+        if (keywords.length) {
+          lines.push('', '**🎯 High-Converting Keywords**', keywords.map((keyword) => `• ${TelegramBotService.escapeHtml(keyword)}`).join('\n'));
+        }
+        if (parsed.bio) {
+          lines.push('', '**✍️ Viral Bio / Description**', TelegramBotService.escapeHtml(String(parsed.bio).slice(0, 1200)));
+        }
+        if (tags.length) {
+          lines.push('', '**🏷️ Tag List (copy-paste)**', `\`${tags.map((tag) => String(tag).replace(/[`\\]/g, '')).join('`, `')}\``);
+        }
+        if (recommendations.length) {
+          lines.push('', '**🏗️ Structural SEO Recommendations**', recommendations.map((rec, index) => `${index + 1}. ${TelegramBotService.escapeHtml(rec)}`).join('\n'));
+        }
+      } else {
+        // AI answered in prose — surface it verbatim so the user still gets value.
+        lines.push('', TelegramBotService.escapeHtml(aiText.slice(0, 2500)));
+      }
+      lines.push('', '⚡ Quick actions below — upload with this SEO or view your analytics.');
+      await TelegramBotService.sendMessage(token, chatId, lines.join('\n'), TelegramBotService.buildSeoActionsKeyboard());
+    } catch (error: any) {
+      const authorizationIssue = error instanceof YouTubeAnalyticsError && error.authorizationIssue;
+      const message = authorizationIssue
+        ? '🔐 YouTube OAuth token টি expired বা invalid। Config Panel → YouTube Studio-তে নতুন Refresh Token যোগ করে আবার চেষ্টা করুন।'
+        : `⚠️ AI SEO তৈরি করতে ব্যর্থ: ${TelegramBotService.escapeHtml(String(error?.message || error))}`;
+      await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
+    }
+  }
+
   /** Answers a Telegram callback query (stops the button spinner). */
   private static async answerCallbackQuery(token: string, callbackQueryId: string, text?: string): Promise<void> {
     try {
@@ -264,6 +494,12 @@ export class TelegramBotService {
       case 'menu:settings':
         TelegramBotService.callbackQueryStates.set(String(chatId), { flow: 'settings' });
         await TelegramBotService.sendMessage(token, chatId, '⚙️ **Settings**\n\nTap the toggle to change it:', TelegramBotService.buildSettingsKeyboard(effectiveConfig));
+        return;
+      case 'yt:analytics':
+        await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig);
+        return;
+      case 'yt:seo':
+        await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig);
         return;
       case 'settings:toggle_autoupload': {
         if (effectiveConfig && typeof effectiveConfig === 'object') {
@@ -427,6 +663,8 @@ export class TelegramBotService {
           '/help or /setup — Show this master guide\n' +
           '/status — Live AI engine, provider pool and key status\n' +
           '/upload or /yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
+          '/yt_check or /analytics — Live channel views, impressions, CTR, watch time & health audit\n' +
+          '/yt_seo — AI-generated channel keywords, viral bio, tags & SEO recommendations\n' +
           'Send any text — Chat with the multi-model AI brain (instant failover)\n\n' +
           '**🔑 STEP 1 — ADD AI API KEYS (unlocks AI replies)**\n' +
           '1️⃣ Google Gemini (FREE): open https://aistudio.google.com/app/apikey → sign in → Create API key → copy\n' +
@@ -467,6 +705,18 @@ export class TelegramBotService {
       // /youtube — report the user's connected YouTube OAuth token status (DB-backed config).
       if (command === '/youtube') {
         await TelegramBotService.sendMessage(token, chatId, TelegramBotService.getYoutubeStatusReport(effectiveConfig), TelegramBotService.buildMainMenuKeyboard());
+        return { ok: true };
+      }
+      // /yt_check (alias /analytics) — live channel stats, impressions, CTR and security audit.
+      if (command === '/yt_check' || command === '/analytics') {
+        await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig || null);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // /yt_seo — AI channel SEO audit through the failover AI cascade.
+      if (command === '/yt_seo') {
+        await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig || null);
+        TelegramBotService.lastError = null;
         return { ok: true };
       }
       // /settings — interactive configuration options (Auto-Upload ON/OFF).

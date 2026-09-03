@@ -22,6 +22,12 @@ import { registerCrmRoutes } from './server/crmRoutes';
 import { EdgeTTS } from 'node-edge-tts';
 import nodemailer from 'nodemailer';
 import { uploadYouTubeVideo } from './server/youtubeService';
+import {
+  getChannelStatsAndAudit,
+  getChannelAnalytics,
+  extractYouTubeCredentials,
+  YouTubeAnalyticsError,
+} from './server/youtubeAnalyticsService';
 import { BotConfig } from './src/types';
 
 dotenv.config();
@@ -2264,6 +2270,97 @@ async function startServer() {
       }
     })();
   });
+
+  // ==========================================
+  // YOUTUBE STUDIO ANALYTICS (WEB APP DASHBOARD)
+  // ==========================================
+
+  /** 60s per-user cache so dashboard polling doesn't hammer the YouTube APIs. */
+  const youtubeAnalyticsRouteCache = new Map<string, { fetchedAt: number; payload: any }>();
+  const YOUTUBE_ANALYTICS_CACHE_MS = 60_000;
+
+  const handleYouTubeAnalyticsRequest = (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const authHeader = req.headers.authorization;
+        const sessionUser = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+        if (!sessionUser) {
+          return res.status(401).json({ success: false, message: 'Authentication required. Sign in to load your YouTube analytics.' });
+        }
+        // Multi-tenant isolation: resolve ONLY the authenticated user's saved OAuth tokens.
+        const savedConfig = (ServerDatabase.getBotConfig(sessionUser.id)?.config
+          || ServerDatabase.getBotConfig(sessionUser.email)?.config
+          || null) as unknown as Record<string, unknown> | null;
+        const credentials = extractYouTubeCredentials(savedConfig);
+        if (!credentials) {
+          return res.json({
+            success: true,
+            connected: false,
+            health: { status: 'unknown', emoji: '⚪' },
+            message: 'YouTube is not connected yet. Add your OAuth credentials in Config Panel → YouTube Studio tab.',
+          });
+        }
+        const now = Date.now();
+        const cached = youtubeAnalyticsRouteCache.get(sessionUser.id);
+        if (cached && now - cached.fetchedAt < YOUTUBE_ANALYTICS_CACHE_MS) {
+          return res.json(cached.payload);
+        }
+        const [stats, analytics] = await Promise.all([
+          getChannelStatsAndAudit(credentials),
+          getChannelAnalytics(credentials),
+        ]);
+        const payload = {
+          success: true,
+          connected: true,
+          channel: {
+            id: stats.channelId,
+            title: stats.title,
+            customUrl: stats.customUrl,
+            thumbnailUrl: stats.thumbnailUrl,
+            publishedAt: stats.publishedAt,
+          },
+          metrics: {
+            totalViews: stats.totalViews,
+            subscriberCount: stats.subscriberCount,
+            subscriberCountHidden: stats.subscriberCountHidden,
+            videoCount: stats.videoCount,
+            impressions: analytics.impressions,
+            impressionCtr: analytics.impressionCtr,
+            watchTimeMinutes: analytics.watchTimeMinutes,
+            averageViewDurationSeconds: analytics.averageViewDurationSeconds,
+            analyticsWindow: { startDate: analytics.startDate, endDate: analytics.endDate },
+            trafficSources: analytics.trafficSources,
+          },
+          health: {
+            status: stats.audit.health,
+            emoji: stats.audit.healthEmoji,
+            copyrightStatus: stats.audit.copyrightStatus,
+            communityGuidelineStrikes: stats.audit.communityGuidelineStrikes,
+            privacyStatus: stats.audit.privacyStatus,
+            isLinked: stats.audit.isLinked,
+            notes: stats.audit.auditNotes,
+          },
+          note: analytics.note,
+          generatedAt: new Date().toISOString(),
+        };
+        youtubeAnalyticsRouteCache.set(sessionUser.id, { fetchedAt: now, payload });
+        return res.json(payload);
+      } catch (error: any) {
+        const authorizationIssue = error instanceof YouTubeAnalyticsError ? error.authorizationIssue : false;
+        console.warn('[YouTube Analytics Route] Failed:', error?.message || error);
+        return res.status(authorizationIssue ? 401 : 502).json({
+          success: false,
+          connected: true,
+          message: String(error?.message || 'YouTube analytics temporarily unavailable.'),
+        });
+      }
+    })();
+  };
+
+  // Get authenticated user's exact real-time YouTube metrics for the Studio Dashboard.
+  app.get('/api/youtube/analytics', handleYouTubeAnalyticsRequest);
+  // Alias kept for the dashboard client contract (studio-analytics).
+  app.get('/api/youtube/studio-analytics', handleYouTubeAnalyticsRequest);
 
   // Get User's Bot Configuration from Server DB
   app.get('/api/user/config', (req, res) => {

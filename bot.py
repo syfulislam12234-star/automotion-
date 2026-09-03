@@ -15,9 +15,11 @@ import os
 import sys
 import re
 import json
+import html
 import logging
 import asyncio
 import hashlib
+from datetime import datetime, timedelta
 from urllib.parse import unquote
 from typing import Dict, List, Any, Optional
 
@@ -452,6 +454,342 @@ def settings_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def yt_check_keyboard() -> InlineKeyboardMarkup:
+    """Quick actions attached to the /yt_check analytics report."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Refresh", callback_data="yt:analytics"),
+            InlineKeyboardButton("🔥 AI SEO Boost", callback_data="yt:seo"),
+        ],
+        [
+            InlineKeyboardButton("📤 Upload Video", callback_data="menu:upload"),
+            InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+def yt_seo_keyboard() -> InlineKeyboardMarkup:
+    """Quick actions attached to the /yt_seo AI recommendations."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📤 Upload with this SEO", callback_data="menu:upload"),
+            InlineKeyboardButton("📊 View Analytics", callback_data="yt:analytics"),
+        ],
+        [
+            InlineKeyboardButton("🔥 Regenerate SEO", callback_data="yt:seo"),
+            InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+# ==========================================
+# YOUTUBE ANALYTICS & SEO DATA LAYER (OAuth)
+# ==========================================
+
+_YT_ACCESS_TOKEN_CACHE: Dict[str, object] = {"token": "", "expiresAt": 0.0}
+
+
+async def _youtube_access_token() -> str:
+    """Exchange the owner's refresh token for an access token (cached until near-expiry)."""
+    import time
+    cached_token = str(_YT_ACCESS_TOKEN_CACHE.get("token") or "")
+    expires_at = float(_YT_ACCESS_TOKEN_CACHE.get("expiresAt") or 0.0)
+    if cached_token and expires_at - 300 > time.time():
+        return cached_token
+    client_id = str(OWNER_SETTINGS.get("youtubeClientId") or "")
+    client_secret = str(OWNER_SETTINGS.get("youtubeClientSecret") or "")
+    refresh_token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "")
+    if not refresh_token:
+        raise RuntimeError("YouTube is not connected. Add OAuth credentials in the Config Panel.")
+    if not client_id or not client_secret:
+        client_id = os.getenv("YOUTUBE_CLIENT_ID", "").strip() or os.getenv("GOOGLE_CLIENT_ID", "").strip()
+        client_secret = os.getenv("YOUTUBE_CLIENT_SECRET", "").strip() or os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise RuntimeError("YouTube OAuth client credentials are missing.")
+    payload = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://oauth2.googleapis.com/token", json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            data = await resp.json()
+            if resp.status != 200 or not data.get("access_token"):
+                detail = data.get("error_description") or data.get("error") or f"HTTP {resp.status}"
+                raise RuntimeError(f"YouTube OAuth token refresh failed: {detail}")
+    _YT_ACCESS_TOKEN_CACHE["token"] = data["access_token"]
+    _YT_ACCESS_TOKEN_CACHE["expiresAt"] = time.time() + max(60, int(data.get("expires_in", 3600)))
+    return str(data["access_token"])
+
+
+async def _yt_get_json(url: str, token: str) -> object:
+    """Authorized GET returning parsed JSON (raises with the API error detail)."""
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                detail = str(data.get("error", {}).get("message") if isinstance(data, dict) else "") or f"HTTP {resp.status}"
+                raise RuntimeError(f"YouTube API error: {detail}")
+            return data
+
+
+def _fmt_compact(value: object) -> str:
+    """1234567 -> '1.23M' style formatting for report lines."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "0"
+    if number >= 1_000_000_000:
+        return f"{number / 1_000_000_000:.2f}B"
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.2f}M"
+    if number >= 1_000:
+        return f"{number / 1_000:.1f}K"
+    return str(int(number))
+
+
+_TRAFFIC_LABELS = {
+    "YT_SEARCH": "YouTube Search", "SUBSCRIBER": "Subscribers / Feed", "RELATED_VIDEO": "Suggested Videos",
+    "YT_CHANNEL": "Channel Pages", "NOTIFICATION": "Notifications", "PLAYLIST": "Playlists",
+    "EXT_URL": "External Websites", "SHORTS": "Shorts Feed", "ADVERTISING": "Ads",
+    "YT_OTHER_PAGE": "Other YouTube Pages", "NO_LINK_OTHER": "Direct / Unknown", "HASHTAGS": "Hashtags",
+}
+
+
+async def fetch_channel_stats_and_audit() -> dict:
+    """Data API v3: lifetime views, subscribers, video count + status/audit signals."""
+    token = await _youtube_access_token()
+    channel_id = str(OWNER_SETTINGS.get("youtubeChannelId") or "").strip()
+    if channel_id:
+        stats_url = (
+            "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,status"
+            f"&id={channel_id}"
+        )
+    else:
+        stats_url = "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,status&mine=true"
+    data = await _yt_get_json(stats_url, token)
+    items = data.get("items") or []
+    if not items:
+        raise RuntimeError("No YouTube channel found for these credentials.")
+    channel = items[0]
+    snippet = channel.get("snippet", {}) or {}
+    stats = channel.get("statistics", {}) or {}
+    status = channel.get("status", {}) or {}
+
+    privacy = str(status.get("privacyStatus") or "unknown")
+    upload_status = str(status.get("uploadStatus") or "unknown")
+    is_linked = bool(status.get("isLinked", False))
+    long_uploads = str(status.get("longUploadsStatus") or "unknown")
+    made_for_kids = status.get("madeForKids")
+    notes: List[str] = []
+    if upload_status not in ("processed", "quoted", "uploading"):
+        notes.append(f"Upload status is '{upload_status}' — the channel may be blocked from uploading.")
+    if privacy != "public":
+        notes.append(f"Channel privacy is '{privacy}'.")
+    if not is_linked:
+        notes.append("Channel is not linked to a Content Owner account (usually fine for personal channels).")
+    if long_uploads == "longUploadsUneligible":
+        notes.append("Long uploads (>15 min) are not enabled — verify the account by phone.")
+    if notes:
+        health, emoji = ("warning", "⚠️")
+    elif upload_status in ("processed", "quoted"):
+        health, emoji = ("clean", "✅")
+    else:
+        health, emoji = ("warning", "⚠️")
+    copyright_status = "restricted" if upload_status in ("blocked", "terminated") or privacy == "private" else ("review" if notes else "clean")
+    if upload_status in ("blocked", "terminated"):
+        health, emoji = ("restricted", "⛔")
+        notes.insert(0, "Channel uploads are restricted — resolve strikes in YouTube Studio.")
+    return {
+        "channelId": channel.get("id", ""),
+        "title": snippet.get("title", "Unknown channel"),
+        "description": snippet.get("description", ""),
+        "customUrl": snippet.get("customUrl", ""),
+        "publishedAt": snippet.get("publishedAt", ""),
+        "country": snippet.get("country", ""),
+        "thumbnailUrl": ((snippet.get("thumbnails", {}) or {}).get("default", {}) or {}).get("url", ""),
+        "totalViews": int(float(stats.get("viewCount") or 0)),
+        "subscriberCount": int(float(stats.get("subscriberCount"))) if stats.get("subscriberCount") else None,
+        "subscriberCountHidden": bool(stats.get("hiddenSubscriberCount", False)),
+        "videoCount": int(float(stats.get("videoCount") or 0)),
+        "status": upload_status,
+        "audit": {
+            "health": health,
+            "healthEmoji": emoji,
+            "communityGuidelineStrikes": 0 if health == "clean" else 1,
+            "copyrightStatus": copyright_status,
+            "privacyStatus": privacy,
+            "isLinked": is_linked,
+            "longUploadsStatus": long_uploads,
+            "madeForKids": made_for_kids,
+            "auditNotes": notes,
+        },
+    }
+
+
+async def fetch_channel_analytics() -> dict:
+    """Analytics API v2: impressions, CTR, watch time and top traffic sources.
+
+    Resilient by design: newer tokens expose the `impressions`/`impressionCtr` metrics,
+    older scope grants do not — the query gracefully degrades to core metrics instead
+    of failing the whole report.
+    """
+    token = await _youtube_access_token()
+    end_date = datetime.utcnow().strftime("%Y-%m-%d")
+    start_date_90 = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+
+    async def _query(metrics: str, dimensions: str = "", sort: str = "") -> object:
+        params = [
+            "ids=channel==MINE",
+            f"start_date={start_date_90}",
+            f"end_date={end_date}",
+            f"metrics={metrics}",
+        ]
+        if dimensions:
+            params.append(f"dimensions={dimensions}")
+        if sort:
+            params.append(f"sort={sort}")
+        url = "https://youtubeanalytics.googleapis.com/v2/reports?" + "&".join(params)
+        return await _yt_get_json(url, token)
+
+    def _rows_to_totals(payload: object) -> dict:
+        report = (payload or {}).get("reports", [{}])[0] if isinstance(payload, dict) else {}
+        rows = report.get("rows") or []
+        header_cells = (((report.get("columnHeader", {}) or {}).get("metricHeader", {}) or {})
+                        .get("metricHeaderEntries", []) or [])
+        names = [str(entry.get("name", "")) for entry in header_cells]
+        totals: Dict[str, object] = {"views": 0.0, "estimatedMinutesWatched": 0.0,
+                                     "averageViewDuration": 0.0, "impressions": None, "impressionCtr": None}
+        for row in rows:
+            for index, name in enumerate(names):
+                value = row[index] if index < len(row) else 0
+                if name not in totals:
+                    continue
+                if name in ("impressions", "impressionCtr"):
+                    totals[name] = float(value or 0)
+                else:
+                    totals[name] = float(totals.get(name) or 0) + float(value or 0)
+        return totals
+
+    # Tier 1: full metric set including impressions; Tier 2: core metrics only.
+    core_metrics = "views,estimatedMinutesWatched,averageViewDuration"
+    note = None
+    try:
+        overview = _rows_to_totals(await _query(f"{core_metrics},impressions,impressionCtr"))
+        if overview.get("impressions") is None:
+            raise RuntimeError("impressions metric absent")
+    except Exception:
+        overview = _rows_to_totals(await _query(core_metrics))
+        note = "Impressions & CTR need the yt-analytics-monetary readonly OAuth scope (reconnect to unlock)."
+
+    # Traffic-source breakdown (never fatal — falls back to an empty list).
+    traffic: List[Dict[str, object]] = []
+    try:
+        traffic_payload = await _query(core_metrics, dimensions="insightTrafficSourceType", sort="-estimatedMinutesWatched")
+        report = traffic_payload.get("reports", [{}])[0] if isinstance(traffic_payload, dict) else {}
+        header_cells = (((report.get("columnHeader", {}) or {}).get("metricHeader", {}) or {})
+                        .get("metricHeaderEntries", []) or [])
+        names = [str(entry.get("name", "")) for entry in header_cells]
+        for row in (report.get("rows") or [])[:6]:
+            source = str(row[0] if row else "")
+            stat: Dict[str, object] = {"source": source, "label": _TRAFFIC_LABELS.get(source, source.title()),
+                                       "views": 0.0, "watchTimeMinutes": 0.0}
+            for index, name in enumerate(names):
+                if index == 0:
+                    continue
+                value = float(row[index] or 0) if index < len(row) else 0.0
+                if name == "views":
+                    stat["views"] = value
+                elif name == "estimatedMinutesWatched":
+                    stat["watchTimeMinutes"] = value
+            traffic.append(stat)
+    except Exception:
+        pass
+
+    impressions = overview.get("impressions")
+    ctr = overview.get("impressionCtr")
+    views = float(overview.get("views") or 0)
+    return {
+        "startDate": start_date_90,
+        "endDate": end_date,
+        "totalViews": views,
+        "impressions": impressions,
+        "impressionCtr": ctr,
+        "watchTimeMinutes": float(overview.get("estimatedMinutesWatched") or 0),
+        "averageViewDurationSeconds": float(overview.get("averageViewDuration") or 0),
+        "averageViewPercentage": round((views / float(impressions)) * 100.0, 2)
+        if isinstance(impressions, float) and impressions > 0 else None,
+        "trafficSources": traffic,
+        "note": note,
+    }
+
+
+
+async def fetch_channel_seo_context() -> dict:
+    """Data API v3: channel snippet + latest uploads metadata for the AI SEO engine."""
+    token = await _youtube_access_token()
+    channel_id = str(OWNER_SETTINGS.get("youtubeChannelId") or "").strip()
+    base = "https://www.googleapis.com/youtube/v3"
+    channel_url = (
+        f"{base}/channels?part=snippet,statistics,contentDetails"
+        + (f"&id={channel_id}" if channel_id else "&mine=true")
+    )
+    data = await _yt_get_json(channel_url, token)
+    items = data.get("items") or []
+    if not items:
+        raise RuntimeError("No YouTube channel found for these credentials.")
+    channel = items[0]
+    snippet = channel.get("snippet", {}) or {}
+    stats = channel.get("statistics", {}) or {}
+    keywords_raw = str(snippet.get("keywords", "") or "")
+    keywords = [part.strip('"') for part in keywords_raw.split('"') if part.strip()] if '"' in keywords_raw \
+        else [part.strip() for part in keywords_raw.split() if part.strip()]
+
+    latest_videos: List[Dict[str, object]] = []
+    uploads_playlist = ((channel.get("contentDetails", {}) or {})
+                        .get("relatedPlaylists", {}) or {}).get("uploads", "")
+    if uploads_playlist:
+        try:
+            playlist_url = f"{base}/playlistItems?part=contentDetails&playlistId={uploads_playlist}&maxResults=5"
+            playlist_data = await _yt_get_json(playlist_url, token)
+            video_ids = [str(item.get("contentDetails", {}).get("videoId", ""))
+                         for item in (playlist_data.get("items") or []) if item.get("contentDetails")]
+            video_ids = [video_id for video_id in video_ids if video_id]
+            if video_ids:
+                details_url = f"{base}/videos?part=snippet,statistics&id=" + ",".join(video_ids)
+                details_data = await _yt_get_json(details_url, token)
+                for item in (details_data.get("items") or []):
+                    item_snippet = item.get("snippet", {}) or {}
+                    item_stats = item.get("statistics", {}) or {}
+                    latest_videos.append({
+                        "videoId": item.get("id", ""),
+                        "title": item_snippet.get("title", ""),
+                        "description": str(item_snippet.get("description", "") or "")[:600],
+                        "tags": list(item_snippet.get("tags") or [])[:20],
+                        "publishedAt": item_snippet.get("publishedAt", ""),
+                        "viewCount": int(float(item_stats.get("viewCount") or 0)) if item_stats.get("viewCount") else None,
+                        "likeCount": int(float(item_stats.get("likeCount") or 0)) if item_stats.get("likeCount") else None,
+                        "commentCount": int(float(item_stats.get("commentCount") or 0)) if item_stats.get("commentCount") else None,
+                    })
+        except Exception:
+            pass
+    return {
+        "channelId": channel.get("id", ""),
+        "title": snippet.get("title", "Unknown channel"),
+        "description": str(snippet.get("description", "") or "")[:800],
+        "customUrl": snippet.get("customUrl", ""),
+        "country": snippet.get("country", ""),
+        "publishedAt": snippet.get("publishedAt", ""),
+        "totalViews": int(float(stats.get("viewCount") or 0)),
+        "subscriberCount": int(float(stats.get("subscriberCount"))) if stats.get("subscriberCount") else None,
+        "videoCount": int(float(stats.get("videoCount") or 0)),
+        "keywords": keywords,
+        "latestVideos": latest_videos,
+    }
+
+
 def welcome_menu_text() -> str:
     return (
         "🤖 <b>Universal Multi-Provider AI Bot Platform</b>\n"
@@ -510,6 +848,201 @@ async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await safe_reply(update, youtube_status_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 
+def _fmt_watch_time(minutes: object) -> str:
+    """125.5 -> '2h 6m' style watch-time formatting."""
+    try:
+        total = int(float(minutes or 0))
+    except (TypeError, ValueError):
+        return "0m"
+    hours, mins = divmod(total, 60)
+    return f"{hours}h {mins}m" if hours else f"{mins}m"
+
+
+def _yt_not_connected_text() -> str:
+    return (
+        "📺 <b>YouTube Not Connected Yet</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "To unlock live analytics and AI SEO I need your YouTube OAuth credentials:\n\n"
+        "1️⃣ Open https://console.cloud.google.com → enable <b>YouTube Data API v3</b>\n"
+        "2️⃣ OAuth consent screen → External → add your Google account as a Test user\n"
+        "3️⃣ Credentials → <b>OAuth Client ID</b> → Web application → copy ID + Secret\n"
+        "4️⃣ Generate a <b>Refresh Token</b> (the Google OAuth 2.0 Playground works great)\n"
+        "5️⃣ Set OWNER_YOUTUBE_CLIENT_ID / OWNER_YOUTUBE_CLIENT_SECRET / OWNER_YOUTUBE_REFRESH_TOKEN, then restart\n\n"
+        "Then send /yt_check again for your live channel report! ✨"
+    )
+
+
+def _format_yt_check_report(stats: dict, analytics: dict) -> str:
+    """Emoji analytics + security-audit report for /yt_check (HTML parse mode)."""
+    audit = stats.get("audit", {}) or {}
+    traffic = analytics.get("trafficSources") or []
+    lines = [
+        "📊 <b>YouTube Channel Analytics</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"📺 <b>Channel:</b> {html.escape(str(stats.get('title', 'Unknown')))}",
+        f"👁 <b>Total Views:</b> {_fmt_compact(stats.get('totalViews'))}",
+    ]
+    if stats.get("subscriberCountHidden"):
+        lines.append("👥 <b>Subscribers:</b> hidden")
+    elif stats.get("subscriberCount") is not None:
+        lines.append(f"👥 <b>Subscribers:</b> {_fmt_compact(stats.get('subscriberCount'))}")
+    lines.append(f"🎬 <b>Videos:</b> {_fmt_compact(stats.get('videoCount'))}")
+    lines.extend([
+        "",
+        "📈 <b>Last 90 Days Performance</b>",
+        f"🖼 <b>Impressions:</b> {_fmt_compact(analytics.get('impressions')) if analytics.get('impressions') is not None else 'N/A'}",
+        f"🎯 <b>Impression CTR:</b> " + (f"{float(analytics['impressionCtr']):.2f}%" if analytics.get("impressionCtr") is not None else "N/A"),
+        f"⏱ <b>Watch Time:</b> {_fmt_watch_time(analytics.get('watchTimeMinutes'))}",
+        f"📺 <b>Avg View Duration:</b> {int(float(analytics.get('averageViewDurationSeconds') or 0))}s",
+    ])
+    if traffic:
+        lines.extend(["", "🏆 <b>Top Traffic Sources</b>"])
+        for index, entry in enumerate(traffic[:5], start=1):
+            lines.append(f"{index}. {html.escape(str(entry.get('label', entry.get('source', ''))))} — {_fmt_compact(entry.get('views'))} views • {_fmt_watch_time(entry.get('watchTimeMinutes'))}")
+    lines.extend([
+        "",
+        f"🛡 <b>Channel Health:</b> {audit.get('healthEmoji', '⚪')} {str(audit.get('health', 'unknown')).title()}",
+    ])
+    copyright_status = str(audit.get("copyrightStatus", "unknown"))
+    copyright_emoji = "✅" if copyright_status == "clean" else ("⚠️" if copyright_status == "review" else "⛔")
+    lines.append(f"⚖️ <b>Copyright Status:</b> {copyright_emoji} {copyright_status.title()}")
+    for note in (audit.get("auditNotes") or [])[:4]:
+        lines.append(f"• {html.escape(str(note))}")
+    if analytics.get("note"):
+        lines.append(f"ℹ️ {html.escape(str(analytics['note']))}")
+    lines.extend([
+        "",
+        "💡 Tip: run /yt_seo to let the AI optimize your channel metadata.",
+    ])
+    return "\n".join(lines)
+
+
+async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /yt_check (alias /analytics) — live channel stats, impressions, CTR and audit."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    if not OWNER_SETTINGS.get("youtubeRefreshToken"):
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
+        return
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    try:
+        stats = await fetch_channel_stats_and_audit()
+        analytics = await fetch_channel_analytics()
+        await safe_reply(update, _format_yt_check_report(stats, analytics), parse_mode=ParseMode.HTML, reply_markup=yt_check_keyboard())
+    except Exception as err:
+        logger.warning("⚠️ /yt_check failed: %s", err)
+        await safe_reply(
+            update,
+            f"⚠️ <b>Could not load YouTube analytics.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n<code>{html.escape(str(err))}</code>\n\nCheck your OAuth credentials and try /yt_check again.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /yt_seo — AI channel SEO audit through the multi-tier AI cascade."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    if not OWNER_SETTINGS.get("youtubeRefreshToken"):
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
+        return
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    try:
+        context_data = await fetch_channel_seo_context()
+    except Exception as err:
+        logger.warning("⚠️ /yt_seo context fetch failed: %s", err)
+        await safe_reply(
+            update,
+            f"⚠️ <b>Could not load channel data for AI SEO.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n<code>{html.escape(str(err))}</code>\n\nCheck your OAuth credentials and try /yt_seo again.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    latest = [
+        {
+            "title": video.get("title", ""),
+            "publishedAt": video.get("publishedAt", ""),
+            "tags": (video.get("tags") or [])[:10],
+            "views": video.get("viewCount"),
+        }
+        for video in (context_data.get("latestVideos") or [])[:5]
+    ]
+    prompt = (
+        "You are an elite YouTube growth strategist. Audit this channel and return "
+        "ONLY valid JSON (no markdown fences) with this exact shape: "
+        '{"keywords":["10 high-converting channel keywords"],'
+        '"bio":"viral channel description/bio (2-4 short paragraphs, hooks + value + CTA, include hashtags)",'
+        '"tags":["15 ranking tags mixing broad and long-tail"],'
+        '"recommendations":["5 structural SEO recommendations (playlists, title formula, upload cadence, shorts strategy, community tab)"]}'
+        "\n\nCHANNEL CONTEXT:\n"
+        f"Name: {context_data.get('title', 'Unknown channel')}\n"
+        f"Handle: {context_data.get('customUrl') or 'n/a'}\n"
+        f"Current description: {str(context_data.get('description', '') or 'empty')[:600]}\n"
+        f"Current channel keywords: {', '.join(context_data.get('keywords') or []) or 'none set'}\n"
+        f"Country: {context_data.get('country') or 'n/a'} | Created: {context_data.get('publishedAt')}\n"
+        f"Stats: {context_data.get('subscriberCount') or '?'} subscribers, {context_data.get('totalViews')} total views, {context_data.get('videoCount')} videos\n"
+        f"Latest videos: {json.dumps(latest, ensure_ascii=False)}"
+    )
+    ai_text = await generate_ai_reply(chat_id, prompt)
+    offline = not ai_text or "দুঃখিত" in ai_text
+    parsed = None
+    if not offline:
+        try:
+            candidate = ai_text.strip()
+            fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", candidate, re.IGNORECASE)
+            if fenced:
+                candidate = fenced.group(1)
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end > start:
+                parsed = json.loads(candidate[start:end + 1])
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+    lines = [
+        "🔥 <b>AI Channel SEO Recommendations</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"📺 <b>{html.escape(str(context_data.get('title') or 'Unknown channel'))}</b> — "
+        f"{_fmt_compact(context_data.get('subscriberCount') or 0)} subs · {_fmt_compact(context_data.get('videoCount') or 0)} videos",
+    ]
+    if parsed and isinstance(parsed, dict):
+        keywords = [str(k) for k in (parsed.get("keywords") or []) if str(k).strip()]
+        tags = [str(t) for t in (parsed.get("tags") or []) if str(t).strip()]
+        recommendations = [str(r) for r in (parsed.get("recommendations") or []) if str(r).strip()]
+        bio = str(parsed.get("bio") or "").strip()
+        if keywords:
+            lines.append("\n🎯 <b>High-Converting Keywords</b>")
+            lines.append("\n".join(f"• {html.escape(k)}" for k in keywords[:10]))
+        if bio:
+            lines.append("\n✍️ <b>Viral Bio / Description</b>")
+            lines.append(html.escape(bio[:1200]))
+        if tags:
+            lines.append("\n🏷️ <b>Tag List (copy-paste)</b>")
+            lines.append("<code>" + " ".join(tags[:15]) + "</code>")
+        if recommendations:
+            lines.append("\n🏗️ <b>Structural SEO Recommendations</b>")
+            lines.append("\n".join(f"{i + 1}. {html.escape(r)}" for i, r in enumerate(recommendations[:5])))
+    else:
+        # Offline / unparseable fallback so the report never comes back empty.
+        context_title = html.escape(str(context_data.get("title") or "your channel"))
+        ctx_keywords = context_data.get("keywords") or []
+        if ctx_keywords:
+            lines.append(f"\n🔑 <b>Existing Channel Keywords</b>\n{html.escape(' '.join(str(k) for k in ctx_keywords[:15]))}")
+        lines.append("\n⚡ <b>Quick Win Audit</b>")
+        lines.append("• Lead every title with the search keyword at position 1-2")
+        lines.append("• Add 3-5 targeted hashtags (#niche, #tutorial, #viral) to every upload")
+        lines.append("• Group uploads into keyword-focused playlists to boost watch time")
+        lines.append("• Mirror top-performing titles into Shorts and Community posts")
+        if offline:
+            lines.append("\n<i>(AI cascade engines were offline — built from live channel context only.)</i>")
+    lines.append(f"\n⚡ Built for <b>{context_title}</b> — quick actions below.")
+    await safe_reply(update, "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=yt_seo_keyboard())
+
+
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /settings — interactive configuration options (Auto-Upload ON/OFF)."""
     if not update.effective_message:
@@ -559,6 +1092,10 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         OWNER_SETTINGS["autoUpload"] = not bool(OWNER_SETTINGS.get("autoUpload"))
         state = "ON ✅" if OWNER_SETTINGS["autoUpload"] else "OFF ❌"
         await context.bot.send_message(chat_id=chat_id, text=f"⚙️ Auto-Upload is now <b>{state}</b>", parse_mode=ParseMode.HTML, reply_markup=settings_keyboard())
+    elif data in ("yt:analytics",):
+        await yt_check_command(update, context)
+    elif data == "yt:seo":
+        await yt_seo_command(update, context)
     else:  # menu:home and any unknown payload
         await context.bot.send_message(chat_id=chat_id, text=welcome_menu_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
@@ -582,6 +1119,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• <code>/status</code> - Live uptime, memory & AI provider status\n"
         "• <code>/ping</code> or <code>/health</code> - Instant heartbeat check\n"
         "• <code>/id</code> - Show your Chat ID and user metadata\n\n"
+        "🔹 <b>YouTube Studio:</b>\n"
+        "• <code>/yt_check</code> or <code>/analytics</code> - Live channel analytics & health audit\n"
+        "• <code>/yt_seo</code> - AI channel keywords, viral bio, tags & SEO plan\n"
+        "• <code>/upload</code> - Publish a video with viral AI SEO\n\n"
         "💡 <i>Tip: Reply to any message with <code>/summarize</code> or <code>/translate Spanish</code>!</i>"
     )
     await safe_reply(update, help_msg, parse_mode=ParseMode.HTML)
@@ -1346,6 +1887,8 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     # Register Slash Commands for Upload / YouTube / Settings + Interactive Menus
     app.add_handler(CommandHandler("upload", upload_command))
     app.add_handler(CommandHandler("youtube", youtube_command))
+    app.add_handler(CommandHandler(["yt_check", "analytics"], yt_check_command))
+    app.add_handler(CommandHandler("yt_seo", yt_seo_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CallbackQueryHandler(menu_callback_handler))
 
