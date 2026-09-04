@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BotConfig } from '../types';
 import { X, Sparkles, Check, Zap, ShieldCheck, Server, Rocket } from 'lucide-react';
+import { CheckoutModal, CheckoutPlan } from './CheckoutModal';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -19,7 +20,15 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
   onShowToast,
   onOpenGatewaySetup,
 }) => {
+  const [checkoutPlan, setCheckoutPlan] = useState<CheckoutPlan | null>(null);
+
   if (!isOpen) return null;
+
+  // BDT manual-payment amounts per paid plan (shown in the bKash/Nagad/Rocket checkout).
+  const PAYMENT_BY_PLAN: Record<string, { amount: number; currency: string; priceLabel: string }> = {
+    pro_cluster: { amount: 2500, currency: 'BDT', priceLabel: '৳2,500/mo' },
+    enterprise_cluster: { amount: 7500, currency: 'BDT', priceLabel: '৳7,500/mo' },
+  };
 
   const plans = [
     {
@@ -52,9 +61,30 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
     },
   ];
 
-  const handleSelectPlan = (planId: string) => {
-    onUpdateConfig({ userPlanTier: planId });
-    onShowToast(`🎉 Switched to ${planId.replace('_', ' ').toUpperCase()} successfully!`);
+  const handleSelectPlan = (plan: { id: string; name: string }) => {
+    if (plan.id === 'community') {
+      onUpdateConfig({ userPlanTier: plan.id });
+      onShowToast('🎉 Switched to Developer Community successfully!');
+      return;
+    }
+    const pay = PAYMENT_BY_PLAN[plan.id];
+    if (!pay) {
+      onShowToast('⚠️ This plan is not available for manual payment yet.');
+      return;
+    }
+    setCheckoutPlan({
+      id: plan.id,
+      name: plan.name,
+      amount: pay.amount,
+      currency: pay.currency,
+      priceLabel: pay.priceLabel,
+    });
+  };
+
+  const planButtonLabel = (planId: string): string => {
+    if (config.userPlanTier === planId) return 'Active Plan';
+    if (planId === 'community') return 'Select Plan';
+    return planId === 'pro_cluster' ? 'Upgrade to Pro' : 'Buy Enterprise';
   };
 
   return (
@@ -110,7 +140,8 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
               </div>
 
               <button
-                onClick={() => handleSelectPlan(plan.id)}
+                onClick={() => handleSelectPlan(plan)}
+                disabled={config.userPlanTier === plan.id}
                 className={`w-full py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                   config.userPlanTier === plan.id
                     ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30'
@@ -119,11 +150,18 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                     : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                 }`}
               >
-                {config.userPlanTier === plan.id ? 'Active Plan' : 'Select Plan'}
+                {planButtonLabel(plan.id)}
               </button>
             </div>
           ))}
         </div>
+
+        <CheckoutModal
+          isOpen={checkoutPlan !== null}
+          plan={checkoutPlan}
+          onClose={() => setCheckoutPlan(null)}
+          onShowToast={onShowToast}
+        />
       </div>
     </div>
   );

@@ -844,6 +844,39 @@ async function startServer() {
   }));
   app.use(express.urlencoded({ extended: true }));
 
+  // ==========================================
+  // SINGLE-ADMIN COOKIE (Phase: Strict Single-Admin Locking)
+  // An HttpOnly session cookie grants ONLY the ADMIN_EMAIL account the ability to
+  // load/refresh the `/admin` web workspace (SPA reloads carry no Authorization
+  // header). It is set on admin login/verification and cleared on logout. Every
+  // catch-all request to `/admin` is re-validated through this cookie against the
+  // live session store, so no other account can ever see the admin UI entry.
+  // ==========================================
+  const ADMIN_AUTH_COOKIE = 'automotion_adm';
+  const ADMIN_AUTH_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
+
+  const setAdminAuthCookie = (res: express.Response, token: string): void => {
+    const value = encodeURIComponent(String(token || ''));
+    res.setHeader('Set-Cookie', `${ADMIN_AUTH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ADMIN_AUTH_COOKIE_MAX_AGE}`);
+  };
+  const clearAdminAuthCookie = (res: express.Response): void => {
+    res.setHeader('Set-Cookie', `${ADMIN_AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  };
+  const getAdminAuthToken = (req: express.Request): string => {
+    const raw = String(req.headers.cookie || '');
+    for (const part of raw.split(';')) {
+      const pair = part.trim();
+      if (pair.startsWith(`${ADMIN_AUTH_COOKIE}=`)) {
+        try {
+          return decodeURIComponent(pair.slice(ADMIN_AUTH_COOKIE.length + 1));
+        } catch {
+          return '';
+        }
+      }
+    }
+    return '';
+  };
+
   /** Sliding-window budgets for the admin + auth endpoints (anti brute-force). */
   const adminRateLimiter = createRateLimiter({
     windowMs: 60_000,
@@ -858,18 +891,17 @@ async function startServer() {
 
   /**
    * Admin route protection (hidden): unauthenticated callers receive a 404 so the
-   * route never advertises its existence; authenticated non-admins receive a 403.
+   * route never advertises its existence; authenticated non-admins also receive a
+   * 404 so the entire admin surface is indistinguishable from a missing endpoint
+   * (strict single-admin — only the ADMIN_EMAIL account is ever admitted).
    * The session/JWT is re-validated on EVERY request by getSessionUser/isAdminSessionAuthorized.
    */
   const isAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     const user = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
-    if (!user) {
+    if (!user || !ServerDatabase.isUserAdmin(user) || !ServerDatabase.isAdminSessionAuthorized(authHeader || '')) {
       // 404 keeps `/api/admin/*` indistinguishable from any other unknown route.
       return res.status(404).json({ success: false, message: 'Endpoint not found' });
-    }
-    if (!ServerDatabase.isUserAdmin(user) || !ServerDatabase.isAdminSessionAuthorized(authHeader || '')) {
-      return res.status(403).json({ success: false, message: 'Administrator authorization required.' });
     }
     return next();
   };
@@ -2192,7 +2224,14 @@ async function startServer() {
       if (!name || !email || !password) {
         return res.status(400).json({ success: false, message: 'Administrator registration fields are required.' });
       }
+      // Strict single-admin: ONLY the ADMIN_EMAIL account may ever be an administrator.
+      if (!ServerDatabase.isAdminEmail(String(email || ''))) {
+        return res.status(404).json({ success: false, message: 'Endpoint not found' });
+      }
       const result = ServerDatabase.registerUser({ name, email, password });
+      if (result.success && result.session?.token && ServerDatabase.isUserAdmin(result.session.user)) {
+        setAdminAuthCookie(res, result.session.token);
+      }
       return res.status(201).json({ ...result, message: 'Administrator account created and verified.' });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Administrator registration failed.' });
@@ -2204,10 +2243,25 @@ async function startServer() {
       const email = typeof req.body?.email === 'string' ? req.body.email : '';
       const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
       if (!email || code.length !== 6) return res.status(400).json({ success: false, message: 'A valid email and 6-digit verification code are required.' });
+      // Strict single-admin: admin verification only ever applies to ADMIN_EMAIL.
+      if (!ServerDatabase.isAdminEmail(String(email || ''))) {
+        return res.status(404).json({ success: false, message: 'Endpoint not found' });
+      }
       const result = ServerDatabase.completePendingAdminRegistration(email, code);
-      if (result.success) return res.status(201).json(result);
+      if (result.success) {
+        if (result.session?.token && ServerDatabase.isUserAdmin(result.session.user)) {
+          setAdminAuthCookie(res, result.session.token);
+        }
+        return res.status(201).json(result);
+      }
       const standardResult = ServerDatabase.verifyOtp(email, code, req.headers.authorization);
-      return standardResult.success ? res.status(201).json(standardResult) : res.status(400).json(result);
+      if (standardResult.success) {
+        if (standardResult.session?.token && ServerDatabase.isUserAdmin(standardResult.session.user)) {
+          setAdminAuthCookie(res, standardResult.session.token);
+        }
+        return res.status(201).json(standardResult);
+      }
+      return res.status(400).json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Administrator verification failed.' });
     }
@@ -2230,6 +2284,10 @@ async function startServer() {
         return res.status(401).json(result);
       }
 
+      // Single-admin: drop the HttpOnly cookie so the admin can reload `/admin`.
+      if (result.session?.token && ServerDatabase.isUserAdmin(result.session.user)) {
+        setAdminAuthCookie(res, result.session.token);
+      }
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Login failed' });
@@ -2273,6 +2331,10 @@ async function startServer() {
         return res.status(400).json(result);
       }
 
+      // Single-admin: drop the HttpOnly cookie so the admin can reload `/admin`.
+      if (result.session?.token && ServerDatabase.isUserAdmin(result.session.user)) {
+        setAdminAuthCookie(res, result.session.token);
+      }
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Verification failed' });
@@ -2341,6 +2403,7 @@ async function startServer() {
       if (authHeader) {
         ServerDatabase.removeSession(authHeader);
       }
+      clearAdminAuthCookie(res);
       return res.json({ success: true, message: 'Logged out successfully.' });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });
@@ -2905,6 +2968,17 @@ async function startServer() {
     }
   });
 
+  // User: manual payment destination numbers shown in the checkout modal (public — no
+  // session required; the modal itself is only reachable by logged-in users).
+  app.get('/api/payments/methods', (req, res) => {
+    try {
+      const paymentMethods = ServerDatabase.getSystemConfig().paymentMethods;
+      return res.json({ success: true, paymentMethods });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load payment methods.' });
+    }
+  });
+
   // ==========================================
   // ADMIN PAYMENT MANAGEMENT (Phase 3)
   // All routes below are already guarded by `app.use('/api/admin', adminRateLimiter, isAdmin)`.
@@ -3056,6 +3130,7 @@ async function startServer() {
           registrationOpen: config.registrationOpen,
           freeTrial: config.freeTrial,
           featureToggles: config.featureToggles,
+          paymentMethods: config.paymentMethods,
         },
       });
     } catch (err: any) {
@@ -3082,10 +3157,27 @@ async function startServer() {
           registrationOpen: config.registrationOpen,
           freeTrial: config.freeTrial,
           featureToggles: config.featureToggles,
+          paymentMethods: config.paymentMethods,
         },
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Failed to save app control settings.' });
+    }
+  });
+
+  // Admin: update the manual payment destination numbers shown in the user checkout modal.
+  app.post('/api/admin/system/payment-methods', (req, res) => {
+    try {
+      const config = ServerDatabase.updateAppControl({
+        paymentMethods: req.body?.paymentMethods,
+      });
+      return res.json({
+        success: true,
+        message: 'Payment methods saved.',
+        paymentMethods: config.paymentMethods,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to save payment methods.' });
     }
   });
 
@@ -3431,6 +3523,21 @@ async function startServer() {
       // Avoid sending HTML for missing API routes
       if (req.path.startsWith('/api/') || req.path === '/health' || req.path === '/webhook') {
         return res.status(404).json({ success: false, message: 'Endpoint not found', path: req.path });
+      }
+
+      // Strict single-admin: the `/admin` workspace is only ever reachable by the
+      // ADMIN_EMAIL account (via HttpOnly cookie re-validated against the live session
+      // store). Non-admins and unauthenticated visitors get a plain 404 so the admin
+      // UI is completely hidden. `/admin/login` stays servable so the admin can sign in.
+      if (req.path === '/admin' || req.path.startsWith('/admin/')) {
+        const isLoginEntry = req.path === '/admin/login' || req.path.startsWith('/admin/login/');
+        if (!isLoginEntry) {
+          const cookieToken = getAdminAuthToken(req);
+          const authorized = cookieToken ? ServerDatabase.isAdminSessionAuthorized(`Bearer ${cookieToken}`) : false;
+          if (!authorized) {
+            return res.status(404).send('Page not found');
+          }
+        }
       }
 
       const indexPath = path.join(distPath, 'index.html');

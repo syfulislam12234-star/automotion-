@@ -38,6 +38,12 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
   registrationOpen: true,
   freeTrial: { enabled: false, trialDays: 3, bonusCredits: 100 },
   featureToggles: { liveStreaming: true, ytCheck: true, ytSeo: true, ytViral: true, autoUpload: true },
+  paymentMethods: {
+    bkash: '01XXX-XXXXXX',
+    nagad: '01XXX-XXXXXX',
+    rocket: '01XXX-XXXXXX',
+    instructions: 'Send the plan amount to the number shown above for your chosen method, then enter your bKash/Nagad/Rocket sender number and the Transaction (Txn) ID from your confirmation SMS below.',
+  },
 };
 
 const DB_FILE = path.join(process.cwd(), 'data_store.json');
@@ -100,14 +106,18 @@ export class ServerDatabase {
   }
 
   /**
-   * Securely promotes a user to administrator role. Finds the target user by id or
-   * email,, sets the role to 'admin', marks the account verified, and persists. Only an
-   * already-authorized admin session should ever call this (guarded by `requireAdmin`).
+   * Securely promotes a user to administrator role. FINAL Phase single-admin rule:
+   * ONLY the account whose email matches the ADMIN_EMAIL environment variable may
+   * ever hold admin privileges. The already-authorized admin may call this for the
+   * matching account (idempotent); any other target is hard-refused.
    */
   public static assignAdminPrivilege(identifier: string): { success: boolean; message: string; user?: UserAccount } {
     const user = ServerDatabase.getUserByIdOrEmail(identifier);
     if (!user) {
       return { success: false, message: 'No user found with that ID or email.' };
+    }
+    if (!ServerDatabase.isAdminEmail(user.email)) {
+      return { success: false, message: 'Access denied: only the configured administrator (ADMIN_EMAIL) may hold admin privileges.' };
     }
     const promoted = user.role !== 'admin';
     user.role = 'admin';
@@ -119,6 +129,12 @@ export class ServerDatabase {
       message: promoted ? `Admin privileges granted to ${user.name} (${user.email}).` : `${user.name} (${user.email}) is already an admin.`,
       user,
     };
+  }
+
+  /** True only when the given email (case-insensitive) equals ADMIN_EMAIL exactly. */
+  public static isAdminEmail(email: string): boolean {
+    const adminEmail = String(process.env.ADMIN_EMAIL || '').toLowerCase().trim();
+    return Boolean(adminEmail && String(email || '').toLowerCase().trim() === adminEmail);
   }
 
   /**
@@ -575,6 +591,12 @@ export class ServerDatabase {
         ytViral: stored.featureToggles?.ytViral !== false,
         autoUpload: stored.featureToggles?.autoUpload !== false,
       },
+      paymentMethods: {
+        bkash: String(stored.paymentMethods?.bkash || defaults.paymentMethods.bkash || ''),
+        nagad: String(stored.paymentMethods?.nagad || defaults.paymentMethods.nagad || ''),
+        rocket: String(stored.paymentMethods?.rocket || defaults.paymentMethods.rocket || ''),
+        instructions: String(stored.paymentMethods?.instructions || defaults.paymentMethods.instructions || ''),
+      },
     };
   }
 
@@ -688,6 +710,7 @@ export class ServerDatabase {
     registrationOpen?: boolean;
     freeTrial?: Partial<SystemConfig['freeTrial']>;
     featureToggles?: Partial<SystemConfig['featureToggles']>;
+    paymentMethods?: Partial<SystemConfig['paymentMethods']>;
   }): SystemConfig {
     const current = ServerDatabase.getSystemConfig();
     const merged: SystemConfig = {
@@ -697,6 +720,7 @@ export class ServerDatabase {
       registrationOpen: patch.registrationOpen === undefined ? current.registrationOpen : patch.registrationOpen === true,
       freeTrial: { ...current.freeTrial },
       featureToggles: { ...current.featureToggles },
+      paymentMethods: { ...current.paymentMethods },
     };
     if (patch.freeTrial && typeof patch.freeTrial === 'object') {
       if (patch.freeTrial.enabled !== undefined) merged.freeTrial.enabled = patch.freeTrial.enabled === true;
@@ -712,6 +736,11 @@ export class ServerDatabase {
     if (patch.featureToggles && typeof patch.featureToggles === 'object') {
       for (const key of ['liveStreaming', 'ytCheck', 'ytSeo', 'ytViral', 'autoUpload'] as const) {
         if (patch.featureToggles[key] !== undefined) merged.featureToggles[key] = patch.featureToggles[key] === true;
+      }
+    }
+    if (patch.paymentMethods && typeof patch.paymentMethods === 'object') {
+      for (const key of ['bkash', 'nagad', 'rocket', 'instructions'] as const) {
+        if (patch.paymentMethods[key] !== undefined) merged.paymentMethods[key] = String(patch.paymentMethods[key]).trim();
       }
     }
     ServerDatabase.db.systemConfig = merged;

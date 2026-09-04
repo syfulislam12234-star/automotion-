@@ -816,18 +816,20 @@ function AppContent() {
               <span>Media Scanner</span>
             </button>
 
-            {/* View 7: Admin Control Dashboard */}
-            <button
-              onClick={handleAdminTabClick}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                activeTab === 'admin'
-                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md shadow-purple-500/20'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Admin Panel</span>
-            </button>
+            {/* View 7: Admin Control Dashboard (rendered ONLY for the single admin — never shown to non-admins) */}
+            {(currentUser?.role === 'admin' || currentUser?.isAdmin === true) && (
+              <button
+                onClick={handleAdminTabClick}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  activeTab === 'admin'
+                    ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md shadow-purple-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>Admin Panel</span>
+              </button>
+            )}
           </div>
         </div>
 

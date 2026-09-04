@@ -10,6 +10,7 @@ interface AppControl {
   registrationOpen: boolean;
   freeTrial: { enabled: boolean; trialDays: number; bonusCredits: number };
   featureToggles: { liveStreaming: boolean; ytCheck: boolean; ytSeo: boolean; ytViral: boolean; autoUpload: boolean };
+  paymentMethods: { bkash: string; nagad: string; rocket: string; instructions: string };
 }
 
 interface RevenueStats {
@@ -49,6 +50,7 @@ export const AdminAppControlRevenue: React.FC<{ onShowToast: (message: string) =
     registrationOpen: true,
     freeTrial: { enabled: false, trialDays: 3, bonusCredits: 100 },
     featureToggles: { liveStreaming: true, ytCheck: true, ytSeo: true, ytViral: true, autoUpload: true },
+    paymentMethods: { bkash: '', nagad: '', rocket: '', instructions: '' },
   });
   const [broadcast, setBroadcast] = useState('');
   const [broadcastChannel, setBroadcastChannel] = useState<'in-app' | 'telegram' | 'both'>('in-app');
@@ -213,6 +215,31 @@ export const AdminAppControlRevenue: React.FC<{ onShowToast: (message: string) =
                     </button>
                   ))}
                 </div>
+              </div>
+              {/* Payment numbers shown in the user bKash/Nagad/Rocket checkout */}
+              <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 space-y-3">
+                <div>
+                  <div className="font-medium text-slate-200">Manual Payment Numbers</div>
+                  <div className="text-xs text-slate-500">Destination numbers + instructions shown in the user checkout modal</div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-400 mb-1 block">bKash (Send to)</span>
+                    <input value={appControl.paymentMethods.bkash} onChange={(e) => setAppControl({ ...appControl, paymentMethods: { ...appControl.paymentMethods, bkash: e.target.value } })} placeholder="01XXX-XXXXXX" className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-500/50" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-400 mb-1 block">Nagad (Send to)</span>
+                    <input value={appControl.paymentMethods.nagad} onChange={(e) => setAppControl({ ...appControl, paymentMethods: { ...appControl.paymentMethods, nagad: e.target.value } })} placeholder="01XXX-XXXXXX" className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-500/50" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-400 mb-1 block">Rocket (Send to)</span>
+                    <input value={appControl.paymentMethods.rocket} onChange={(e) => setAppControl({ ...appControl, paymentMethods: { ...appControl.paymentMethods, rocket: e.target.value } })} placeholder="01XXX-XXXXXX" className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-500/50" />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-400 mb-1 block">Checkout Instructions</span>
+                  <textarea value={appControl.paymentMethods.instructions} onChange={(e) => setAppControl({ ...appControl, paymentMethods: { ...appControl.paymentMethods, instructions: e.target.value } })} rows={2} placeholder="e.g. Send the plan amount, then enter your sender number and Txn ID below." className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50 resize-none" />
+                </label>
               </div>
             </div>
           </div>

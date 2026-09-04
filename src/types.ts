@@ -86,6 +86,20 @@ export interface SystemConfig {
     ytViral: boolean;
     autoUpload: boolean;
   };
+  /** Manual payment destination numbers shown in the user checkout modal (admin-managed). */
+  paymentMethods: PaymentNumberConfig;
+}
+
+/** Manual payment destination numbers shown in the user checkout modal (admin-managed). */
+export interface PaymentNumberConfig {
+  /** bKash Personal/Merchant number users send payment to. */
+  bkash: string;
+  /** Nagad number users send payment to. */
+  nagad: string;
+  /** Rocket number users send payment to. */
+  rocket: string;
+  /** Human-readable instructions shown in the user checkout modal. */
+  instructions: string;
 }
 
 /** An admin broadcast announcement delivered in-app and/or via Telegram bots. */
