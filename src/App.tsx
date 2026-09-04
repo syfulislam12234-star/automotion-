@@ -7,6 +7,7 @@ import { DeployGuideModal } from './components/DeployGuideModal';
 import { MemoryInspector } from './components/MemoryInspector';
 import { AdminControlPanel } from './components/AdminControlPanel';
 import { AdminUserManager } from './components/AdminUserManager';
+import { AdminPaymentManager } from './components/AdminPaymentManager';
 import { ApiPortalModal } from './components/ApiPortalModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
 import { AuthModal } from './components/AuthModal';
@@ -399,7 +400,7 @@ function AppContent() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
   // Phase 2: which section of the /admin workspace is displayed.
-  const [adminSection, setAdminSection] = useState<'control' | 'users'>('control');
+  const [adminSection, setAdminSection] = useState<'control' | 'users' | 'payments'>('control');
   const [authModalTab, setAuthModalTab] = useState<'login' | 'signup' | 'verify'>('login');
   const [authFeatureContext, setAuthFeatureContext] = useState<string | undefined>(undefined);
   const currentUser = session?.user || null;
@@ -976,6 +977,12 @@ function AppContent() {
               >
                 👥 Users &amp; Subscriptions
               </button>
+              <button
+                onClick={() => setAdminSection('payments')}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${adminSection === 'payments' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'}`}
+              >
+                💳 Payments
+              </button>
             </div>
             {adminSection === 'control' ? (
               <AdminControlPanel
@@ -985,8 +992,10 @@ function AppContent() {
                 onShowToast={showToast}
                 onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
               />
-            ) : (
+            ) : adminSection === 'users' ? (
               <AdminUserManager onShowToast={showToast} />
+            ) : (
+              <AdminPaymentManager onShowToast={showToast} />
             )}
           </div>
         )}

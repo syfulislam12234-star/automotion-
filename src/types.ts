@@ -1,6 +1,33 @@
 export type SubscriptionPlan = 'free' | 'pro' | 'enterprise';
 export type SubscriptionStatus = 'active' | 'expired' | 'canceled' | 'none';
 
+/** Manual payment verification lifecycle (Phase 3). */
+export type PaymentStatus = 'pending' | 'approved' | 'rejected';
+/** Supported local/international manual payment channels. */
+export type PaymentMethod = 'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Card';
+
+export interface PaymentTransaction {
+  id: string;
+  userId: string;
+  amount: number;
+  currency: 'BDT' | 'USD';
+  paymentMethod: PaymentMethod | string;
+  /** Manual transaction (Txn) ID provided by the payer as proof of payment. */
+  transactionId: string;
+  status: PaymentStatus;
+  /** Plan the payer is purchasing (drives the auto-upgrade on approval). */
+  planId: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Free-form payer note, or the admin rejection reason once reviewed. */
+  notes?: string;
+  /** Denormalized payer info for admin listings (kept in sync at creation). */
+  userEmail?: string;
+  userName?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
 export interface UserAccount {
   id: string;
   name: string;

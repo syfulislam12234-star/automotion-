@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus } from '../src/types';
+import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod } from '../src/types';
 
-export type { SubscriptionPlan, SubscriptionStatus };
+export type { SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod };
 
 interface StoredDb {
   users: UserAccount[];
@@ -14,6 +14,7 @@ interface StoredDb {
   crmCustomers: Record<string, CrmCustomer>;
   crmMessages: CrmMessage[];
   storeKnowledge: Record<string, StoreKnowledge>;
+  payments: PaymentTransaction[];
 }
 
 const DB_FILE = path.join(process.cwd(), 'data_store.json');
@@ -28,6 +29,7 @@ export class ServerDatabase {
     crmCustomers: {},
     crmMessages: [],
     storeKnowledge: {},
+    payments: [],
   };
 
   public static init() {
@@ -319,6 +321,176 @@ export class ServerDatabase {
     };
   }
 
+
+  // ==========================================
+  // PAYMENTS & TRANSACTIONS (Phase 3)
+  // ==========================================
+
+  /** Plan-tier default monthly credits granted when a payment is approved. */
+  private static planDefaultCredits(plan: string): number {
+    const cleanPlan = String(plan || '').toLowerCase();
+    if (cleanPlan === 'enterprise') return 10000;
+    if (cleanPlan === 'pro') return 2000;
+    return 500;
+  }
+
+  /**
+   * Creates a manual payment verification request submitted by a signed-in user.
+   * Duplicate Txn IDs (pending/approved) are rejected globally to prevent
+   * double-spending the same proof of payment; rejected IDs may be resubmitted.
+   */
+  public static createPaymentRequest(data: {
+    userId: string;
+    amount: number;
+    currency?: string;
+    paymentMethod: string;
+    transactionId: string;
+    planId: string;
+    notes?: string;
+  }): { success: boolean; message: string; payment?: PaymentTransaction } {
+    const user = ServerDatabase.getUserByIdOrEmail(data.userId);
+    if (!user) {
+      return { success: false, message: 'Authenticated user could not be resolved.' };
+    }
+    const amount = Number(data.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, message: 'A valid payment amount is required.' };
+    }
+    const transactionId = String(data.transactionId || '').trim();
+    if (!transactionId) {
+      return { success: false, message: 'A transaction (Txn) ID is required.' };
+    }
+    const planId = String(data.planId || '').trim().toLowerCase();
+    if (!planId || planId === 'free') {
+      return { success: false, message: 'Choose a paid plan (Pro or Enterprise) for your payment.' };
+    }
+    const paymentMethod = String(data.paymentMethod || '').trim();
+    if (!paymentMethod) {
+      return { success: false, message: 'A payment method is required.' };
+    }
+    const duplicate = (ServerDatabase.db.payments || []).find(
+      (p) => p.transactionId.toLowerCase() === transactionId.toLowerCase() && p.status !== 'rejected',
+    );
+    if (duplicate) {
+      return { success: false, message: 'This transaction ID has already been submitted.' };
+    }
+    const currency: 'BDT' | 'USD' = String(data.currency || 'BDT').trim().toUpperCase() === 'USD' ? 'USD' : 'BDT';
+    const now = new Date().toISOString();
+    const payment: PaymentTransaction = {
+      id: 'pay_' + crypto.randomBytes(8).toString('hex'),
+      userId: user.id,
+      amount: Math.round(amount * 100) / 100,
+      currency,
+      paymentMethod,
+      transactionId,
+      status: 'pending',
+      planId,
+      createdAt: now,
+      updatedAt: now,
+      notes: String(data.notes || '').trim() || undefined,
+      userEmail: user.email,
+      userName: user.name,
+    };
+    if (!Array.isArray(ServerDatabase.db.payments)) ServerDatabase.db.payments = [];
+    ServerDatabase.db.payments.unshift(payment);
+    ServerDatabase.db.payments = ServerDatabase.db.payments.slice(0, 2000);
+    ServerDatabase.save();
+    return { success: true, message: 'Payment submitted for verification.', payment };
+  }
+
+  /** Admin payment listing with status filter and Txn ID / email / name / ID search. */
+  public static listPayments(params: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    search?: string;
+  }): { payments: PaymentTransaction[]; total: number; page: number; limit: number; totalPages: number } {
+    const page = Math.max(1, Number(params.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(params.limit) || 20));
+    const search = String(params.search || '').trim().toLowerCase();
+    let filtered = (ServerDatabase.db.payments || []).slice();
+    if (params.status && params.status !== 'all') {
+      filtered = filtered.filter((p) => p.status === params.status);
+    }
+    if (search) {
+      filtered = filtered.filter((p) =>
+        p.transactionId.toLowerCase().includes(search) ||
+        (p.userEmail || '').toLowerCase().includes(search) ||
+        (p.userName || '').toLowerCase().includes(search) ||
+        p.id.toLowerCase().includes(search) ||
+        (p.userId || '').toLowerCase().includes(search),
+      );
+    }
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const start = (page - 1) * limit;
+    return { payments: filtered.slice(start, start + limit), total, page, limit, totalPages };
+  }
+
+  /** All payment requests belonging to one user (newest first). */
+  public static getUserPayments(userId: string, limit = 50): PaymentTransaction[] {
+    return (ServerDatabase.db.payments || []).filter((p) => p.userId === userId).slice(0, Math.max(1, limit));
+  }
+
+  /**
+   * Approves a pending payment: marks it approved and automatically upgrades/extends
+   * the payer's subscription (selected plan + 30-day expiry + plan-default credits)
+   * through the Phase-2 subscription manager.
+   */
+  public static approvePayment(paymentId: string, adminUserId: string): { success: boolean; message: string; payment?: PaymentTransaction; user?: UserAccount } {
+    const payment = (ServerDatabase.db.payments || []).find((p) => p.id === String(paymentId || '').trim());
+    if (!payment) {
+      return { success: false, message: 'Payment not found.' };
+    }
+    if (payment.status !== 'pending') {
+      return { success: false, message: `Payment is already ${payment.status}.` };
+    }
+    const now = new Date().toISOString();
+    payment.status = 'approved';
+    payment.updatedAt = now;
+    payment.reviewedBy = adminUserId || undefined;
+    payment.reviewedAt = now;
+    // Auto-apply the subscription upgrade (plan + extend 30 days + grant credits).
+    const credits = ServerDatabase.planDefaultCredits(payment.planId);
+    const sub = ServerDatabase.updateUserSubscription(payment.userId, {
+      plan: payment.planId,
+      extendDays: 30,
+      credits,
+    });
+    ServerDatabase.save();
+    const user = ServerDatabase.getUserByIdOrEmail(payment.userId) || undefined;
+    return {
+      success: true,
+      message: sub.success
+        ? `Payment approved — ${payment.planId} plan activated for ${user?.email || payment.userId} (30 days, ${credits} credits).`
+        : `Payment approved, but the subscription upgrade failed: ${sub.message}`,
+      payment,
+      user: user || sub.user,
+    };
+  }
+
+  /** Rejects a pending payment with a mandatory reason note. */
+  public static rejectPayment(paymentId: string, reason: string, adminUserId?: string): { success: boolean; message: string; payment?: PaymentTransaction } {
+    const payment = (ServerDatabase.db.payments || []).find((p) => p.id === String(paymentId || '').trim());
+    if (!payment) {
+      return { success: false, message: 'Payment not found.' };
+    }
+    if (payment.status !== 'pending') {
+      return { success: false, message: `Payment is already ${payment.status}.` };
+    }
+    const cleanReason = String(reason || '').trim();
+    if (!cleanReason) {
+      return { success: false, message: 'A rejection reason is required.' };
+    }
+    const now = new Date().toISOString();
+    payment.status = 'rejected';
+    payment.updatedAt = now;
+    payment.notes = cleanReason;
+    payment.reviewedBy = adminUserId || undefined;
+    payment.reviewedAt = now;
+    ServerDatabase.save();
+    return { success: true, message: 'Payment rejected.', payment };
+  }
 
   public static getStats() {
     return {

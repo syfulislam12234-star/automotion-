@@ -2786,6 +2786,105 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // PAYMENTS (Phase 3)
+  // ==========================================
+
+  // User: submit a manual payment verification request (session-guarded).
+  app.post('/api/payments/submit', requireSession, (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required.' });
+      }
+      const result = ServerDatabase.createPaymentRequest({
+        userId: user.id,
+        amount: Number(req.body?.amount),
+        currency: String(req.body?.currency || 'BDT'),
+        paymentMethod: String(req.body?.paymentMethod || ''),
+        transactionId: String(req.body?.transactionId || ''),
+        planId: String(req.body?.planId || req.body?.plan || ''),
+        notes: req.body?.notes === undefined ? undefined : String(req.body.notes),
+      });
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to submit payment.' });
+    }
+  });
+
+  // User: the current logged-in user's own payment history (multi-tenant safe).
+  app.get('/api/payments/my-history', requireSession, (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required.' });
+      }
+      const payments = ServerDatabase.getUserPayments(user.id);
+      return res.json({ success: true, payments });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load payment history.' });
+    }
+  });
+
+  // ==========================================
+  // ADMIN PAYMENT MANAGEMENT (Phase 3)
+  // All routes below are already guarded by `app.use('/api/admin', adminRateLimiter, isAdmin)`.
+  // ==========================================
+
+  // Paginated listing of all payment transactions (status filter + Txn/email search).
+  app.get('/api/admin/payments', (req, res) => {
+    try {
+      const result = ServerDatabase.listPayments({
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 20,
+        status: String(req.query.status || 'all'),
+        search: String(req.query.search || ''),
+      });
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to list payments.' });
+    }
+  });
+
+  // Approve a pending payment → auto upgrade/extend the payer's subscription.
+  app.post('/api/admin/payments/approve', (req, res) => {
+    try {
+      const paymentId = String(req.body?.paymentId || '').trim();
+      if (!paymentId) {
+        return res.status(400).json({ success: false, message: 'A paymentId is required.' });
+      }
+      const admin = ServerDatabase.getSessionUser(req.headers.authorization);
+      const result = ServerDatabase.approvePayment(paymentId, admin?.id || '');
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to approve payment.' });
+    }
+  });
+
+  // Reject a pending payment with a mandatory reason note.
+  app.post('/api/admin/payments/reject', (req, res) => {
+    try {
+      const paymentId = String(req.body?.paymentId || '').trim();
+      if (!paymentId) {
+        return res.status(400).json({ success: false, message: 'A paymentId is required.' });
+      }
+      const admin = ServerDatabase.getSessionUser(req.headers.authorization);
+      const result = ServerDatabase.rejectPayment(paymentId, String(req.body?.reason || ''), admin?.id);
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to reject payment.' });
+    }
+  });
+
   // Export full JSON backup of database
   app.get('/api/admin/backup/export', (req, res) => {
     try {
