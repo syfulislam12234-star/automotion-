@@ -376,6 +376,36 @@ export class TelegramBotService {
     }
   }
 
+  /**
+   * Phase 5 platform gate: returns true (and sends a notice) when the feature should be
+   * blocked — either because maintenance mode is active or the admin disabled the feature
+   * toggle. Admins always bypass maintenance mode. When it returns true the caller must
+   * return immediately.
+   */
+  private static async platformFeatureGuard(token: string, chatId: string | number, feature: 'ytCheck' | 'ytSeo' | 'ytViral' | 'autoUpload', featureLabel: string): Promise<boolean> {
+    try {
+      const isAdmin = ServerDatabase.isUserAdmin((() => {
+        try {
+          const ownerId = TelegramBotService.resolveOwnerIdByToken(token);
+          return ownerId ? ServerDatabase.getUserByIdOrEmail(ownerId) : null;
+        } catch {
+          return null;
+        }
+      })());
+      if (ServerDatabase.isMaintenanceActive() && !isAdmin) {
+        await TelegramBotService.sendMessage(token, chatId, ServerDatabase.getMaintenanceMessage());
+        return true;
+      }
+      if (!ServerDatabase.isFeatureEnabled(feature)) {
+        await TelegramBotService.sendMessage(token, chatId, `🚫 "${featureLabel}" is currently disabled by the platform admin. Please try again later.`);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   private static async handleYtCheckCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
@@ -384,6 +414,7 @@ export class TelegramBotService {
     }
     const ytCheckCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytCheck', 'Channel Analytics (/yt_check)');
     if (ytCheckCreditBlock) return;
+    if (await TelegramBotService.platformFeatureGuard(token, chatId, 'ytCheck', 'Channel Analytics')) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '📊 লাইভ YouTube অ্যানালিটিক্স আনা হচ্ছে... এক মুহূর্ত!');
     try {
@@ -426,6 +457,7 @@ export class TelegramBotService {
     }
     const ytSeoCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytSeo', 'AI Channel SEO (/yt_seo)');
     if (ytSeoCreditBlock) return;
+    if (await TelegramBotService.platformFeatureGuard(token, chatId, 'ytSeo', 'AI Channel SEO')) return;
     if (!TelegramBotService.aiGenerator) {
       await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /yt_seo again.');
       return;
@@ -548,6 +580,7 @@ export class TelegramBotService {
     }
     const ytViralCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytViral', 'AI Viral Predictor (/yt_viral)');
     if (ytViralCreditBlock) return;
+    if (await TelegramBotService.platformFeatureGuard(token, chatId, 'ytViral', 'AI Viral Predictor')) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '🔮 AI ভিরাল ভিডিও ধারণা বিশ্লেষণ করা হচ্ছে... এক মুহূর্ত!');
     try {

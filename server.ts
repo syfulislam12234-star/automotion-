@@ -893,6 +893,30 @@ async function startServer() {
   app.use('/api/channels', adminRateLimiter, isAdmin);
   app.use('/api/gateways/verify', adminRateLimiter, isAdmin);
 
+  // ==========================================
+  // PHASE 5: MAINTENANCE MODE GUARD
+  // While maintenance mode is ON, non-admin user API access receives a 503 with the
+  // configured announcement. Admins keep FULL access; auth endpoints stay reachable so
+  // admins can sign in; Telegram webhook + system endpoints stay open so bots can reply
+  // with the maintenance notice through their own handler-level checks.
+  // ==========================================
+  const MAINTENANCE_EXEMPT_PREFIXES = ['/api/admin', '/api/auth', '/api/system', '/api/telegram', '/api/health', '/health'];
+  app.use((req, res, next) => {
+    if (req.method === 'OPTIONS') return next();
+    const path = String(req.originalUrl || req.url || '').split('?')[0];
+    if (!path.startsWith('/api/') || MAINTENANCE_EXEMPT_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+      return next();
+    }
+    if (!ServerDatabase.isMaintenanceActive()) return next();
+    const user = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+    if (user && ServerDatabase.isUserAdmin(user)) return next();
+    return res.status(503).json({
+      success: false,
+      maintenanceMode: true,
+      message: ServerDatabase.getMaintenanceMessage(),
+    });
+  });
+
   app.post('/api/tts', async (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
     if (!text) return res.status(400).json({ success: false, message: 'Text is required.' });
@@ -2998,6 +3022,126 @@ async function startServer() {
       return res.json({ success: true, adsEnabled: true, plan, placements });
     } catch (err: any) {
       return res.status(500).json({ success: false, adsEnabled: false, placements: [], message: err.message || 'Failed to load ads.' });
+    }
+  });
+
+  // ==========================================
+  // PHASE 5: APP CONTROL & REVENUE
+  // ==========================================
+
+  // Latest broadcast alerts + maintenance banner info (public, used by the web app shell).
+  app.get('/api/system/alerts', (req, res) => {
+    try {
+      const config = ServerDatabase.getSystemConfig();
+      return res.json({
+        success: true,
+        maintenanceMode: config.maintenanceMode,
+        maintenanceMessage: config.maintenanceMode ? config.maintenanceMessage : '',
+        alerts: ServerDatabase.getSystemAlerts(10),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, alerts: [], message: err.message || 'Failed to load alerts.' });
+    }
+  });
+
+  // Admin: current app-control settings (maintenance, registration, trial, features).
+  app.get('/api/admin/system/app-control', (req, res) => {
+    try {
+      const config = ServerDatabase.getSystemConfig();
+      return res.json({
+        success: true,
+        appControl: {
+          maintenanceMode: config.maintenanceMode,
+          maintenanceMessage: config.maintenanceMessage,
+          registrationOpen: config.registrationOpen,
+          freeTrial: config.freeTrial,
+          featureToggles: config.featureToggles,
+        },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load app control settings.' });
+    }
+  });
+
+  // Admin: update maintenance mode, registration toggle, free trial, and feature toggles.
+  app.post('/api/admin/system/app-control', (req, res) => {
+    try {
+      const config = ServerDatabase.updateAppControl({
+        maintenanceMode: req.body?.maintenanceMode === undefined ? undefined : req.body.maintenanceMode === true,
+        maintenanceMessage: req.body?.maintenanceMessage,
+        registrationOpen: req.body?.registrationOpen === undefined ? undefined : req.body.registrationOpen === true,
+        freeTrial: req.body?.freeTrial,
+        featureToggles: req.body?.featureToggles,
+      });
+      return res.json({
+        success: true,
+        message: 'App control settings saved.',
+        appControl: {
+          maintenanceMode: config.maintenanceMode,
+          maintenanceMessage: config.maintenanceMessage,
+          registrationOpen: config.registrationOpen,
+          freeTrial: config.freeTrial,
+          featureToggles: config.featureToggles,
+        },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to save app control settings.' });
+    }
+  });
+
+  // Admin: real-time revenue & subscription financial statistics.
+  app.get('/api/admin/analytics/revenue', (req, res) => {
+    try {
+      return res.json({ success: true, stats: ServerDatabase.getRevenueStats(), generatedAt: new Date().toISOString() });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load revenue statistics.' });
+    }
+  });
+
+  // Admin: broadcast an announcement to all users (in-app alert and/or Telegram bots).
+  app.post('/api/admin/broadcast', async (req, res) => {
+    try {
+      const message = String(req.body?.message || '').trim();
+      if (!message) {
+        return res.status(400).json({ success: false, message: 'A broadcast message is required.' });
+      }
+      const channel: 'in-app' | 'telegram' | 'both' = ['in-app', 'telegram', 'both'].includes(String(req.body?.channel)) ? String(req.body.channel) as 'in-app' | 'telegram' | 'both' : 'in-app';
+      const admin = ServerDatabase.getSessionUser(req.headers.authorization);
+
+      let telegramDelivered = 0;
+      if (channel === 'telegram' || channel === 'both') {
+        // Best-effort push: message every registered bot owner (bot token + owner chat).
+        const configs = ServerDatabase.getAllBotConfigs();
+        await Promise.all(configs.map(async (entry) => {
+          const botToken = String((entry.config as any)?.telegramBotToken || '').trim();
+          const chatId = String((entry.config as any)?.telegramAdminChatId || '').trim();
+          if (!botToken || !chatId) return;
+          try {
+            const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text: `📢 ${message}`, parse_mode: 'HTML' }),
+              signal: AbortSignal.timeout(8000),
+            });
+            if (response.ok) telegramDelivered += 1;
+          } catch { /* best effort — one unreachable bot never fails the broadcast */ }
+        }));
+      }
+
+      if (channel === 'in-app' || channel === 'both') {
+        ServerDatabase.createSystemAlert(message, admin?.id || 'admin', channel, telegramDelivered);
+      } else {
+        // Telegram-only broadcasts are still logged for the admin audit trail.
+        ServerDatabase.createSystemAlert(message, admin?.id || 'admin', channel, telegramDelivered);
+      }
+
+      return res.json({
+        success: true,
+        message: `Broadcast sent via ${channel}${telegramDelivered > 0 ? ` — delivered to ${telegramDelivered} bot owner(s)` : ''}.`,
+        telegramDelivered,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Broadcast failed.' });
     }
   });
 

@@ -67,6 +67,52 @@ export interface SystemConfig {
   adPlacements: AdPlacement[];
   aiProviders: AiProviderConfig[];
   featureCreditCosts: FeatureCreditCosts;
+  // ==========================================
+  // PHASE 5: APP CONTROL & PLATFORM TOGGLES
+  // ==========================================
+  /** When true, non-admin web access receives a maintenance response; bots reply with a notice. */
+  maintenanceMode: boolean;
+  /** Custom announcement shown while maintenance mode is active. */
+  maintenanceMessage: string;
+  /** When false, new account signups/registrations are blocked (existing users unaffected). */
+  registrationOpen: boolean;
+  /** Free trial auto-granted to newly created accounts. */
+  freeTrial: { enabled: boolean; trialDays: number; bonusCredits: number };
+  /** Per-feature platform switches (all default ON — zero-break). */
+  featureToggles: {
+    liveStreaming: boolean;
+    ytCheck: boolean;
+    ytSeo: boolean;
+    ytViral: boolean;
+    autoUpload: boolean;
+  };
+}
+
+/** An admin broadcast announcement delivered in-app and/or via Telegram bots. */
+export interface SystemAlert {
+  id: string;
+  message: string;
+  /** Delivery channel used for this broadcast. */
+  channel: 'in-app' | 'telegram' | 'both';
+  sentBy: string;
+  sentAt: string;
+  /** How many Telegram recipients the message was pushed to (best effort). */
+  telegramDelivered?: number;
+}
+
+/** Revenue & subscription financial statistics for the admin dashboard. */
+export interface RevenueStats {
+  /** Approved revenue totals per currency (all time). */
+  revenueByCurrency: Record<string, number>;
+  /** Approved revenue in the trailing 30 days, per currency (MRR proxy). */
+  monthlyRecurringByCurrency: Record<string, number>;
+  approvedPaymentsCount: number;
+  pendingPaymentsCount: number;
+  rejectedPaymentsCount: number;
+  /** Active paid subscribers split by plan tier. */
+  activeSubscribers: { pro: number; enterprise: number; total: number };
+  /** Approved revenue per month (last 6 months), per currency. */
+  monthlyBreakdown: Array<{ month: string; byCurrency: Record<string, number> }>;
 }
 
 export interface UserAccount {

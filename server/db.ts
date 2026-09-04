@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts } from '../src/types';
+import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts, SystemAlert, RevenueStats } from '../src/types';
 
-export type { SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts };
+export type { SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts, SystemAlert, RevenueStats };
 
 interface StoredDb {
   users: UserAccount[];
@@ -16,6 +16,7 @@ interface StoredDb {
   storeKnowledge: Record<string, StoreKnowledge>;
   payments: PaymentTransaction[];
   systemConfig: SystemConfig;
+  systemAlerts: SystemAlert[];
 }
 
 /** Zero-break defaults: everything enabled exactly like the pre-Phase-4 behaviour. */
@@ -31,6 +32,12 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
     { id: 'pollinations', name: 'Pollinations AI', enabled: true, priority: 30 },
   ],
   featureCreditCosts: { ytSeoCost: 5, ytViralCost: 8, ytCheckCost: 2, autoUploadCost: 10 },
+  // Phase 5 app-control defaults mirror the pre-Phase-5 behaviour exactly.
+  maintenanceMode: false,
+  maintenanceMessage: '🛠️ We are performing scheduled maintenance. Please check back shortly!',
+  registrationOpen: true,
+  freeTrial: { enabled: false, trialDays: 3, bonusCredits: 100 },
+  featureToggles: { liveStreaming: true, ytCheck: true, ytSeo: true, ytViral: true, autoUpload: true },
 };
 
 const DB_FILE = path.join(process.cwd(), 'data_store.json');
@@ -47,6 +54,7 @@ export class ServerDatabase {
     storeKnowledge: {},
     payments: [],
     systemConfig: DEFAULT_SYSTEM_CONFIG,
+    systemAlerts: [],
   };
 
   public static init() {
@@ -552,6 +560,21 @@ export class ServerDatabase {
         priority: Number.isFinite(Number(p?.priority)) ? Number(p.priority) : 50,
       })),
       featureCreditCosts,
+      maintenanceMode: stored.maintenanceMode === true,
+      maintenanceMessage: String(stored.maintenanceMessage || defaults.maintenanceMessage || ''),
+      registrationOpen: stored.registrationOpen !== false,
+      freeTrial: {
+        enabled: stored.freeTrial?.enabled === true,
+        trialDays: Number.isFinite(Number(stored.freeTrial?.trialDays)) ? Math.max(0, Math.round(Number(stored.freeTrial?.trialDays))) : defaults.freeTrial.trialDays,
+        bonusCredits: Number.isFinite(Number(stored.freeTrial?.bonusCredits)) ? Math.max(0, Math.round(Number(stored.freeTrial?.bonusCredits))) : defaults.freeTrial.bonusCredits,
+      },
+      featureToggles: {
+        liveStreaming: stored.featureToggles?.liveStreaming !== false,
+        ytCheck: stored.featureToggles?.ytCheck !== false,
+        ytSeo: stored.featureToggles?.ytSeo !== false,
+        ytViral: stored.featureToggles?.ytViral !== false,
+        autoUpload: stored.featureToggles?.autoUpload !== false,
+      },
     };
   }
 
@@ -654,6 +677,183 @@ export class ServerDatabase {
     return { success: true, message: `${cost} credit(s) used for ${featureLabel}.`, remaining: user.credits };
   }
 
+  // ==========================================
+  // PHASE 5: APP CONTROL, TRIALS & BROADCASTS
+  // ==========================================
+
+  /** Update app-control platform toggles (maintenance, registration, trial, features). */
+  public static updateAppControl(patch: {
+    maintenanceMode?: boolean;
+    maintenanceMessage?: string;
+    registrationOpen?: boolean;
+    freeTrial?: Partial<SystemConfig['freeTrial']>;
+    featureToggles?: Partial<SystemConfig['featureToggles']>;
+  }): SystemConfig {
+    const current = ServerDatabase.getSystemConfig();
+    const merged: SystemConfig = {
+      ...current,
+      maintenanceMode: patch.maintenanceMode === undefined ? current.maintenanceMode : patch.maintenanceMode === true,
+      maintenanceMessage: patch.maintenanceMessage === undefined ? current.maintenanceMessage : String(patch.maintenanceMessage || '').trim() || current.maintenanceMessage,
+      registrationOpen: patch.registrationOpen === undefined ? current.registrationOpen : patch.registrationOpen === true,
+      freeTrial: { ...current.freeTrial },
+      featureToggles: { ...current.featureToggles },
+    };
+    if (patch.freeTrial && typeof patch.freeTrial === 'object') {
+      if (patch.freeTrial.enabled !== undefined) merged.freeTrial.enabled = patch.freeTrial.enabled === true;
+      if (patch.freeTrial.trialDays !== undefined) {
+        const days = Number(patch.freeTrial.trialDays);
+        if (Number.isFinite(days)) merged.freeTrial.trialDays = Math.max(0, Math.round(days));
+      }
+      if (patch.freeTrial.bonusCredits !== undefined) {
+        const credits = Number(patch.freeTrial.bonusCredits);
+        if (Number.isFinite(credits)) merged.freeTrial.bonusCredits = Math.max(0, Math.round(credits));
+      }
+    }
+    if (patch.featureToggles && typeof patch.featureToggles === 'object') {
+      for (const key of ['liveStreaming', 'ytCheck', 'ytSeo', 'ytViral', 'autoUpload'] as const) {
+        if (patch.featureToggles[key] !== undefined) merged.featureToggles[key] = patch.featureToggles[key] === true;
+      }
+    }
+    ServerDatabase.db.systemConfig = merged;
+    ServerDatabase.save();
+    return merged;
+  }
+
+  /** True while maintenance mode is active (admins bypass — enforced at the middleware). */
+  public static isMaintenanceActive(): boolean {
+    return ServerDatabase.getSystemConfig().maintenanceMode === true;
+  }
+
+  public static getMaintenanceMessage(): string {
+    return ServerDatabase.getSystemConfig().maintenanceMessage || DEFAULT_SYSTEM_CONFIG.maintenanceMessage;
+  }
+
+  /** True when the platform feature switch for the given feature is ON. */
+  public static isFeatureEnabled(feature: keyof SystemConfig['featureToggles']): boolean {
+    return ServerDatabase.getSystemConfig().featureToggles[feature] !== false;
+  }
+
+  /** True when new signups are permitted (registration toggle). */
+  public static isRegistrationOpen(): boolean {
+    return ServerDatabase.getSystemConfig().registrationOpen !== false;
+  }
+
+  /**
+   * Phase 5 free trial: auto-grants the configured trial window (Pro plan) + bonus
+   * credits to a freshly created account. Never touches admins.
+   */
+  private static applyFreeTrialToNewUser(user: UserAccount): void {
+    try {
+      const trial = ServerDatabase.getSystemConfig().freeTrial;
+      if (!trial.enabled || ServerDatabase.isUserAdmin(user)) return;
+      if (trial.trialDays > 0) {
+        const expires = new Date();
+        expires.setDate(expires.getDate() + trial.trialDays);
+        user.plan = 'pro';
+        user.subscriptionStatus = 'active';
+        user.planExpiresAt = expires.toISOString();
+      }
+      if (trial.bonusCredits > 0) {
+        user.credits = (user.credits || 0) + trial.bonusCredits;
+      }
+    } catch (e) {
+      console.warn('[ServerDB] Free trial grant skipped:', e);
+    }
+  }
+
+  // ==========================================
+  // PHASE 5: REVENUE ANALYTICS & SYSTEM ALERTS
+  // ==========================================
+
+  /** Aggregated revenue & subscription financial statistics (admin dashboard). */
+  public static getRevenueStats(): RevenueStats {
+    const payments = ServerDatabase.db.payments || [];
+    const now = Date.now();
+
+    const revenueByCurrency: Record<string, number> = {};
+    const monthlyRecurringByCurrency: Record<string, number> = {};
+    let approvedPaymentsCount = 0;
+    let pendingPaymentsCount = 0;
+    let rejectedPaymentsCount = 0;
+
+    const monthly: Record<string, Record<string, number>> = {};
+    const months: string[] = [];
+    for (let i = 5; i >= 0; i -= 1) {
+      const d = new Date();
+      d.setDate(1);
+      d.setMonth(d.getMonth() - i);
+      const key = d.toISOString().slice(0, 7);
+      months.push(key);
+      monthly[key] = {};
+    }
+
+    for (const payment of payments) {
+      const currency = String(payment.currency || 'BDT').toUpperCase();
+      if (payment.status === 'approved') {
+        approvedPaymentsCount += 1;
+        const amount = Number(payment.amount) || 0;
+        revenueByCurrency[currency] = (revenueByCurrency[currency] || 0) + amount;
+        const createdAtMs = new Date(payment.createdAt).getTime();
+        if (Number.isFinite(createdAtMs) && now - createdAtMs <= 30 * 24 * 60 * 60 * 1000) {
+          monthlyRecurringByCurrency[currency] = (monthlyRecurringByCurrency[currency] || 0) + amount;
+        }
+        const key = String(payment.createdAt || '').slice(0, 7);
+        if (monthly[key]) {
+          monthly[key][currency] = (monthly[key][currency] || 0) + amount;
+        }
+      } else if (payment.status === 'pending') {
+        pendingPaymentsCount += 1;
+      } else if (payment.status === 'rejected') {
+        rejectedPaymentsCount += 1;
+      }
+    }
+
+    const activeSubscribers = { pro: 0, enterprise: 0, total: 0 };
+    for (const user of ServerDatabase.db.users || []) {
+      const plan = String(user.plan || 'free').toLowerCase();
+      if (plan !== 'pro' && plan !== 'enterprise') continue;
+      const statusOk = user.subscriptionStatus === 'active';
+      const notExpired = !user.planExpiresAt || new Date(user.planExpiresAt).getTime() > now;
+      if (statusOk && notExpired) {
+        if (plan === 'pro') activeSubscribers.pro += 1;
+        else activeSubscribers.enterprise += 1;
+        activeSubscribers.total += 1;
+      }
+    }
+
+    return {
+      revenueByCurrency,
+      monthlyRecurringByCurrency,
+      approvedPaymentsCount,
+      pendingPaymentsCount,
+      rejectedPaymentsCount,
+      activeSubscribers,
+      monthlyBreakdown: months.map((month) => ({ month, byCurrency: monthly[month] || {} })),
+    };
+  }
+
+  /** Stores a broadcast alert (in-app delivery) and returns the stored record. */
+  public static createSystemAlert(message: string, sentBy: string, channel: 'in-app' | 'telegram' | 'both', telegramDelivered?: number): SystemAlert {
+    const alert: SystemAlert = {
+      id: 'alert_' + crypto.randomBytes(8).toString('hex'),
+      message: String(message || '').trim(),
+      channel,
+      sentBy: sentBy || 'system',
+      sentAt: new Date().toISOString(),
+      telegramDelivered,
+    };
+    if (!Array.isArray(ServerDatabase.db.systemAlerts)) ServerDatabase.db.systemAlerts = [];
+    ServerDatabase.db.systemAlerts.unshift(alert);
+    ServerDatabase.db.systemAlerts = ServerDatabase.db.systemAlerts.slice(0, 200);
+    ServerDatabase.save();
+    return alert;
+  }
+
+  /** Latest broadcast alerts (newest first). */
+  public static getSystemAlerts(limit = 10): SystemAlert[] {
+    return (ServerDatabase.db.systemAlerts || []).slice(0, Math.max(1, limit));
+  }
+
   public static getStats() {
     return {
       totalUsers: ServerDatabase.db.users.length,
@@ -694,6 +894,10 @@ export class ServerDatabase {
   }
 
   public static registerUser(data: { name: string; email: string; password: string }) {
+    // Phase 5: honour the admin registration toggle.
+    if (!ServerDatabase.isRegistrationOpen()) {
+      return { success: false, message: '🚫 Registration is currently closed. Please check back later.' };
+    }
     const email = data.email.toLowerCase().trim();
     const existing = ServerDatabase.db.users.find(u => u.email === email);
     if (existing) {
@@ -735,6 +939,7 @@ export class ServerDatabase {
       avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
     };
     ServerDatabase.ensureSubscriptionDefaults(newUser);
+    ServerDatabase.applyFreeTrialToNewUser(newUser);
 
     const passwordHash = crypto.createHash('sha256').update(data.password).digest('hex');
     ServerDatabase.db.users.push(newUser);
@@ -827,7 +1032,11 @@ export class ServerDatabase {
     const cleanEmail = data.email.toLowerCase().trim();
     let user = ServerDatabase.db.users.find(u => u.email === cleanEmail);
     if (!user) {
-      // Auto-provision user account for painless preview
+      // Auto-provision user account for painless preview — but respect the
+      // Phase 5 registration toggle: closed registration blocks NEW accounts only.
+      if (!ServerDatabase.isRegistrationOpen()) {
+        return { success: false, message: '🚫 Registration is currently closed. Existing accounts can still sign in.', registrationClosed: true };
+      }
       user = {
         id: 'usr_' + crypto.randomBytes(8).toString('hex'),
         name: cleanEmail.split('@')[0] || 'Developer',
@@ -840,6 +1049,7 @@ export class ServerDatabase {
         avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanEmail)}`,
       };
       ServerDatabase.ensureSubscriptionDefaults(user);
+      ServerDatabase.applyFreeTrialToNewUser(user);
       ServerDatabase.db.users.push(user);
       ServerDatabase.db.passwords[user.id] = crypto.createHash('sha256').update(data.password).digest('hex');
     }
@@ -877,6 +1087,10 @@ export class ServerDatabase {
     let user = ServerDatabase.db.users.find(u => u.email === cleanEmail);
 
     if (!user) {
+      // Phase 5: respect the registration toggle for brand-new Google signups.
+      if (!ServerDatabase.isRegistrationOpen()) {
+        throw new Error('🚫 Registration is currently closed. Existing accounts can still sign in.');
+      }
       const userId = 'gusr_' + crypto.randomBytes(8).toString('hex');
       const isFirst = ServerDatabase.db.users.length === 0;
       user = {
@@ -891,6 +1105,7 @@ export class ServerDatabase {
         avatarUrl: data.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name || cleanEmail)}`,
       };
       ServerDatabase.ensureSubscriptionDefaults(user);
+      ServerDatabase.applyFreeTrialToNewUser(user);
       ServerDatabase.db.users.push(user);
     } else {
       user.lastLoginAt = new Date().toISOString();

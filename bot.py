@@ -182,6 +182,31 @@ def get_ai_provider_order() -> List[Dict[str, Any]]:
     entries.sort(key=lambda item: item["priority"])
     return entries
 
+
+def is_maintenance_mode() -> bool:
+    """True while the admin has Maintenance Mode ON (read-only system config)."""
+    config = load_system_config()
+    return bool(config.get("maintenanceMode", False))
+
+
+def get_maintenance_message() -> str:
+    """The admin-configured announcement shown while maintenance mode is active."""
+    config = load_system_config()
+    return str(config.get("maintenanceMessage", "") or "🛠️ We are performing scheduled maintenance. Please check back shortly!")
+
+
+def is_feature_enabled(feature: str) -> bool:
+    """
+    True when the platform feature toggle for `feature` (ytCheck / ytSeo / ytViral /
+    autoUpload / liveStreaming) is enabled. With no config, every toggle is ON so the
+    pre-Phase-5 bot behaviour is preserved (zero-break).
+    """
+    config = load_system_config()
+    toggles = config.get("featureToggles") if isinstance(config, dict) else None
+    if isinstance(toggles, dict) and feature in toggles:
+        return toggles.get(feature) is not False
+    return True
+
 # Lazy-loaded python-telegram-bot modules
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -1101,6 +1126,12 @@ def _format_yt_check_report(stats: dict, analytics: dict) -> str:
 
 async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /yt_check (alias /analytics) — live channel stats, impressions, CTR and audit."""
+    if is_maintenance_mode():
+        await safe_reply(update, get_maintenance_message(), parse_mode=ParseMode.HTML)
+        return
+    if not is_feature_enabled("ytCheck"):
+        await safe_reply(update, "🚫 Channel Analytics (/yt_check) is currently disabled by the platform admin. Please try again later.", parse_mode=ParseMode.HTML)
+        return
     if not update.effective_message or not update.effective_chat:
         return
     if not OWNER_SETTINGS.get("youtubeRefreshToken"):
@@ -1125,6 +1156,12 @@ async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /yt_seo — AI channel SEO audit through the multi-tier AI cascade."""
+    if is_maintenance_mode():
+        await safe_reply(update, get_maintenance_message(), parse_mode=ParseMode.HTML)
+        return
+    if not is_feature_enabled("ytSeo"):
+        await safe_reply(update, "🚫 AI Channel SEO (/yt_seo) is currently disabled by the platform admin. Please try again later.", parse_mode=ParseMode.HTML)
+        return
     if not update.effective_message or not update.effective_chat:
         return
     if not OWNER_SETTINGS.get("youtubeRefreshToken"):
@@ -1337,6 +1374,12 @@ def _format_viral_report(channel_name: str, predictions: List[Dict[str, object]]
 
 async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /yt_viral — AI-powered viral video concept predictions for the channel."""
+    if is_maintenance_mode():
+        await safe_reply(update, get_maintenance_message(), parse_mode=ParseMode.HTML)
+        return
+    if not is_feature_enabled("ytViral"):
+        await safe_reply(update, "🚫 AI Viral Predictor (/yt_viral) is currently disabled by the platform admin. Please try again later.", parse_mode=ParseMode.HTML)
+        return
     if not update.effective_message or not update.effective_chat:
         return
     if not OWNER_SETTINGS.get("youtubeRefreshToken"):
