@@ -28,6 +28,47 @@ export interface PaymentTransaction {
   reviewedAt?: string;
 }
 
+// ==========================================
+// SYSTEM ADS & AI CONFIGURATION (Phase 4)
+// ==========================================
+
+/** A single configurable ad slot (banner/popup/inline script). */
+export interface AdPlacement {
+  id: string;
+  name: string;
+  /** Raw ad script/HTML snippet injected at the placement. */
+  code: string;
+  /** Show the ad once every N requests/loads (1 = every time). */
+  frequency: number;
+  enabled: boolean;
+}
+
+/** AI provider enablement + ordering managed from the admin panel. */
+export interface AiProviderConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Lower number = tried first in the failover cascade. */
+  priority: number;
+}
+
+/** Credit price per feature (deducted from the user's balance on use). */
+export interface FeatureCreditCosts {
+  ytSeoCost: number;
+  ytViralCost: number;
+  ytCheckCost: number;
+  autoUploadCost: number;
+}
+
+/** Global system configuration for ads + AI providers (admin-managed). */
+export interface SystemConfig {
+  adsEnabled: boolean;
+  adsByPlan: { free: boolean; pro: boolean; enterprise: boolean };
+  adPlacements: AdPlacement[];
+  aiProviders: AiProviderConfig[];
+  featureCreditCosts: FeatureCreditCosts;
+}
+
 export interface UserAccount {
   id: string;
   name: string;

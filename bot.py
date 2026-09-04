@@ -19,6 +19,7 @@ import html
 import logging
 import asyncio
 import hashlib
+import time
 from datetime import datetime, timedelta
 from urllib.parse import unquote
 from typing import Dict, List, Any, Optional
@@ -109,6 +110,77 @@ OWNER_SETTINGS: Dict[str, object] = {
     "youtubeChannelId": os.getenv("OWNER_YOUTUBE_CHANNEL_ID", "").strip(),
     "autoUpload": os.getenv("OWNER_AUTO_UPLOAD", "on").strip().lower() in ("1", "on", "true", "yes"),
 }
+
+# ==========================================
+# PHASE 4: SYSTEM CONFIG (ADS + AI PROVIDERS) — read-only mirror of data_store.json
+# The Node.js server owns data_store.json; this worker only READS it (never writes)
+# so admin AI-provider toggles/priority ordering apply to the Python cascade without
+# any file-clobbering risk. Any read failure falls back to the legacy cascade order.
+# ==========================================
+_SYSTEM_CONFIG_CACHE: Dict[str, Any] = {"data": None, "readAt": 0.0}
+_SYSTEM_CONFIG_TTL_SECONDS = 60.0
+
+# Legacy hardcoded cascade order (Groq -> Gemini -> OpenRouter -> Cerebras -> Pollinations)
+LEGACY_AI_PROVIDER_ORDER: List[Dict[str, Any]] = [
+    {"id": "groq", "priority": 10},
+    {"id": "gemini", "priority": 20},
+    {"id": "openrouter", "priority": 30},
+    {"id": "cerebras", "priority": 40},
+    {"id": "pollinations", "priority": 50},
+]
+
+
+def load_system_config() -> Dict[str, Any]:
+    """Read the shared admin system config (ads + AI providers) with a 60s cache."""
+    now = time.time()
+    cached = _SYSTEM_CONFIG_CACHE.get("data")
+    if cached is not None and now - float(_SYSTEM_CONFIG_CACHE.get("readAt", 0.0)) < _SYSTEM_CONFIG_TTL_SECONDS:
+        return cached  # type: ignore[return-value]
+    config: Dict[str, Any] = {}
+    try:
+        store_path = os.path.join(os.getcwd(), "data_store.json")
+        if os.path.exists(store_path):
+            with open(store_path, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            stored = raw.get("systemConfig") if isinstance(raw, dict) else None
+            if isinstance(stored, dict):
+                config = stored
+    except Exception as exc:  # never break the bot because of a config read
+        logger.warning(f"⚠️ System config read failed (using legacy defaults): {exc}")
+    _SYSTEM_CONFIG_CACHE["data"] = config
+    _SYSTEM_CONFIG_CACHE["readAt"] = now
+    return config
+
+
+def get_ai_provider_order() -> List[Dict[str, Any]]:
+    """
+    Ordered enabled AI provider tiers from the admin system config.
+    - Providers with enabled=false are excluded (admin toggles respected).
+    - Tries are sorted by the admin-configured priority (lower = first).
+    - No config file / no providers list → legacy hardcoded order (zero-break).
+    - Config present but every provider disabled → empty list (AI fully paused).
+    """
+    config = load_system_config()
+    providers = config.get("aiProviders") if isinstance(config, dict) else None
+    saw_config = False
+    entries: List[Dict[str, Any]] = []
+    if isinstance(providers, list) and providers:
+        saw_config = True
+        for entry in providers:
+            if not isinstance(entry, dict) or entry.get("enabled") is False:
+                continue
+            provider_id = str(entry.get("id", "")).strip().lower()
+            if provider_id == "google":
+                provider_id = "gemini"  # the Node config names Gemini's route 'google'
+            try:
+                priority = float(entry.get("priority", 50))
+            except (TypeError, ValueError):
+                priority = 50.0
+            entries.append({"id": provider_id, "priority": priority})
+    if not saw_config:
+        entries = [dict(item) for item in LEGACY_AI_PROVIDER_ORDER]
+    entries.sort(key=lambda item: item["priority"])
+    return entries
 
 # Lazy-loaded python-telegram-bot modules
 try:
@@ -290,39 +362,33 @@ async def generate_ai_reply(chat_id: int, prompt: str) -> str:
         effective_history.insert(0, {"role": "user", "content": f"[Context Summary]: {mem.summary}"})
         effective_history.insert(1, {"role": "assistant", "content": "Understood, continuing conversation context."})
 
-    # Tier 1: Groq LPU
-    if GROQ_API_KEYS:
-        try:
-            return await call_groq_ai(prompt, effective_history)
-        except Exception as e:
-            logger.warning(f"⚠️ Tier 1 (Groq) failed: {e}. Falling back to Tier 2...")
+    # Phase 4: config-driven tier cascade — the admin's AI provider toggles and
+    # priority ordering decide which providers run and in which order. Unavailable
+    # providers (no API key) are skipped; an empty order means AI is fully paused.
+    tier_calls = {
+        "groq": lambda: call_groq_ai(prompt, effective_history),
+        "gemini": lambda: call_gemini_ai(prompt, effective_history),
+        "openrouter": lambda: call_openrouter_ai(prompt, effective_history),
+        "cerebras": lambda: call_cerebras_ai(prompt, effective_history),
+        "pollinations": lambda: call_pollinations_ai(prompt),
+    }
+    tier_availability = {
+        "groq": bool(GROQ_API_KEYS),
+        "gemini": bool(GEMINI_API_KEYS),
+        "openrouter": bool(OPENROUTER_API_KEY) and not OPENROUTER_API_KEY.startswith("YOUR_"),
+        "cerebras": bool(CEREBRAS_API_KEY) and not CEREBRAS_API_KEY.startswith("YOUR_"),
+        "pollinations": True,
+    }
 
-    # Tier 2: Google Gemini
-    if GEMINI_API_KEYS:
+    for index, tier in enumerate(get_ai_provider_order(), start=1):
+        provider_id = str(tier.get("id", ""))
+        runner = tier_calls.get(provider_id)
+        if not runner or not tier_availability.get(provider_id):
+            continue
         try:
-            return await call_gemini_ai(prompt, effective_history)
+            return await runner()
         except Exception as e:
-            logger.warning(f"⚠️ Tier 2 (Gemini) failed: {e}. Falling back to Tier 3...")
-
-    # Tier 3: OpenRouter
-    if OPENROUTER_API_KEY and not OPENROUTER_API_KEY.startswith("YOUR_"):
-        try:
-            return await call_openrouter_ai(prompt, effective_history)
-        except Exception as e:
-            logger.warning(f"⚠️ Tier 3 (OpenRouter) failed: {e}. Falling back to Tier 4...")
-
-    # Tier 4: Cerebras
-    if CEREBRAS_API_KEY and not CEREBRAS_API_KEY.startswith("YOUR_"):
-        try:
-            return await call_cerebras_ai(prompt, effective_history)
-        except Exception as e:
-            logger.warning(f"⚠️ Tier 4 (Cerebras) failed: {e}. Falling back to Tier 5...")
-
-    # Tier 5: Pollinations AI
-    try:
-        return await call_pollinations_ai(prompt)
-    except Exception as e:
-        logger.warning(f"⚠️ Tier 5 (Pollinations) notice: {e}.")
+            logger.warning(f"⚠️ Tier {index} ({provider_id}) failed: {e}. Falling back to next tier...")
 
     return "দুঃখিত, কোনো এআই প্রদানকারী উত্তর দিতে পারেনি। অনুগ্রহ করে আবার চেষ্টা করুন।"
 

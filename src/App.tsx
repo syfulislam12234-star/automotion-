@@ -8,6 +8,7 @@ import { MemoryInspector } from './components/MemoryInspector';
 import { AdminControlPanel } from './components/AdminControlPanel';
 import { AdminUserManager } from './components/AdminUserManager';
 import { AdminPaymentManager } from './components/AdminPaymentManager';
+import { AdminAdsAiManager } from './components/AdminAdsAiManager';
 import { ApiPortalModal } from './components/ApiPortalModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
 import { AuthModal } from './components/AuthModal';
@@ -400,7 +401,7 @@ function AppContent() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
   // Phase 2: which section of the /admin workspace is displayed.
-  const [adminSection, setAdminSection] = useState<'control' | 'users' | 'payments'>('control');
+  const [adminSection, setAdminSection] = useState<'control' | 'users' | 'payments' | 'adsai'>('control');
   const [authModalTab, setAuthModalTab] = useState<'login' | 'signup' | 'verify'>('login');
   const [authFeatureContext, setAuthFeatureContext] = useState<string | undefined>(undefined);
   const currentUser = session?.user || null;
@@ -983,6 +984,12 @@ function AppContent() {
               >
                 💳 Payments
               </button>
+              <button
+                onClick={() => setAdminSection('adsai')}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${adminSection === 'adsai' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'}`}
+              >
+                📢 Ads &amp; AI Control
+              </button>
             </div>
             {adminSection === 'control' ? (
               <AdminControlPanel
@@ -994,8 +1001,10 @@ function AppContent() {
               />
             ) : adminSection === 'users' ? (
               <AdminUserManager onShowToast={showToast} />
-            ) : (
+            ) : adminSection === 'payments' ? (
               <AdminPaymentManager onShowToast={showToast} />
+            ) : (
+              <AdminAdsAiManager onShowToast={showToast} />
             )}
           </div>
         )}

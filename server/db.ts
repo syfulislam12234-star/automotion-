@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod } from '../src/types';
+import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts } from '../src/types';
 
-export type { SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod };
+export type { SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts };
 
 interface StoredDb {
   users: UserAccount[];
@@ -15,7 +15,23 @@ interface StoredDb {
   crmMessages: CrmMessage[];
   storeKnowledge: Record<string, StoreKnowledge>;
   payments: PaymentTransaction[];
+  systemConfig: SystemConfig;
 }
+
+/** Zero-break defaults: everything enabled exactly like the pre-Phase-4 behaviour. */
+const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
+  adsEnabled: false,
+  adsByPlan: { free: true, pro: false, enterprise: false },
+  adPlacements: [],
+  aiProviders: [
+    { id: 'groq', name: 'Groq Cloud LPU', enabled: true, priority: 10 },
+    { id: 'cerebras', name: 'Cerebras LPU', enabled: true, priority: 12 },
+    { id: 'google', name: 'Google Gemini', enabled: true, priority: 14 },
+    { id: 'openrouter', name: 'OpenRouter', enabled: true, priority: 18 },
+    { id: 'pollinations', name: 'Pollinations AI', enabled: true, priority: 30 },
+  ],
+  featureCreditCosts: { ytSeoCost: 5, ytViralCost: 8, ytCheckCost: 2, autoUploadCost: 10 },
+};
 
 const DB_FILE = path.join(process.cwd(), 'data_store.json');
 
@@ -30,6 +46,7 @@ export class ServerDatabase {
     crmMessages: [],
     storeKnowledge: {},
     payments: [],
+    systemConfig: DEFAULT_SYSTEM_CONFIG,
   };
 
   public static init() {
@@ -490,6 +507,151 @@ export class ServerDatabase {
     payment.reviewedAt = now;
     ServerDatabase.save();
     return { success: true, message: 'Payment rejected.', payment };
+  }
+
+  // ==========================================
+  // SYSTEM ADS & AI CONFIGURATION (Phase 4)
+  // ==========================================
+
+  /**
+   * Normalized system configuration: stored values merged over zero-break defaults,
+   * so pre-Phase-4 data files (and missing fields) always resolve to safe values.
+   */
+  public static getSystemConfig(): SystemConfig {
+    const stored = (ServerDatabase.db.systemConfig || {}) as Partial<SystemConfig>;
+    const defaults = DEFAULT_SYSTEM_CONFIG;
+
+    const adsByPlan = { ...defaults.adsByPlan, ...(stored.adsByPlan || {}) };
+    const featureCreditCosts = { ...defaults.featureCreditCosts, ...(stored.featureCreditCosts || {}) };
+
+    const storedProviders = Array.isArray(stored.aiProviders) && stored.aiProviders.length > 0
+      ? stored.aiProviders
+      : defaults.aiProviders;
+    // Union with defaults so providers introduced in later versions are never lost.
+    const aiProviders = storedProviders.map((p) => ({ ...p }));
+    for (const d of defaults.aiProviders) {
+      if (!aiProviders.some((p) => p.id === d.id)) aiProviders.push({ ...d });
+    }
+
+    const adPlacements = (Array.isArray(stored.adPlacements) ? stored.adPlacements : []).map((p, index) => ({
+      id: String(p?.id || `ad_${index + 1}`),
+      name: String(p?.name || `Placement ${index + 1}`),
+      code: String(p?.code || ''),
+      frequency: Number.isFinite(Number(p?.frequency)) && Number(p.frequency) >= 1 ? Math.round(Number(p.frequency)) : 1,
+      enabled: p?.enabled !== false,
+    }));
+
+    return {
+      adsEnabled: stored.adsEnabled === true,
+      adsByPlan,
+      adPlacements,
+      aiProviders: aiProviders.map((p) => ({
+        id: String(p?.id || ''),
+        name: String(p?.name || p?.id || 'Provider'),
+        enabled: p?.enabled !== false,
+        priority: Number.isFinite(Number(p?.priority)) ? Number(p.priority) : 50,
+      })),
+      featureCreditCosts,
+    };
+  }
+
+  /** Update ads configuration (global toggle, plan eligibility, placements). */
+  public static updateAdsConfig(patch: {
+    adsEnabled?: boolean;
+    adsByPlan?: Partial<SystemConfig['adsByPlan']>;
+    adPlacements?: AdPlacement[];
+  }): SystemConfig {
+    const current = ServerDatabase.getSystemConfig();
+    const adsByPlan = { ...current.adsByPlan };
+    if (patch.adsByPlan && typeof patch.adsByPlan === 'object') {
+      for (const key of ['free', 'pro', 'enterprise'] as const) {
+        if (patch.adsByPlan[key] !== undefined) adsByPlan[key] = patch.adsByPlan[key] === true;
+      }
+    }
+    const adPlacements = Array.isArray(patch.adPlacements) ? patch.adPlacements : current.adPlacements;
+    const merged: SystemConfig = {
+      ...current,
+      adsEnabled: patch.adsEnabled === undefined ? current.adsEnabled : patch.adsEnabled === true,
+      adsByPlan,
+      adPlacements,
+    };
+    ServerDatabase.db.systemConfig = merged;
+    ServerDatabase.save();
+    return merged;
+  }
+
+  /** Update AI provider ordering/toggles and per-feature credit costs. */
+  public static updateAiConfig(patch: {
+    aiProviders?: AiProviderConfig[];
+    featureCreditCosts?: Partial<FeatureCreditCosts>;
+  }): SystemConfig {
+    const current = ServerDatabase.getSystemConfig();
+    const featureCreditCosts = { ...current.featureCreditCosts };
+    if (patch.featureCreditCosts && typeof patch.featureCreditCosts === 'object') {
+      for (const key of ['ytSeoCost', 'ytViralCost', 'ytCheckCost', 'autoUploadCost'] as const) {
+        const value = Number(patch.featureCreditCosts[key]);
+        if (patch.featureCreditCosts[key] !== undefined && Number.isFinite(value)) {
+          featureCreditCosts[key] = Math.max(0, Math.round(value));
+        }
+      }
+    }
+    const aiProviders = Array.isArray(patch.aiProviders) && patch.aiProviders.length > 0
+      ? patch.aiProviders
+      : current.aiProviders;
+    const merged: SystemConfig = {
+      ...current,
+      aiProviders,
+      featureCreditCosts,
+    };
+    ServerDatabase.db.systemConfig = merged;
+    ServerDatabase.save();
+    return merged;
+  }
+
+  /** Credit cost for a named feature (from the admin-configured system settings). */
+  public static getFeatureCreditCost(feature: 'ytSeo' | 'ytViral' | 'ytCheck' | 'autoUpload'): number {
+    const costs = ServerDatabase.getSystemConfig().featureCreditCosts;
+    const map: Record<string, number> = {
+      ytSeo: Number(costs.ytSeoCost),
+      ytViral: Number(costs.ytViralCost),
+      ytCheck: Number(costs.ytCheckCost),
+      autoUpload: Number(costs.autoUploadCost),
+    };
+    const value = Number(map[feature]);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+  }
+
+  /**
+   * Deducts feature credits from a user's balance (multi-tenant safe).
+   * - Administrators always pass (unlimited credits, nothing deducted).
+   * - Legacy accounts without a credits balance are grandfathered (allowed, no change)
+   *   so pre-Phase-2 sessions can never be broken by the enforcement gate.
+   * - Cost 0 (feature disabled pricing) is always free.
+   */
+  public static deductCredits(userId: string, amount: number, featureLabel = 'this feature'): { success: boolean; message: string; remaining?: number } {
+    const cost = Math.max(0, Math.round(Number(amount) || 0));
+    if (cost <= 0) {
+      return { success: true, message: 'No credits required.' };
+    }
+    const user = ServerDatabase.getUserByIdOrEmail(userId);
+    if (!user) {
+      return { success: false, message: 'User account could not be resolved.' };
+    }
+    if (ServerDatabase.isUserAdmin(user)) {
+      return { success: true, message: 'Administrators have unlimited credits.' };
+    }
+    if (user.credits === undefined || user.credits === null) {
+      return { success: true, message: 'Legacy account — credit enforcement not applied.' };
+    }
+    if (user.credits < cost) {
+      return {
+        success: false,
+        message: `💎 Not enough credits for ${featureLabel} — needs ${cost}, you have ${user.credits}. Please contact an administrator or upgrade your plan.`,
+      };
+    }
+    user.credits = user.credits - cost;
+    ServerDatabase.save();
+    return { success: true, message: `${cost} credit(s) used for ${featureLabel}.`, remaining: user.credits };
   }
 
   public static getStats() {

@@ -27,6 +27,8 @@ export interface FailoverAttemptOptions {
   maxModelsPerRoute?: number;
   /** Per-owner knowledge isolation: inject ONLY this workspace's trained store context. */
   knowledgeWorkspaceId?: string;
+  /** Phase 4: provider ids disabled by the admin AI configuration — never attempted. */
+  skipProviders?: string[];
 }
 
 export interface FailoverResult {
@@ -225,11 +227,15 @@ export class FailoverEngine {
       messages.unshift({ role: 'system', content: knowledgeBlock });
     }
 
-    const orderedRoutes = [...PROVIDER_ROUTES].sort((a, b) => {
-      const aBoost = preferredProvider && a.id === preferredProvider ? -1000 : 0;
-      const bBoost = preferredProvider && b.id === preferredProvider ? -1000 : 0;
-      return (a.priority + aBoost) - (b.priority + bBoost);
-    });
+    const skipProviders = new Set<string>((Array.isArray(options.skipProviders) ? options.skipProviders : []).map((id) => String(id || '').trim()).filter(Boolean));
+
+    const orderedRoutes = [...PROVIDER_ROUTES]
+      .filter((route) => !skipProviders.has(route.id))
+      .sort((a, b) => {
+        const aBoost = preferredProvider && a.id === preferredProvider ? -1000 : 0;
+        const bBoost = preferredProvider && b.id === preferredProvider ? -1000 : 0;
+        return (a.priority + aBoost) - (b.priority + bBoost);
+      });
 
     const activeProviderIds = GlobalApiKeyStore.getActiveProviderIds();
     let attempts = 0;

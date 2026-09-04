@@ -342,12 +342,48 @@ export class TelegramBotService {
   }
 
   /** /yt_check (alias /analytics) — live channel stats, impressions, CTR and security audit. */
+  /** Phase 4: resolve the owning user id for a bot token (in-memory registry first, then database). */
+  private static resolveOwnerIdByToken(token: string): string | null {
+    const cleanToken = String(token || '').trim();
+    if (!cleanToken) return null;
+    for (const [ownerId, config] of TelegramBotService.userBotRegistry.entries()) {
+      if (String(config?.telegramBotToken || '').trim() === cleanToken) return ownerId;
+    }
+    try {
+      const match = ServerDatabase.getAllBotConfigs().find((entry) => String(entry.config?.telegramBotToken || '').trim() === cleanToken);
+      return match?.targetId || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Phase 4 credit gate: charges the admin-configured credit cost for a premium AI
+   * feature against the bot owner's balance. Returns null when the caller may proceed,
+   * or a ready-to-send refusal message when the owner is out of credits. Enforcement
+   * failures can never break the feature (fail-open by design).
+   */
+  private static async chargeFeatureCredits(token: string, chatId: string | number, feature: 'ytSeo' | 'ytViral' | 'ytCheck', featureLabel: string): Promise<string | null> {
+    try {
+      const ownerId = TelegramBotService.resolveOwnerIdByToken(token);
+      if (!ownerId) return null; // cannot attribute the bot to a user → never block
+      const gate = ServerDatabase.deductCredits(ownerId, ServerDatabase.getFeatureCreditCost(feature), featureLabel);
+      if (gate.success) return null;
+      await TelegramBotService.sendMessage(token, chatId, gate.message);
+      return gate.message;
+    } catch {
+      return null;
+    }
+  }
+
   private static async handleYtCheckCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
       return;
     }
+    const ytCheckCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytCheck', 'Channel Analytics (/yt_check)');
+    if (ytCheckCreditBlock) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '📊 লাইভ YouTube অ্যানালিটিক্স আনা হচ্ছে... এক মুহূর্ত!');
     try {
@@ -388,6 +424,8 @@ export class TelegramBotService {
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
       return;
     }
+    const ytSeoCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytSeo', 'AI Channel SEO (/yt_seo)');
+    if (ytSeoCreditBlock) return;
     if (!TelegramBotService.aiGenerator) {
       await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /yt_seo again.');
       return;
@@ -508,6 +546,8 @@ export class TelegramBotService {
       await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /yt_viral again.');
       return;
     }
+    const ytViralCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytViral', 'AI Viral Predictor (/yt_viral)');
+    if (ytViralCreditBlock) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '🔮 AI ভিরাল ভিডিও ধারণা বিশ্লেষণ করা হচ্ছে... এক মুহূর্ত!');
     try {

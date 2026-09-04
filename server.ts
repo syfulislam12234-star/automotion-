@@ -225,14 +225,53 @@ function getProviderApiKeys(prefixes: string[]): string[] {
 }
 
 // ⚡ Millisecond failover engine bridge used across all configured provider routes
-async function runMillisecondFailover(messages: any[], preferredProvider?: string, preferredModel?: string) {
+async function runMillisecondFailover(messages: any[], preferredProvider?: string, preferredModel?: string, skipProviders?: string[]) {
   try {
-    return await FailoverEngine.generate(messages, { preferredProvider, preferredModel });
+    return await FailoverEngine.generate(messages, { preferredProvider, preferredModel, skipProviders });
   } catch (error: any) {
     console.warn('[FailoverEngine] Cascade exhausted:', error?.message || error);
     return null;
   }
 }
+
+// ==========================================
+// PHASE 4: ADMIN-MANAGED AI PROVIDER RUNTIME (enabled flags + priority ordering)
+// Zero-break: with the default config (all providers enabled) behaviour is identical
+// to the pre-Phase-4 cascade; changes apply only after an admin edits the settings.
+// ==========================================
+
+/** Resolves the admin AI configuration into FailoverEngine runtime options. */
+function getAiRuntimeProviderOptions(): { preferredProvider?: string; skipProviders: string[] } {
+  try {
+    const config = ServerDatabase.getSystemConfig();
+    const enabled = config.aiProviders
+      .filter((provider) => provider.enabled)
+      .sort((a, b) => a.priority - b.priority);
+    const disabledIds = config.aiProviders.filter((provider) => !provider.enabled).map((provider) => provider.id);
+    // Highest-priority enabled provider becomes the preferred cascade start. Provider
+    // ids that do not map to an engine route (e.g. 'pollinations') are harmlessly
+    // ignored by the engine's preference boost.
+    return {
+      preferredProvider: enabled[0]?.id || undefined,
+      skipProviders: disabledIds,
+    };
+  } catch (error: any) {
+    console.warn('[AI Runtime] Falling back to default provider cascade:', error?.message || error);
+    return { skipProviders: [] };
+  }
+}
+
+/** True when the admin configuration has not disabled the given provider id. */
+function isSystemProviderEnabled(providerId: string): boolean {
+  try {
+    const config = ServerDatabase.getSystemConfig();
+    const entry = config.aiProviders.find((provider) => provider.id === providerId);
+    return entry ? entry.enabled : true;
+  } catch {
+    return true;
+  }
+}
+
 
 // Resilient Gemini Generator with automatic multi-key, multi-model fallback and per-model timeout
 async function generateWithGemini(
@@ -1611,8 +1650,8 @@ async function startServer() {
         const ensembleStart = Date.now();
         const parallelTasks: Array<Promise<{ provider: string; model: string; text: string; latencyMs: number }>> = [];
 
-        // Task 1: Groq Cloud LPU
-        parallelTasks.push(
+        // Task 1: Groq Cloud LPU (skipped when disabled in the admin AI configuration)
+        if (isSystemProviderEnabled('groq')) parallelTasks.push(
           (async () => {
             const t0 = Date.now();
             const gr = await generateWithGroq(groqMessages, model && model.includes('llama') ? model : undefined);
@@ -1621,8 +1660,8 @@ async function startServer() {
           })()
         );
 
-        // Task 2: Google Gemini
-        parallelTasks.push(
+        // Task 2: Google Gemini (skipped when disabled in the admin AI configuration)
+        if (isSystemProviderEnabled('google')) parallelTasks.push(
           (async () => {
             const t0 = Date.now();
             const gm = await generateWithGemini(contentsPayload, effectiveSysInstruction, model);
@@ -1631,8 +1670,8 @@ async function startServer() {
           })()
         );
 
-        // Task 3: OpenRouter
-        parallelTasks.push(
+        // Task 3: OpenRouter (skipped when disabled in the admin AI configuration)
+        if (isSystemProviderEnabled('openrouter')) parallelTasks.push(
           (async () => {
             const t0 = Date.now();
             const or = await generateWithOpenRouter(groqMessages, model && model.includes('deepseek') ? model : undefined);
@@ -1641,8 +1680,8 @@ async function startServer() {
           })()
         );
 
-        // Task 4: Cerebras LPU
-        parallelTasks.push(
+        // Task 4: Cerebras LPU (skipped when disabled in the admin AI configuration)
+        if (isSystemProviderEnabled('cerebras')) parallelTasks.push(
           (async () => {
             const t0 = Date.now();
             const cb = await generateWithCerebras(groqMessages);
@@ -1651,8 +1690,8 @@ async function startServer() {
           })()
         );
 
-        // Task 5: SambaNova RDU
-        parallelTasks.push(
+        // Task 5: SambaNova RDU (skipped when disabled in the admin AI configuration)
+        if (isSystemProviderEnabled('sambanova')) parallelTasks.push(
           (async () => {
             const t0 = Date.now();
             const sn = await generateWithSambaNova(groqMessages);
@@ -1710,7 +1749,7 @@ async function startServer() {
 
       // Sequential Waterfall Fallback (if ensemble is disabled or returned zero responses)
       // Tier 1: Groq Cloud LPU
-      const groqResult = selectedProvider && selectedProvider !== 'groq'
+      const groqResult = (selectedProvider && selectedProvider !== 'groq') || !isSystemProviderEnabled('groq')
         ? null
         : await generateWithGroq(groqMessages, selectedProviderModel && selectedProviderModel.includes('llama') ? selectedProviderModel : 'llama-3.1-8b-instant');
       if (groqResult && groqResult.text) {
@@ -1724,7 +1763,7 @@ async function startServer() {
       }
 
       // Tier 2: OpenRouter
-      const openRouterResult = selectedProvider && selectedProvider !== 'deepseek' && selectedProvider !== 'openrouter'
+      const openRouterResult = (selectedProvider && selectedProvider !== 'deepseek' && selectedProvider !== 'openrouter') || !isSystemProviderEnabled('openrouter')
         ? null
         : await generateWithOpenRouter(groqMessages, selectedProviderModel && selectedProviderModel.includes('deepseek') ? selectedProviderModel : undefined);
       if (openRouterResult && openRouterResult.text) {
@@ -1738,7 +1777,7 @@ async function startServer() {
       }
 
       // Tier 3: Cerebras
-      const cerebrasResult = selectedProvider && selectedProvider !== 'cerebras'
+      const cerebrasResult = (selectedProvider && selectedProvider !== 'cerebras') || !isSystemProviderEnabled('cerebras')
         ? null
         : await generateWithCerebras(groqMessages);
       if (cerebrasResult && cerebrasResult.text) {
@@ -1752,7 +1791,7 @@ async function startServer() {
       }
 
       // Tier 4: Google Gemini
-      const geminiResult = selectedProvider && selectedProvider !== 'google' && selectedProvider !== 'gemini'
+      const geminiResult = (selectedProvider && selectedProvider !== 'google' && selectedProvider !== 'gemini') || !isSystemProviderEnabled('google')
         ? null
         : await generateWithGemini(contentsPayload, effectiveSysInstruction, selectedProviderModel);
       if (geminiResult && geminiResult.text) {
@@ -1794,7 +1833,15 @@ async function startServer() {
       // ENTIRE active provider pool (OpenAI, Claude, Gemini, Groq, OpenRouter, Cerebras,
       // SambaNova, Mistral, DeepSeek, Together, NVIDIA NIM, ...) with a 3s deadline per
       // attempt. The user never receives an error while at least one valid key is active.
-      const failoverResult = await runMillisecondFailover(groqMessages, selectedProvider || undefined, selectedProviderModel || model);
+      // Phase 4: providers disabled by the admin AI configuration are skipped entirely and
+      // the highest-priority enabled provider becomes the preferred cascade start.
+      const aiRuntimeOptions = getAiRuntimeProviderOptions();
+      const failoverResult = await runMillisecondFailover(
+        groqMessages,
+        selectedProvider || aiRuntimeOptions.preferredProvider,
+        selectedProviderModel || model,
+        aiRuntimeOptions.skipProviders,
+      );
       if (failoverResult?.text) {
         return res.json({
           success: true,
@@ -2520,6 +2567,11 @@ async function startServer() {
         if (cached && now - cached.fetchedAt < YOUTUBE_VIRAL_CACHE_MS) {
           return res.json(cached.payload);
         }
+        // Phase 4: charge the admin-configured credit cost for generating fresh AI predictions.
+        const creditGate = ServerDatabase.deductCredits(sessionUser.id, ServerDatabase.getFeatureCreditCost('ytViral'), 'Viral Video Predictor');
+        if (!creditGate.success) {
+          return res.status(402).json({ success: false, message: creditGate.message });
+        }
         // Adapt the configured AI cascade to the AiGeneratorFn signature.
         const aiGenerator: AiGeneratorFn = async (prompt, model) => {
           const result = await generateConfiguredProviderText([{ role: 'user', content: prompt }], model);
@@ -2882,6 +2934,70 @@ async function startServer() {
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Failed to reject payment.' });
+    }
+  });
+
+  // ==========================================
+  // SYSTEM ADS & AI CONFIGURATION (Phase 4)
+  // Admin routes below are already guarded by `app.use('/api/admin', adminRateLimiter, isAdmin)`.
+  // ==========================================
+
+  // Current Ads + AI system configuration for the admin control panel.
+  app.get('/api/admin/system/config', (req, res) => {
+    try {
+      return res.json({ success: true, config: ServerDatabase.getSystemConfig() });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load system configuration.' });
+    }
+  });
+
+  // Update ads toggles, plan eligibility, and ad placements.
+  app.post('/api/admin/system/ads', (req, res) => {
+    try {
+      const config = ServerDatabase.updateAdsConfig({
+        adsEnabled: req.body?.adsEnabled === undefined ? undefined : req.body.adsEnabled === true,
+        adsByPlan: req.body?.adsByPlan,
+        adPlacements: Array.isArray(req.body?.adPlacements) ? req.body.adPlacements : undefined,
+      });
+      return res.json({ success: true, message: 'Ads configuration saved.', config });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to save ads configuration.' });
+    }
+  });
+
+  // Update AI provider toggles/priority ordering and feature credit costs.
+  app.post('/api/admin/system/ai', (req, res) => {
+    try {
+      const config = ServerDatabase.updateAiConfig({
+        aiProviders: Array.isArray(req.body?.aiProviders) ? req.body.aiProviders : undefined,
+        featureCreditCosts: req.body?.featureCreditCosts,
+      });
+      return res.json({ success: true, message: 'AI configuration saved.', config });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to save AI configuration.' });
+    }
+  });
+
+  // ==========================================
+  // PUBLIC/USER ADS SERVING (Phase 4) — session-aware, plan-gated
+  // ==========================================
+
+  // Returns ad placements ONLY when ads are globally ON and enabled for the
+  // requesting user's subscription plan; otherwise an explicit empty payload.
+  app.get('/api/system/ads', (req, res) => {
+    try {
+      const config = ServerDatabase.getSystemConfig();
+      const user = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+      const plan = String(user?.plan || 'free').toLowerCase();
+      if (!config.adsEnabled || !user || config.adsByPlan[plan as 'free' | 'pro' | 'enterprise'] !== true) {
+        return res.json({ success: true, adsEnabled: false, plan, placements: [] });
+      }
+      const placements = config.adPlacements
+        .filter((placement) => placement.enabled && placement.code.trim())
+        .sort((a, b) => a.frequency - b.frequency);
+      return res.json({ success: true, adsEnabled: true, plan, placements });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, adsEnabled: false, placements: [], message: err.message || 'Failed to load ads.' });
     }
   });
 
