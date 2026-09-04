@@ -1,8 +1,13 @@
+export type SubscriptionPlan = 'free' | 'pro' | 'enterprise';
+export type SubscriptionStatus = 'active' | 'expired' | 'canceled' | 'none';
+
 export interface UserAccount {
   id: string;
   name: string;
   email: string;
   role: 'admin' | 'developer' | 'operator' | 'viewer';
+  /** Convenience mirror of `role === 'admin'` (kept in sync by ServerDatabase). */
+  isAdmin?: boolean;
   isVerified: boolean;
   verificationCode?: string;
   verificationCodeExpiresAt?: number;
@@ -10,6 +15,16 @@ export interface UserAccount {
   lastLoginAt: string;
   avatarUrl?: string;
   bio?: string;
+  /** Subscription plan tier for the user (free / pro / enterprise or custom plan name). */
+  plan?: SubscriptionPlan | string;
+  /** Current subscription lifecycle status. */
+  subscriptionStatus?: SubscriptionStatus;
+  /** ISO timestamp when the current plan expires (null = never / not applicable). */
+  planExpiresAt?: string | null;
+  /** Remaining AI/SEO credits for the current billing period. */
+  credits?: number;
+  /** When true the user is blocked and fails all session/auth checks immediately. */
+  isBlocked?: boolean;
 }
 
 export interface AuthSession {

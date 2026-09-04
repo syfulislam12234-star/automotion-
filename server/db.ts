@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge } from '../src/types';
+import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus } from '../src/types';
+
+export type { SubscriptionPlan, SubscriptionStatus };
 
 interface StoredDb {
   users: UserAccount[];
@@ -40,6 +42,10 @@ export class ServerDatabase {
     } catch (e) {
       console.warn('[ServerDB] Using in-memory state:', e);
     }
+    // Migration: backfill subscription defaults for users created before Phase 2.
+    ServerDatabase.backfillSubscriptionDefaults();
+    // Bootstrap/promote a first admin from the ADMIN_EMAIL/ADMIN_PASSWORD environment (secure seed).
+    ServerDatabase.seedAdminsFromEnv();
   }
 
   private static save() {
@@ -53,6 +59,266 @@ export class ServerDatabase {
   public static hasAdminUsers(): boolean {
     return ServerDatabase.db.users.some(u => u.role === 'admin' && u.isVerified);
   }
+
+  /** True when the given user carries the admin role (and is active). */
+  public static isUserAdmin(user: UserAccount | null | undefined): boolean {
+    return Boolean(user && (user.role === 'admin' || user.isAdmin === true));
+  }
+
+  /** Looks up a user by either their user id or their email (case-insensitive email match). */
+  public static getUserByIdOrEmail(identifier: string): UserAccount | null {
+    const cleanValue = String(identifier || '').trim();
+    if (!cleanValue) return null;
+    return ServerDatabase.db.users.find((u) => u.id === cleanValue || u.email.toLowerCase() === cleanValue.toLowerCase()) || null;
+  }
+
+  /**
+   * Securely promotes a user to administrator role. Finds the target user by id or
+   * email,, sets the role to 'admin', marks the account verified, and persists. Only an
+   * already-authorized admin session should ever call this (guarded by `requireAdmin`).
+   */
+  public static assignAdminPrivilege(identifier: string): { success: boolean; message: string; user?: UserAccount } {
+    const user = ServerDatabase.getUserByIdOrEmail(identifier);
+    if (!user) {
+      return { success: false, message: 'No user found with that ID or email.' };
+    }
+    const promoted = user.role !== 'admin';
+    user.role = 'admin';
+    user.isAdmin = true;
+    user.isVerified = true;
+    ServerDatabase.save();
+    return {
+      success: true,
+      message: promoted ? `Admin privileges granted to ${user.name} (${user.email}).` : `${user.name} (${user.email}) is already an admin.`,
+      user,
+    };
+  }
+
+  /**
+   * Seed/upgrade admission help: promotes the user matching the ADMIN_EMAIL environment
+   * variable (when set) to administrator,, and creates a verified admin account when the
+   * ADMIN_PASSWORD is provided and no account with that email exists yet. Runs once on boot,
+   * so a fresh deployment can bootstrap its first admin without any manual DB edits.
+   */
+  public static seedAdminsFromEnv(): void {
+    const seedEmail = String(process.env.ADMIN_EMAIL || '').toLowerCase().trim();
+    if (!seedEmail) return;
+    const seedPassword = String(process.env.ADMIN_PASSWORD || '');
+    const seedName = String(process.env.ADMIN_NAME || '').trim() || seedEmail.split('@')[0] || 'Administrator';
+
+    let user = ServerDatabase.getUserByIdOrEmail(seedEmail);
+    if (!user && seedPassword) {
+      user = {
+        id: 'adm_seed_' + crypto.randomBytes(8).toString('hex'),
+        name: seedName,
+        email: seedEmail,
+        role: 'admin',
+        isAdmin: true,
+        isVerified: true,
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+      } as UserAccount;
+      ServerDatabase.db.users.push(user);
+      ServerDatabase.db.passwords[user.id] = crypto.createHash('sha256').update(seedPassword).digest('hex');
+      console.log('[ServerDB] Seeded bootstrap admin account:', seedEmail);
+    } else if (user) {
+      const needsPromotion = user.role !== 'admin' || user.isAdmin !== true;
+      if (needsPromotion) {
+        user.role = 'admin';
+        user.isAdmin = true;
+        user.isVerified = true;
+        console.log('[ServerDB] Promoted seeded admin:', seedEmail);
+      }
+    }
+    if (user) ServerDatabase.save();
+  }
+
+  // ==========================================
+  // USER MANAGEMENT & SUBSCRIPTION (ADMIN)
+  // ==========================================
+
+  /** Backfill helper: guarantees a user record always has sane subscription defaults. */
+  private static ensureSubscriptionDefaults(user: UserAccount): void {
+    if (!user.plan) user.plan = 'free';
+    if (!user.subscriptionStatus) user.subscriptionStatus = 'active';
+    if (user.credits === undefined || user.credits === null) {
+      user.credits = user.plan === 'enterprise' ? 10000 : user.plan === 'pro' ? 2000 : 500;
+    }
+  }
+
+  /**
+   * Migration helper (runs once per boot): guarantees every pre-existing user record
+   * carries the Phase-2 subscription fields (plan / subscriptionStatus / credits).
+   */
+  private static backfillSubscriptionDefaults(): void {
+    try {
+      let changed = false;
+      for (const user of ServerDatabase.db.users || []) {
+        const before = `${user.plan}|${user.subscriptionStatus}|${user.credits}`;
+        ServerDatabase.ensureSubscriptionDefaults(user);
+        if (`${user.plan}|${user.subscriptionStatus}|${user.credits}` !== before) changed = true;
+      }
+      if (changed) {
+        ServerDatabase.save();
+        console.log('[ServerDB] Backfilled subscription defaults for existing users.');
+      }
+    } catch (e) {
+      console.warn('[ServerDB] Subscription backfill skipped:', e);
+    }
+  }
+
+  /**
+   * Paginated, searchable, filterable user listing for the admin panel.
+   * Never leaks password hashes or verification codes.
+   */
+  public static listUsers(params: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    role?: string;
+    status?: string;
+    plan?: string;
+  }): { users: Array<UserAccount & { isBlocked: boolean }>; total: number; page: number; pageSize: number; totalPages: number } {
+    const page = Math.max(1, Number(params.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 20));
+    const search = String(params.search || '').trim().toLowerCase();
+
+    let filtered = ServerDatabase.db.users.slice();
+
+    if (search) {
+      filtered = filtered.filter((u) =>
+        u.name.toLowerCase().includes(search) ||
+        u.email.toLowerCase().includes(search) ||
+        u.id.toLowerCase().includes(search)
+      );
+    }
+    if (params.role && params.role !== 'all') {
+      filtered = filtered.filter((u) => u.role === params.role);
+    }
+    if (params.plan && params.plan !== 'all') {
+      filtered = filtered.filter((u) => (u.plan || 'free') === params.plan);
+    }
+    if (params.status && params.status !== 'all') {
+      if (params.status === 'blocked') {
+        filtered = filtered.filter((u) => u.isBlocked === true);
+      } else if (params.status === 'active_sub') {
+        filtered = filtered.filter((u) => u.subscriptionStatus === 'active');
+      } else if (params.status === 'expired_sub') {
+        filtered = filtered.filter((u) => (u.subscriptionStatus === 'expired') || (u.planExpiresAt && new Date(u.planExpiresAt).getTime() < Date.now()));
+      } else {
+        filtered = filtered.filter((u) => (u.subscriptionStatus || 'none') === params.status);
+      }
+    }
+
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const start = (page - 1) * pageSize;
+    const pageItems = filtered.slice(start, start + pageSize).map((u) => {
+      const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safe } = u;
+      return { ...safe, isBlocked: u.isBlocked === true };
+    });
+
+    return { users: pageItems, total, page, pageSize, totalPages };
+  }
+
+  /** Fetch a single user's detailed profile (safe fields only) by id or email. */
+  public static getUserById(idOrEmail: string): (UserAccount & { isBlocked: boolean; activeSessions: number }) | null {
+    const user = ServerDatabase.getUserByIdOrEmail(idOrEmail);
+    if (!user) return null;
+    const activeSessions = Object.values(ServerDatabase.db.sessions).filter(
+      (s) => s.user.id === user.id && s.expiresAt > Date.now(),
+    ).length;
+    const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safe } = user;
+    return { ...safe, isBlocked: user.isBlocked === true, activeSessions } as UserAccount & { isBlocked: boolean; activeSessions: number };
+  }
+
+  /** Toggle the blocked flag for a user. Blocked users lose their active sessions immediately. */
+  public static toggleBlockUser(idOrEmail: string, block: boolean): { success: boolean; message: string; user?: UserAccount } {
+    const user = ServerDatabase.getUserByIdOrEmail(idOrEmail);
+    if (!user) {
+      return { success: false, message: 'User not found.' };
+    }
+    const wasBlocked = user.isBlocked === true;
+    user.isBlocked = block;
+    if (block && !wasBlocked) {
+      // Revoke every active session belonging to the blocked user.
+      for (const [token, session] of Object.entries(ServerDatabase.db.sessions)) {
+        if (session.user.id === user.id) {
+          delete ServerDatabase.db.sessions[token];
+        }
+      }
+    }
+    ServerDatabase.save();
+    return {
+      success: true,
+      message: block ? `User ${user.name} (${user.email}) has been blocked.` : `User ${user.name} (${user.email}) has been unblocked.`,
+      user,
+    };
+  }
+
+  /**
+   * Admin-driven subscription update: change plan, status, expiry date, and/or credits
+   * for any user. Performs light validation and persists atomically.
+   */
+  public static updateUserSubscription(idOrEmail: string, updates: {
+    plan?: SubscriptionPlan | string;
+    subscriptionStatus?: SubscriptionStatus;
+    planExpiresAt?: string | null;
+    credits?: number;
+    extendDays?: number;
+  }): { success: boolean; message: string; user?: UserAccount } {
+    const user = ServerDatabase.getUserByIdOrEmail(idOrEmail);
+    if (!user) {
+      return { success: false, message: 'User not found.' };
+    }
+
+    const validPlans: SubscriptionPlan[] = ['free', 'pro', 'enterprise'];
+    const validStatuses: SubscriptionStatus[] = ['active', 'expired', 'canceled', 'none'];
+
+    if (updates.plan !== undefined) {
+      const plan = String(updates.plan).trim();
+      if (plan) user.plan = validPlans.includes(plan as SubscriptionPlan) ? (plan as SubscriptionPlan) : plan;
+    }
+    if (updates.subscriptionStatus !== undefined) {
+      const status = String(updates.subscriptionStatus).trim() as SubscriptionStatus;
+      user.subscriptionStatus = validStatuses.includes(status) ? status : user.subscriptionStatus;
+    }
+    if (updates.extendDays !== undefined) {
+      const days = Number(updates.extendDays);
+      if (Number.isFinite(days) && days !== 0) {
+        const base = user.planExpiresAt && new Date(user.planExpiresAt).getTime() > Date.now()
+          ? new Date(user.planExpiresAt)
+          : new Date();
+        base.setDate(base.getDate() + days);
+        user.planExpiresAt = base.toISOString();
+        if (user.subscriptionStatus === 'expired' || user.subscriptionStatus === 'none') {
+          user.subscriptionStatus = 'active';
+        }
+      }
+    }
+    if (updates.planExpiresAt !== undefined) {
+      user.planExpiresAt = updates.planExpiresAt && String(updates.planExpiresAt).trim() ? String(updates.planExpiresAt) : null;
+    }
+    if (updates.credits !== undefined) {
+      const credits = Number(updates.credits);
+      if (Number.isFinite(credits)) {
+        user.credits = Math.max(0, Math.round(credits));
+      }
+    }
+
+    // Auto-derive subscriptionStatus from expiry when not explicitly set.
+    if (updates.subscriptionStatus === undefined && user.planExpiresAt && user.subscriptionStatus !== 'canceled') {
+      user.subscriptionStatus = new Date(user.planExpiresAt).getTime() > Date.now() ? 'active' : 'expired';
+    }
+
+    ServerDatabase.save();
+    return {
+      success: true,
+      message: `Subscription updated for ${user.name} (${user.email}).`,
+      user,
+    };
+  }
+
 
   public static getStats() {
     return {
@@ -71,6 +337,15 @@ export class ServerDatabase {
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
     const session = ServerDatabase.db.sessions[token];
     if (session && session.expiresAt > Date.now()) {
+      // Keep the `isAdmin` convenience flag in sync with the live role so cached
+      // sessions can never be a stale grant/revoke of admin privileges.
+      session.user.isAdmin = session.user.role === 'admin';
+      // Blocked users must never obtain a live session — revoke immediately.
+      if (session.user.isBlocked === true) {
+        delete ServerDatabase.db.sessions[token];
+        ServerDatabase.save();
+        return null;
+      }
       return session.user;
     }
     return null;
@@ -92,6 +367,7 @@ export class ServerDatabase {
         return { success: false, message: 'Account exists but has not been verified.', user: existing };
       }
       existing.isVerified = true;
+      existing.isAdmin = existing.role === 'admin';
       const token = 'tok_' + crypto.randomBytes(24).toString('hex');
       const session: AuthSession = {
         token,
@@ -116,6 +392,7 @@ export class ServerDatabase {
       name: data.name.trim() || 'Developer',
       email,
       role: 'admin',
+      isAdmin: true,
       isVerified: false,
       verificationCode: String(crypto.randomInt(100000, 1000000)),
       verificationCodeExpiresAt: Date.now() + 5 * 60 * 1000,
@@ -123,6 +400,7 @@ export class ServerDatabase {
       lastLoginAt: new Date().toISOString(),
       avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
     };
+    ServerDatabase.ensureSubscriptionDefaults(newUser);
 
     const passwordHash = crypto.createHash('sha256').update(data.password).digest('hex');
     ServerDatabase.db.users.push(newUser);
@@ -181,11 +459,13 @@ export class ServerDatabase {
       name: pending.name,
       email: cleanEmail,
       role: 'admin',
+      isAdmin: true,
       isVerified: true,
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
       avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(pending.name)}`,
     };
+    ServerDatabase.ensureSubscriptionDefaults(newAdmin);
 
     ServerDatabase.db.users.push(newAdmin);
     ServerDatabase.db.passwords[userId] = pending.passwordHash;
@@ -219,11 +499,13 @@ export class ServerDatabase {
         name: cleanEmail.split('@')[0] || 'Developer',
         email: cleanEmail,
         role: 'admin',
+        isAdmin: true,
         isVerified: true,
         createdAt: new Date().toISOString(),
         lastLoginAt: new Date().toISOString(),
         avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanEmail)}`,
       };
+      ServerDatabase.ensureSubscriptionDefaults(user);
       ServerDatabase.db.users.push(user);
       ServerDatabase.db.passwords[user.id] = crypto.createHash('sha256').update(data.password).digest('hex');
     }
@@ -234,6 +516,8 @@ export class ServerDatabase {
 
     user.isVerified = true;
     user.lastLoginAt = new Date().toISOString();
+    user.isAdmin = user.role === 'admin';
+    ServerDatabase.ensureSubscriptionDefaults(user);
 
     const token = 'tok_' + crypto.randomBytes(24).toString('hex');
     const session: AuthSession = {
@@ -266,15 +550,20 @@ export class ServerDatabase {
         name: data.name || cleanEmail.split('@')[0],
         email: cleanEmail,
         role: isFirst ? 'admin' : 'developer',
+        isAdmin: isFirst,
         isVerified: true,
         createdAt: new Date().toISOString(),
         lastLoginAt: new Date().toISOString(),
         avatarUrl: data.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name || cleanEmail)}`,
       };
+      ServerDatabase.ensureSubscriptionDefaults(user);
       ServerDatabase.db.users.push(user);
     } else {
       user.lastLoginAt = new Date().toISOString();
       if (data.avatarUrl) user.avatarUrl = data.avatarUrl;
+      // Keep convenience flag in sync with the live role (so a revoked admin cannot ride a stale true).
+      user.isAdmin = user.role === 'admin';
+      ServerDatabase.ensureSubscriptionDefaults(user);
     }
 
     const token = 'tok_' + crypto.randomBytes(24).toString('hex');
@@ -306,6 +595,7 @@ export class ServerDatabase {
     user.isVerified = true;
     user.verificationCode = undefined;
     user.verificationCodeExpiresAt = undefined;
+    user.isAdmin = user.role === 'admin';
 
     const token = 'tok_' + crypto.randomBytes(24).toString('hex');
     const session: AuthSession = {

@@ -32,7 +32,7 @@ import {
   extractYouTubeCredentials,
   YouTubeAnalyticsError,
 } from './server/youtubeAnalyticsService';
-import { BotConfig } from './src/types';
+import { BotConfig, UserAccount } from './src/types';
 
 dotenv.config();
 
@@ -722,6 +722,55 @@ const CENTRAL_PLATFORM_STATUS = {
   activeProBotsCount: 4,
 };
 
+// ==========================================
+// RATE LIMITING (in-memory sliding window)
+// ==========================================
+
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+/**
+ * Creates an Express middleware that enforces a sliding-window request budget per
+ * client key (IP + optional identity). Used to protect admin endpoints and the
+ * authentication endpoints from brute-force / credential-stuffing attempts.
+ */
+function createRateLimiter(options: { windowMs: number; max: number; message?: string }) {
+  const buckets = new Map<string, RateLimitBucket>();
+  const windowMs = Math.max(1000, options.windowMs);
+  const max = Math.max(1, options.max);
+  const message = options.message || 'Too many requests. Please try again later.';
+
+  const sweep = () => {
+    const now = Date.now();
+    for (const [key, bucket] of buckets) {
+      if (bucket.resetAt <= now) buckets.delete(key);
+    }
+  };
+
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const identity = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').slice(0, 24) || 'anon';
+    const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
+    const key = `${ip}|${identity}`;
+    const now = Date.now();
+
+    const bucket = buckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      buckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > max) {
+      // Opportunistic sweep keeps the map bounded without a timer.
+      if (buckets.size > 10_000) sweep();
+      res.setHeader('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
+      return res.status(429).json({ success: false, message });
+    }
+    return next();
+  };
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -756,14 +805,36 @@ async function startServer() {
   }));
   app.use(express.urlencoded({ extended: true }));
 
-  const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  /** Sliding-window budgets for the admin + auth endpoints (anti brute-force). */
+  const adminRateLimiter = createRateLimiter({
+    windowMs: 60_000,
+    max: 120,
+    message: 'Too many admin requests. Please wait a moment and try again.',
+  });
+  const authRateLimiter = createRateLimiter({
+    windowMs: 60_000,
+    max: 25,
+    message: 'Too many authentication attempts from this address. Please wait a minute and try again.',
+  });
+
+  /**
+   * Admin route protection (hidden): unauthenticated callers receive a 404 so the
+   * route never advertises its existence; authenticated non-admins receive a 403.
+   * The session/JWT is re-validated on EVERY request by getSessionUser/isAdminSessionAuthorized.
+   */
+  const isAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     const user = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
-    if (!user || user.role !== 'admin' || !ServerDatabase.isAdminSessionAuthorized(authHeader || '')) {
+    if (!user) {
+      // 404 keeps `/api/admin/*` indistinguishable from any other unknown route.
+      return res.status(404).json({ success: false, message: 'Endpoint not found' });
+    }
+    if (!ServerDatabase.isUserAdmin(user) || !ServerDatabase.isAdminSessionAuthorized(authHeader || '')) {
       return res.status(403).json({ success: false, message: 'Administrator authorization required.' });
     }
     return next();
   };
+  const requireAdmin = isAdmin;
 
   const requireSession = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization || '';
@@ -773,15 +844,15 @@ async function startServer() {
     return next();
   };
 
-  app.use('/api/admin', requireAdmin);
-  app.use('/api/telegram-admin/config', requireAdmin);
-  app.use('/api/telegram-admin/command', requireAdmin);
-  app.use('/api/sync/keys', requireAdmin);
-  app.use('/api/cron/trigger', requireAdmin);
-  app.use('/api/cron/config', requireAdmin);
-  app.use('/api/database/stats', requireAdmin);
-  app.use('/api/channels', requireAdmin);
-  app.use('/api/gateways/verify', requireAdmin);
+  app.use('/api/admin', adminRateLimiter, isAdmin);
+  app.use('/api/telegram-admin/config', adminRateLimiter, isAdmin);
+  app.use('/api/telegram-admin/command', adminRateLimiter, isAdmin);
+  app.use('/api/sync/keys', adminRateLimiter, isAdmin);
+  app.use('/api/cron/trigger', adminRateLimiter, isAdmin);
+  app.use('/api/cron/config', adminRateLimiter, isAdmin);
+  app.use('/api/database/stats', adminRateLimiter, isAdmin);
+  app.use('/api/channels', adminRateLimiter, isAdmin);
+  app.use('/api/gateways/verify', adminRateLimiter, isAdmin);
 
   app.post('/api/tts', async (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
@@ -2010,7 +2081,7 @@ async function startServer() {
   });
 
   // User Sign Up
-  app.post('/api/auth/signup', async (req, res) => {
+  app.post('/api/auth/signup', authRateLimiter, async (req, res) => {
     try {
       const { name, email, password } = req.body;
       if (!name || !email || !password) {
@@ -2044,7 +2115,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/admin/signup', (req, res) => {
+  app.post('/api/auth/admin/signup', authRateLimiter, (req, res) => {
     try {
       const { name, email, password } = req.body || {};
       if (!name || !email || !password) {
@@ -2057,7 +2128,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/admin/signup/verify', (req, res) => {
+  app.post('/api/auth/admin/signup/verify', authRateLimiter, (req, res) => {
     try {
       const email = typeof req.body?.email === 'string' ? req.body.email : '';
       const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
@@ -2072,7 +2143,7 @@ async function startServer() {
   });
 
   // User Login
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', authRateLimiter, (req, res) => {
     try {
       const { email, password } = req.body;
       if (!email || !password) {
@@ -2094,7 +2165,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/google', async (req, res) => {
+  app.post('/api/auth/google', authRateLimiter, async (req, res) => {
     const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken : '';
     if (!idToken || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
       return res.status(400).json({ success: false, message: 'Google authentication is not configured.' });
@@ -2119,7 +2190,7 @@ async function startServer() {
   });
 
   // Verify OTP
-  app.post('/api/auth/verify-otp', async (req, res) => {
+  app.post('/api/auth/verify-otp', authRateLimiter, async (req, res) => {
     try {
       const { email, code } = req.body;
       if (!email || !code) {
@@ -2138,7 +2209,7 @@ async function startServer() {
   });
 
   // Resend OTP
-  app.post('/api/auth/resend-otp', async (req, res) => {
+  app.post('/api/auth/resend-otp', authRateLimiter, async (req, res) => {
     try {
       const { email } = req.body;
       if (!email) {
@@ -2582,6 +2653,138 @@ async function startServer() {
   // ==========================================
   // ADMIN BACKUP & MIGRATION EXPORT/IMPORT
   // ==========================================
+
+  // Live admin status probe (used by the client-side /admin route guard to verify
+  // the session still carries admin privileges before rendering the protected workspace).
+  app.get('/api/admin/status', (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const user = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+      if (!user) {
+        return res.status(401).json({ success: false, isAdmin: false, message: 'Authentication required.' });
+      }
+      const stats = ServerDatabase.getStats();
+      const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safeUser } = user;
+      return res.json({
+        success: true,
+        isAdmin: ServerDatabase.isUserAdmin(user),
+        activeSessions: stats.activeSessionsCount,
+        user: safeUser,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, isAdmin: false, message: err.message || 'Admin status unavailable.' });
+    }
+  });
+
+  // Promote a specific user (by id or email) to administrator role.. Requires an
+  // already-authorized admin session (the route is hidden behind /api/admin guard).
+  app.post('/api/admin/assign-admin', (req, res) => {
+    try {
+      const identifier = String(req.body?.userIdOrEmail || req.body?.email || req.body?.userId || '').trim();
+      if (!identifier) {
+        return res.status(400).json({ success: false, message: 'A user ID or email is required.' });
+      }
+      const result = ServerDatabase.assignAdminPrivilege(identifier);
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+      const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safeUser } = result.user as UserAccount;
+      return res.json({ ...result, user: safeUser });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Admin assignment failed.' });
+    }
+  });
+
+  // ==========================================
+  // ADMIN USER & SUBSCRIPTION MANAGEMENT (Phase 2)
+  // All routes below are already guarded by `app.use('/api/admin', adminRateLimiter, isAdmin)`.
+  // ==========================================
+
+  // Paginated / searchable / filterable user directory for the admin panel.
+  app.get('/api/admin/users', (req, res) => {
+    try {
+      const result = ServerDatabase.listUsers({
+        page: Number(req.query.page) || 1,
+        pageSize: Number(req.query.pageSize) || 10,
+        search: String(req.query.search || ''),
+        role: String(req.query.role || 'all'),
+        status: String(req.query.status || 'all'),
+        plan: String(req.query.plan || 'all'),
+      });
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to list users.' });
+    }
+  });
+
+  // Detailed single-user profile (subscription, credits, active session count).
+  app.get('/api/admin/users/:id', (req, res) => {
+    try {
+      const user = ServerDatabase.getUserById(String(req.params.id || '').trim());
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found.' });
+      }
+      return res.json({ success: true, user });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load user profile.' });
+    }
+  });
+
+  // Block / unblock a user. Blocking immediately revokes all of their active sessions.
+  app.post('/api/admin/users/block', (req, res) => {
+    try {
+      const identifier = String(req.body?.userIdOrEmail || req.body?.userId || req.body?.email || '').trim();
+      const blocked = req.body?.blocked === true || req.body?.blocked === 'true';
+      if (!identifier) {
+        return res.status(400).json({ success: false, message: 'A user ID or email is required.' });
+      }
+      const authHeader = req.headers.authorization;
+      const actingAdmin = authHeader ? ServerDatabase.getSessionUser(authHeader) : null;
+      const target = ServerDatabase.getUserByIdOrEmail(identifier);
+      if (actingAdmin && target && actingAdmin.id === target.id && blocked) {
+        return res.status(400).json({ success: false, message: 'You cannot block your own administrator account.' });
+      }
+      const result = ServerDatabase.toggleBlockUser(identifier, blocked);
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+      const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safeUser } = (result.user || {}) as UserAccount;
+      return res.json({ ...result, user: safeUser });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to update block status.' });
+    }
+  });
+
+  // Manually manage a user's subscription: change plan, activate/cancel, extend expiry, set credits.
+  app.post('/api/admin/subscription/update', (req, res) => {
+    try {
+      const identifier = String(req.body?.userIdOrEmail || req.body?.userId || req.body?.email || '').trim();
+      if (!identifier) {
+        return res.status(400).json({ success: false, message: 'A user ID or email is required.' });
+      }
+      const updates: {
+        plan?: string;
+        subscriptionStatus?: 'active' | 'expired' | 'canceled' | 'none';
+        planExpiresAt?: string | null;
+        credits?: number;
+        extendDays?: number;
+      } = {};
+      if (req.body?.plan !== undefined) updates.plan = String(req.body.plan);
+      if (req.body?.subscriptionStatus !== undefined) updates.subscriptionStatus = String(req.body.subscriptionStatus) as 'active' | 'expired' | 'canceled' | 'none';
+      if (req.body?.planExpiresAt !== undefined) updates.planExpiresAt = req.body.planExpiresAt === null ? null : String(req.body.planExpiresAt);
+      if (req.body?.credits !== undefined) updates.credits = Number(req.body.credits);
+      if (req.body?.extendDays !== undefined) updates.extendDays = Number(req.body.extendDays);
+
+      const result = ServerDatabase.updateUserSubscription(identifier, updates);
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+      const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safeUser } = (result.user || {}) as UserAccount;
+      return res.json({ ...result, user: safeUser });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to update subscription.' });
+    }
+  });
 
   // Export full JSON backup of database
   app.get('/api/admin/backup/export', (req, res) => {

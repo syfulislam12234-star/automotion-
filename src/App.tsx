@@ -6,6 +6,7 @@ import { TelegramSimulator } from './components/TelegramSimulator';
 import { DeployGuideModal } from './components/DeployGuideModal';
 import { MemoryInspector } from './components/MemoryInspector';
 import { AdminControlPanel } from './components/AdminControlPanel';
+import { AdminUserManager } from './components/AdminUserManager';
 import { ApiPortalModal } from './components/ApiPortalModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
 import { AuthModal } from './components/AuthModal';
@@ -397,6 +398,8 @@ function AppContent() {
   const [session, setSession] = useState<AuthSession | null>(() => AuthService.normalizeSession(AuthService.getCurrentSession()));
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
+  // Phase 2: which section of the /admin workspace is displayed.
+  const [adminSection, setAdminSection] = useState<'control' | 'users'>('control');
   const [authModalTab, setAuthModalTab] = useState<'login' | 'signup' | 'verify'>('login');
   const [authFeatureContext, setAuthFeatureContext] = useState<string | undefined>(undefined);
   const currentUser = session?.user || null;
@@ -509,8 +512,40 @@ function AppContent() {
     AuthService.logOut();
     setSession(null);
     setActiveTab('simulator');
+    // Leave the guarded `/admin` URL when signing out (directs future navigations to the home/login flow).
+    try { window.history.replaceState({}, '', '/'); } catch { /* noop */ }
     showToast('👋 You have been logged out.');
   };
+
+  /**
+   * Client-side route guard for the protected `/admin` route (Phase 1 Admin Foundation):
+   * unauthenticated visitors are sent to the admin login page; authenticated non-admin
+   * users are redirected home; authorized admins open the Admin Control workspace.
+   */
+  useEffect(() => {
+    if (loading) return;
+    const path = window.location.pathname;
+    if (path === '/admin/login') {
+      if (currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true)) {
+        // Already authorized — drop the admin login URL and land on the admin workspace.
+        try { window.history.replaceState({}, '', '/admin'); } catch { /* noop */ }
+        setActiveTab('admin');
+      }
+      return;
+    }
+    if (path === '/admin') {
+      const isAdminUser = currentUser?.role === 'admin' || currentUser?.isAdmin === true;
+      if (!currentUser) {
+        window.location.replace('/admin/login');
+        return;
+      }
+      if (!isAdminUser) {
+        window.location.replace('/');
+        return;
+      }
+      setActiveTab('admin');
+    }
+  }, [loading, currentUser]);
 
   const handleSidebarSelect = (view: AppView) => {
     if (view === 'admin') {
@@ -526,14 +561,16 @@ function AppContent() {
 
   const handleAdminTabClick = () => {
     requireAuth('Admin Dashboard', () => {
-      if (currentUser?.role !== 'admin') return;
+      if (currentUser?.role !== 'admin' && currentUser?.isAdmin !== true) return;
+      // Publish the protected route in the address bar for shareable/admin material links.
+      try { window.history.replaceState({}, '', '/admin'); } catch { /* noop */ }
       setActiveTab('admin');
     });
   };
 
   const handleVpsTabClick = () => {
     requireAuth('VPS & Cloud Server Monitor', () => {
-      if (currentUser?.role !== 'admin') return;
+      if (currentUser?.role !== 'admin' && currentUser?.isAdmin !== true) return;
       setActiveTab('vps');
     });
   };
@@ -923,14 +960,35 @@ function AppContent() {
         )}
 
         {/* View 8: Admin Panel */}
-        {currentUser?.role === 'admin' && activeTab === 'admin' && (
-          <AdminControlPanel
-            config={config}
-            onChange={handleConfigChange}
-            onOpenPortal={handleOpenPortal}
-            onShowToast={showToast}
-            onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
-          />
+        {(currentUser?.role === 'admin' || currentUser?.isAdmin === true) && activeTab === 'admin' && (
+          <div className="space-y-4">
+            {/* Admin workspace section switcher (Phase 2) */}
+            <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl bg-slate-900/80 border border-slate-800 w-fit">
+              <button
+                onClick={() => setAdminSection('control')}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${adminSection === 'control' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'}`}
+              >
+                🛡️ Control Center
+              </button>
+              <button
+                onClick={() => setAdminSection('users')}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${adminSection === 'users' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'}`}
+              >
+                👥 Users &amp; Subscriptions
+              </button>
+            </div>
+            {adminSection === 'control' ? (
+              <AdminControlPanel
+                config={config}
+                onChange={handleConfigChange}
+                onOpenPortal={handleOpenPortal}
+                onShowToast={showToast}
+                onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
+              />
+            ) : (
+              <AdminUserManager onShowToast={showToast} />
+            )}
+          </div>
         )}
 
         {/* View 9: Gmail Workspace Hub */}
@@ -1058,7 +1116,7 @@ function AppContent() {
         isAdminPortal
         featureProtectedName="Administrator Portal"
         onAuthenticated={(adminSession) => {
-          if (adminSession.user?.role === 'admin' && adminSession.isVerified === true) {
+          if ((adminSession.user?.role === 'admin' || adminSession.user?.isAdmin === true) && adminSession.isVerified === true) {
             handleAuthenticated(adminSession);
             setActiveTab('admin');
           }

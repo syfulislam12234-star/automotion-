@@ -135,7 +135,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      if (isAdminPortal && res.session.user.role !== 'admin') {
+      if (isAdminPortal && res.session.user.role !== 'admin' && res.session.user.isAdmin !== true) {
         setErrorMessage('This portal is restricted to administrator accounts.');
         return;
       }
