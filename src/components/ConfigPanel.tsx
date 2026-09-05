@@ -406,7 +406,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
             <Sliders className="w-4 h-4" />
           </div>
           <div>
-            <h2 className="font-semibold text-slate-100 text-sm">Universal Bot Configuration Engine</h2>
+            <h2 className="font-semibold text-slate-100 text-sm">Naxora AI Configuration Engine</h2>
             <p className="text-xs text-slate-400">100 AI Providers • 10 Messaging Gateways • YouTube OAuth2 Suite</p>
           </div>
         </div>

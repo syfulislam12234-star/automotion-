@@ -76,7 +76,7 @@ const DEFAULT_CONFIG: BotConfig = {
   maxOutputTokens: 2048,
   systemPrompt:
     'You are a versatile, intelligent multi-platform AI assistant powered by a 100-provider auto-failover engine. Provide clear, accurate, and concise Markdown answers across Telegram, Discord, Slack, and WhatsApp.',
-  botName: 'Universal Multi-Platform 100-AI Bot',
+  botName: 'Naxora AI Assistant',
   enableAdminWhitelist: false,
   adminUserIds: '',
   enableStreamTyping: true,
@@ -622,7 +622,7 @@ function AppContent() {
           onShowToast={showToast}
           isAdminPortal={isAdminLoginRoute}
           initialEmail={currentUser?.email}
-          featureProtectedName={isAdminLoginRoute ? 'the administrator portal' : 'the Universal Bot workspace'}
+          featureProtectedName={isAdminLoginRoute ? 'the administrator portal' : 'the Naxora AI workspace'}
         />
       </div>
     );
@@ -666,12 +666,10 @@ function AppContent() {
         <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg relative overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
-                <Bot className="w-5 h-5" />
-              </div>
+              <img src="/logo.svg" alt="Naxora AI logo" className="w-10 h-10 shrink-0 object-contain drop-shadow-lg" />
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-slate-100">Universal Multi-Platform AI Bot Engine</h2>
+                  <h2 className="text-base font-bold text-slate-100">Naxora AI Automation Engine</h2>
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono font-bold flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     ONLINE

@@ -99,7 +99,7 @@ export class MultiChannelGateway {
       facebook: { url: `https://graph.facebook.com/v20.0/me/messages?access_token=${token}`, body: { recipient: { id: target }, message: { text } } },
       discord: { url: `https://discord.com/api/v10/channels/${target}/messages`, body: { content: text } },
       slack: { url: String(credentials?.responseUrl || process.env.SLACK_RESPONSE_URL || ''), body: { text } },
-      viber: { url: 'https://chatapi.viber.com/pa/send_message', body: { receiver: target, type: 'text', text, sender: { name: 'Universal Bot' } } },
+      viber: { url: 'https://chatapi.viber.com/pa/send_message', body: { receiver: target, type: 'text', text, sender: { name: 'Naxora AI' } } },
       signal: { url: String(credentials?.bridgeUrl || process.env.SIGNAL_BRIDGE_URL || ''), body: { recipient: target, message: text } },
       wechat: { url: String(credentials?.replyUrl || process.env.WECHAT_REPLY_URL || ''), body: { to: target, text } },
       teams: { url: String(credentials?.serviceUrl || process.env.TEAMS_SERVICE_URL || ''), body: { type: 'message', text } },

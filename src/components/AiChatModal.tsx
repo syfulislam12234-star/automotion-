@@ -22,7 +22,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     {
       id: '1',
       sender: 'bot',
-      text: `Hello! I am your 100-AI Super-Brain Assistant powered by **${config.botName || 'Universal Bot'}**. How can I assist you with bot deployments, multi-channel gateways, or Python scripts today?`,
+      text: `Hello! I am your Naxora AI Super-Brain Assistant powered by **${config.botName || 'Naxora AI'}**. How can I assist you with bot deployments, multi-channel gateways, or Python scripts today?`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);

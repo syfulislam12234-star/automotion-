@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   MessageSquare,
   Sparkles,
-  Bot,
   Brain,
   Radio,
   Globe,
@@ -123,18 +122,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           } transition-all duration-300`}
         >
           {/* Logo & Brand - Only displayed when sidebar is expanded */}
-          {!isCollapsed && (
+          {isCollapsed ? (
+            <img src="/logo.svg" alt="Naxora AI logo" className="w-9 h-9 shrink-0 object-contain drop-shadow-lg" />
+          ) : (
             <div className="flex items-center gap-3 overflow-hidden animate-fadeIn">
-              <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-cyan-500/20">
-                <Bot className="w-5 h-5" />
-              </div>
+              <img src="/logo.svg" alt="Naxora AI logo" className="w-9 h-9 shrink-0 object-contain drop-shadow-lg" />
 
               <div>
                 <h1 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
-                  <span>UNIVERSAL BOT</span>
+                  <span>Naxora AI</span>
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
                 </h1>
-                <p className="text-[10px] text-cyan-400 font-mono whitespace-nowrap">100+ AI & Messenger Hub</p>
+                <p className="text-[10px] text-cyan-400 font-mono whitespace-nowrap">Multi-Provider AI Studio</p>
               </div>
             </div>
           )}

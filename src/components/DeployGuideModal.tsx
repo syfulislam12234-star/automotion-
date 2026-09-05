@@ -23,7 +23,7 @@ export const DeployGuideModal: React.FC<DeployGuideModalProps> = ({ isOpen, onCl
     {
       title: '1. Clone or Download Repository',
       code: `git clone https://github.com/your-username/remix-telegram-groq-bot.git\ncd remix-telegram-groq-bot\npip install -r requirements.txt`,
-      description: 'Clone the universal bot source or download the production ZIP bundle.',
+      description: 'Clone the Naxora AI source or download the production ZIP bundle.',
     },
     {
       title: '2. Configure Environment Variables',

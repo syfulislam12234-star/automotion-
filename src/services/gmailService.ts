@@ -38,20 +38,20 @@ let sandboxMessages: GmailMessageDetail[] = [
     labelIds: ['INBOX', 'IMPORTANT', 'UNREAD'],
     snippet: 'Universal 100-AI Failover Cascade Status: All configured provider connections healthy. Groq 8b-instant latency: 112ms.',
     subject: '⚡ AI Brain Cascade Telemetry Report — 150 Models Online',
-    from: 'Universal Bot Telemetry <telemetry@universal-bot.ai>',
+    from: 'Naxora AI Telemetry <telemetry@naxora.app>',
     to: 'bot.builder@workspace.preview',
     date: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
     isUnread: true,
     isStarred: true,
     isDraft: false,
     headers: {
-      from: 'Universal Bot Telemetry <telemetry@universal-bot.ai>',
+      from: 'Naxora AI Telemetry <telemetry@naxora.app>',
       to: 'bot.builder@workspace.preview',
       subject: '⚡ AI Brain Cascade Telemetry Report — 150 Models Online',
       date: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
     },
     bodyHtml: `<div style="font-family: sans-serif; color: #1e293b; padding: 16px;">
-      <h2 style="color: #0284c7;">🤖 Universal Bot Cascade Diagnostic Summary</h2>
+      <h2 style="color: #0284c7;">🤖 Naxora AI Cascade Diagnostic Summary</h2>
       <p>All 150 models across <strong>Google Gemini, Groq, Cerebras, OpenRouter, Mistral, and DeepSeek</strong> are active and operational.</p>
       <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin: 12px 0;">
         <p><strong>Active Nodes:</strong> 150/150</p>
@@ -60,7 +60,7 @@ let sandboxMessages: GmailMessageDetail[] = [
       </div>
       <p>Continuous health probes are dispatched every 3 hours via the automated cron worker.</p>
     </div>`,
-    bodyText: 'Universal Bot Cascade Diagnostic Summary: All 150 models across Google Gemini, Groq, Cerebras, OpenRouter, Mistral, and DeepSeek are active and operational. Active Nodes: 150/150, Avg Latency: 142ms.',
+    bodyText: 'Naxora AI Cascade Diagnostic Summary: All 150 models across Google Gemini, Groq, Cerebras, OpenRouter, Mistral, and DeepSeek are active and operational. Active Nodes: 150/150, Avg Latency: 142ms.',
     attachments: [],
   },
   {
@@ -883,7 +883,7 @@ export class GmailService {
 
     // Client fallback prompt generation if server offline
     const greeting = params.tone === 'friendly' ? 'Hi there,\n\n' : 'Dear colleague,\n\n';
-    const closing = params.tone === 'friendly' ? '\n\nBest regards,\nUniversal Bot' : '\n\nSincerely,\nAI Assistant';
+    const closing = params.tone === 'friendly' ? '\n\nBest regards,\nNaxora AI' : '\n\nSincerely,\nAI Assistant';
     return `${greeting}Thank you for your message regarding: "${params.context.slice(0, 80)}...".\n\nI have reviewed the details and will follow up accordingly.${closing}`;
   }
 }

@@ -1,6 +1,6 @@
 {
-  "name": "Remix Telegram Groq Bot Builder",
-  "description": "Universal 150-AI super-brain & 10-messenger protocol hub featuring ChatGPT-style main workspace, zero-downtime multi-model failover cascade, password-protected API & token vault, YouTube video studio, and live telemetry.",
+  "name": "Naxora AI",
+  "description": "Naxora AI — multi-platform AI automation studio featuring a ChatGPT-style workspace, zero-downtime multi-model failover cascade, password-protected API & token vault, YouTube video studio, Telegram worker, and live telemetry.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

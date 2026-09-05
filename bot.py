@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Universal Multi-Provider Telegram Bot Worker & Production Web Service
+Naxora AI — Multi-Provider Telegram Bot Worker & Production Web Service
 Powered by python-telegram-bot (v21+) and Multi-Tier AI Cascade.
 
 Key Capabilities:
@@ -999,7 +999,7 @@ async def fetch_recent_video_history(limit: int = 10) -> List[Dict[str, object]]
 
 def welcome_menu_text() -> str:
     return (
-        "🤖 <b>Universal Multi-Provider AI Bot Platform</b>\n"
+        "🤖 <b>Naxora AI — Multi-Provider AI Bot Platform</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Pick an action below, send /upload to publish a video, or just chat with me.\n\n"
         "• 📤 <b>YouTube Upload</b> — attach a video, published with viral AI SEO\n"
@@ -1015,7 +1015,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     username = user.first_name if user else "User"
 
     welcome_msg = (
-        f"🤖 <b>Universal Multi-Provider AI Bot Platform</b>\n"
+        f"🤖 <b>Naxora AI — Multi-Provider AI Bot Platform</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Hello, <b>{username}</b>! Welcome to your high-performance AI companion.\n\n"
         f"⚡ <b>Key Capabilities:</b>\n"
@@ -1528,7 +1528,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     has_cerebras = bool(CEREBRAS_API_KEY and not CEREBRAS_API_KEY.startswith("YOUR_"))
 
     status_msg = (
-        "🟢 <b>UNIVERSAL BOT PLATFORM STATUS</b>\n"
+        "🟢 <b>NAXORA AI PLATFORM STATUS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>Runtime:</b> <code>Python {sys.version.split()[0]} (python-telegram-bot v21+)</code>\n"
         f"• <b>Delivery Mode:</b> <code>{RUN_MODE.upper()}</code>\n"

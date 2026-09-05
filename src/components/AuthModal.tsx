@@ -16,7 +16,6 @@ import {
   Server,
   X,
   Send,
-  Fingerprint,
   Check,
   Info,
 } from 'lucide-react';
@@ -425,13 +424,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
 
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 via-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 ring-1 ring-white/20">
-              <Fingerprint className="w-6 h-6 text-white" />
-            </div>
+            <img src="/logo.svg" alt="Naxora AI logo" className="w-12 h-12 shrink-0 object-contain drop-shadow-lg" />
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-lg font-extrabold text-white tracking-tight">
-                  Security Gateway & Access Portal
+                  Naxora AI — Secure Access Portal
                 </h3>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3 text-emerald-400" />
@@ -446,7 +443,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     Authentication required to access {featureProtectedName}.
                   </span>
                 ) : (
-                  'Sign in or verify your developer credentials to manage cloud bots.'
+                  'Sign in or verify your credentials to manage your Naxora AI workspace.'
                 )}
               </p>
             </div>

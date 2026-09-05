@@ -104,9 +104,9 @@ async function sendEmailVerificationCode(email: string, code: string): Promise<b
     await gmailTransporter.sendMail({
       from: GMAIL_USER,
       to: email,
-      subject: 'Your Automotion verification code',
+      subject: 'Your Naxora AI verification code',
       text: `Your 6-digit verification code is ${code}. It expires in 5 minutes.`,
-      html: `<div style="font-family:Arial,sans-serif;line-height:1.6"><h2>Verify your Automotion account</h2><p>Use this one-time verification code:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">${code}</p><p>This code expires in 5 minutes and can only be used once.</p></div>`,
+      html: `<div style="font-family:Arial,sans-serif;line-height:1.6"><h2>Verify your Naxora AI account</h2><p>Use this one-time verification code:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">${code}</p><p>This code expires in 5 minutes and can only be used once.</p></div>`,
     });
     return true;
   } catch (error) {
@@ -117,7 +117,7 @@ async function sendEmailVerificationCode(email: string, code: string): Promise<b
 
 const SECURITY_REFUSAL_BN = 'আমি অ্যাপের ব্যবহার ও সুবিধা সম্পর্কে সাহায্য করতে পারি, তবে নিরাপত্তাজনিত কারণে অ্যাপের অভ্যন্তরীণ প্রযুক্তিগত তথ্য শেয়ার করা সম্ভব নয়।';
 const APP_KNOWLEDGE_BASE_BN = `
-তুমি Universal Bot Dashboard-এর সহায়ক AI Assistant। এটি একটি নিরাপদ multi-channel bot management platform, যেখানে ব্যবহারকারী:
+তুমি Naxora AI Dashboard-এর সহায়ক AI Assistant। এটি একটি নিরাপদ multi-channel bot management platform, যেখানে ব্যবহারকারী:
 - Telegram, WhatsApp, LINE এবং অন্যান্য channel সংযোগ ও webhook পরিচালনা করতে পারেন।
 - 20-tier AI cascade ব্যবহার করে দ্রুত chat, code, translation, summarization এবং troubleshooting সহায়তা পান।
 - Bangladesh news, seismic alerts এবং YouTube feed-এর 3-hour automated bulletin broadcast চালাতে পারেন।
@@ -620,7 +620,7 @@ async function probeApiProvider(providerId: string, token: string): Promise<bool
   if (!endpoint) return false;
   try {
     const response = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'User-Agent': 'Automotion-AI-Analyzer/1.0', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'User-Agent': 'Naxora-AI-Analyzer/1.0', 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(3500),
     });
     return response.ok;
@@ -1204,7 +1204,7 @@ async function startServer() {
         success: true,
         data: {
           status: 'ok',
-          service: 'Universal Bot Centralized AI & Telegram Gateway',
+          service: 'Naxora AI Centralized AI & Telegram Gateway',
           environment: process.env.NODE_ENV || 'production',
           uptimeSeconds: Math.floor(process.uptime()),
           timestamp: new Date().toISOString(),
@@ -2372,7 +2372,7 @@ async function startServer() {
             await TelegramBotService.sendUserMessage(
               token,
               user.telegramChatId,
-              `🔐 Your Automotion verification code is <b>${gen.code}</b>. It expires in 5 minutes.`,
+              `🔐 Your Naxora AI verification code is <b>${gen.code}</b>. It expires in 5 minutes.`,
             );
             telegram = true;
           }
@@ -3874,7 +3874,7 @@ async function startServer() {
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Universal Bot Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Naxora AI Server running on http://0.0.0.0:${PORT}`);
     const publicBaseUrl = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
     if (publicBaseUrl && process.env.RUN_MODE !== 'polling') {
       void TelegramBotService.configureWebhook(`${publicBaseUrl}/api/telegram/webhook`).catch((error) => {

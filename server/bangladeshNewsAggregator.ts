@@ -155,7 +155,7 @@ export class BangladeshNewsAggregator {
       try {
         const response = await fetch(url, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Universal Bot News Monitor/2.0)',
+            'User-Agent': 'Mozilla/5.0 (Naxora AI News Monitor/2.0)',
             Accept: 'application/json',
           },
           signal: AbortSignal.timeout(4000),
@@ -204,7 +204,7 @@ export class BangladeshNewsAggregator {
     try {
       const response = await fetch('https://www.thedailystar.net/rss.xml', {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Universal Bot News Monitor/2.0)',
+          'User-Agent': 'Mozilla/5.0 (Naxora AI News Monitor/2.0)',
           Accept: 'application/rss+xml, application/xml, text/xml',
         },
         signal: AbortSignal.timeout(4000),
@@ -225,7 +225,7 @@ export class BangladeshNewsAggregator {
     try {
       const response = await fetch('https://www.dhakatribune.com/feed', {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Universal Bot News Monitor/2.0)',
+          'User-Agent': 'Mozilla/5.0 (Naxora AI News Monitor/2.0)',
           Accept: 'application/rss+xml, application/xml, text/xml',
         },
         signal: AbortSignal.timeout(4000),

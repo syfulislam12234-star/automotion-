@@ -543,7 +543,7 @@ export const VpsManager: React.FC<VpsManagerProps> = ({
           : selectedTestEvent === 'ai_failover'
           ? `⚡ AI RATE LIMIT AUTO-FAILOVER: Primary Groq API Key exhausted (HTTP 429). Swapped to Key #2 seamlessly.`
           : `🛡️ ADMIN SENTINEL ALERT: 3 consecutive invalid Admin PIN attempts detected from IP 185.220.101.5.`,
-      dispatch_source: 'Universal Bot VPS Sentinel & Telemetry Engine',
+      dispatch_source: 'Naxora AI VPS Sentinel & Telemetry Engine',
     };
 
     try {

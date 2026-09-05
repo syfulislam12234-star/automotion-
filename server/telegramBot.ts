@@ -187,7 +187,7 @@ export class TelegramBotService {
 
   private static buildWelcomeText(): string {
     return [
-      '**🤖 AUTOMOTION AI — WELCOME**',
+      '**🤖 NAXORA AI — WELCOME**',
       '',
       'Your multi-platform AI automation studio. Pick an action below, or just send me any message to chat.',
       '',
@@ -720,7 +720,7 @@ export class TelegramBotService {
   public static async reloadFromConfig(config: BotConfig) {
     TelegramBotService.currentConfig = config;
     TelegramBotService.isRunning = Boolean(config.enableTelegram && (config.telegramBotToken || config.adminTelegramId));
-    console.log(`🤖 [TelegramBotService] Reloaded with bot name: ${config.botName || 'Universal Bot'}`);
+    console.log(`🤖 [TelegramBotService] Reloaded with bot name: ${config.botName || 'Naxora AI'}`);
     await TelegramBotService.startPollingIfConfigured();
     return true;
   }
@@ -829,7 +829,7 @@ export class TelegramBotService {
       const asksForHelp = ['help', 'assistance', 'what can you do', 'setup', 'api setup', 'guide'].includes(normalizedText);
       if (command === '/help' || command === '/setup' || asksForHelp) {
         await TelegramBotService.sendMessage(token, chatId,
-          '**🤖 AUTOMOTION AI — MASTER GUIDE**\n\n' +
+          '**🤖 NAXORA AI — MASTER GUIDE**\n\n' +
           '**📜 COMMANDS**\n' +
           '/start — Activate the AI assistant\n' +
           '/help or /setup — Show this master guide\n' +
