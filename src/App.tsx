@@ -10,6 +10,9 @@ import { AdminUserManager } from './components/AdminUserManager';
 import { AdminPaymentManager } from './components/AdminPaymentManager';
 import { AdminAdsAiManager } from './components/AdminAdsAiManager';
 import { AdminAppControlRevenue } from './components/AdminAppControlRevenue';
+import { AdminSupportTickets } from './components/AdminSupportTickets';
+import { AdminAuditLogs } from './components/AdminAuditLogs';
+import { SupportTickets } from './components/SupportTickets';
 import { ApiPortalModal } from './components/ApiPortalModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
 import { AuthModal } from './components/AuthModal';
@@ -402,7 +405,7 @@ function AppContent() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminPortalOpen, setIsAdminPortalOpen] = useState(false);
   // Phase 2: which section of the /admin workspace is displayed.
-  const [adminSection, setAdminSection] = useState<'control' | 'users' | 'payments' | 'adsai' | 'appcontrol'>('control');
+  const [adminSection, setAdminSection] = useState<'control' | 'users' | 'payments' | 'adsai' | 'appcontrol' | 'audit' | 'support'>('control');
   const [authModalTab, setAuthModalTab] = useState<'login' | 'signup' | 'verify'>('login');
   const [authFeatureContext, setAuthFeatureContext] = useState<string | undefined>(undefined);
   const currentUser = session?.user || null;
@@ -414,6 +417,7 @@ function AppContent() {
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState(false);
   const [isPortalOpen, setIsPortalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [isSupportTicketsOpen, setIsSupportTicketsOpen] = useState(false);
   const [isYouTubeStudioOpen, setIsYouTubeStudioOpen] = useState(false);
   const [isAiAnalyzerOpen, setIsAiAnalyzerOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(true);
@@ -691,6 +695,13 @@ function AppContent() {
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                 <span>Plans</span>
+              </button>
+              <button
+                onClick={() => setIsSupportTicketsOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                <span>Support</span>
               </button>
               <button
                 onClick={() => setIsYouTubeStudioOpen(true)}
@@ -999,6 +1010,18 @@ function AppContent() {
               >
                 ⚙️ App &amp; Revenue
               </button>
+              <button
+                onClick={() => setAdminSection('audit')}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${adminSection === 'audit' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'}`}
+              >
+                📜 Audit Logs
+              </button>
+              <button
+                onClick={() => setAdminSection('support')}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${adminSection === 'support' ? 'bg-fuchsia-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'}`}
+              >
+                🎧 Support Tickets
+              </button>
             </div>
             {adminSection === 'control' ? (
               <AdminControlPanel
@@ -1014,6 +1037,10 @@ function AppContent() {
               <AdminPaymentManager onShowToast={showToast} />
             ) : adminSection === 'adsai' ? (
               <AdminAdsAiManager onShowToast={showToast} />
+            ) : adminSection === 'audit' ? (
+              <AdminAuditLogs onShowToast={showToast} />
+            ) : adminSection === 'support' ? (
+              <AdminSupportTickets onShowToast={showToast} />
             ) : (
               <AdminAppControlRevenue onShowToast={showToast} />
             )}
@@ -1125,6 +1152,15 @@ function AppContent() {
         onClose={() => setIsDeployGuideOpen(false)}
         config={config}
       />
+
+      {/* User Support Tickets Portal Modal */}
+      <SupportTickets
+        isOpen={isSupportTicketsOpen}
+        onClose={() => setIsSupportTicketsOpen(false)}
+        onShowToast={showToast}
+      />
+
+      {/* User Authentication & Verification Gateway Modal */}
 
       {/* User Authentication & Verification Gateway Modal */}
       <AuthModal

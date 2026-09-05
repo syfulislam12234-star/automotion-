@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts, SystemAlert, RevenueStats } from '../src/types';
+import { UserAccount, AuthSession, BotConfig, CrmCustomer, CrmMessage, CrmOrder, CrmOrderStatus, CrmAgentMode, StoreKnowledge, SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts, SystemAlert, RevenueStats, AuditLog, SupportTicket } from '../src/types';
 
 export type { SubscriptionPlan, SubscriptionStatus, PaymentTransaction, PaymentStatus, PaymentMethod, SystemConfig, AdPlacement, AiProviderConfig, FeatureCreditCosts, SystemAlert, RevenueStats };
 
@@ -17,6 +17,8 @@ interface StoredDb {
   payments: PaymentTransaction[];
   systemConfig: SystemConfig;
   systemAlerts: SystemAlert[];
+  auditLogs: AuditLog[];
+  supportTickets: SupportTicket[];
 }
 
 /** Zero-break defaults: everything enabled exactly like the pre-Phase-4 behaviour. */
@@ -61,6 +63,8 @@ export class ServerDatabase {
     payments: [],
     systemConfig: DEFAULT_SYSTEM_CONFIG,
     systemAlerts: [],
+    auditLogs: [],
+    supportTickets: [],
   };
 
   public static init() {
@@ -87,6 +91,21 @@ export class ServerDatabase {
     } catch (e) {
       console.warn('[ServerDB] Failed to persist file store:', e);
     }
+  }
+
+  /** Public: mint and persist a fresh authenticated session for the given user. */
+  public static createSession(user: UserAccount, ttlMs: number = 365 * 24 * 60 * 60 * 1000): AuthSession {
+    const token = 'tok_' + crypto.randomBytes(24).toString('hex');
+    const session: AuthSession = {
+      token,
+      user,
+      expiresAt: Date.now() + ttlMs,
+      isVerified: true,
+      adminAuthorized: user.role === 'admin',
+    };
+    ServerDatabase.db.sessions[token] = session;
+    ServerDatabase.save();
+    return session;
   }
 
   public static hasAdminUsers(): boolean {
@@ -1158,7 +1177,7 @@ export class ServerDatabase {
     return { user, session, verificationCode: undefined };
   }
 
-  public static verifyOtp(email: string, code: string, authHeader?: string) {
+  public static verifyLegacyOtp(email: string, code: string, authHeader?: string) {
     const cleanEmail = email.toLowerCase().trim();
     const user = ServerDatabase.db.users.find(u => u.email === cleanEmail);
     if (!user) return { success: false, message: 'User not found.' };
@@ -1374,4 +1393,227 @@ export class ServerDatabase {
     ServerDatabase.save();
     return { success: true, message: 'Database backup imported successfully.' };
   }
+
+  // ==========================================
+  // PHASE 6: AUDIT LOGGING
+  // ==========================================
+
+  /** Records an immutable audit entry for a privileged admin mutation. */
+  public static recordAuditLog(entry: {
+    adminUserId: string;
+    adminEmail?: string;
+    action: AuditLog['action'];
+    targetUserId?: string;
+    details?: string;
+    ipAddress?: string;
+  }): AuditLog {
+    const log: AuditLog = {
+      id: 'aud_' + crypto.randomBytes(8).toString('hex'),
+      adminUserId: entry.adminUserId,
+      adminEmail: entry.adminEmail,
+      action: entry.action,
+      targetUserId: entry.targetUserId,
+      details: entry.details,
+      ipAddress: entry.ipAddress,
+      createdAt: new Date().toISOString(),
+    };
+    if (!Array.isArray(ServerDatabase.db.auditLogs)) ServerDatabase.db.auditLogs = [];
+    ServerDatabase.db.auditLogs.unshift(log);
+    ServerDatabase.db.auditLogs = ServerDatabase.db.auditLogs.slice(0, 2000);
+    ServerDatabase.save();
+    return log;
+  }
+
+  /** Lists audit-log entries (newest first) with optional action + search filter. */
+  public static listAuditLogs(params: { page?: number; limit?: number; action?: string; search?: string } = {}): {
+    logs: AuditLog[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  } {
+    const page = Math.max(1, Number(params.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(params.limit) || 20));
+    const search = String(params.search || '').trim().toLowerCase();
+    let filtered = (ServerDatabase.db.auditLogs || []).slice();
+    if (params.action && params.action !== 'all') {
+      filtered = filtered.filter((l) => l.action === params.action);
+    }
+    if (search) {
+      filtered = filtered.filter((l) =>
+        (l.details || '').toLowerCase().includes(search) ||
+        (l.adminEmail || '').toLowerCase().includes(search) ||
+        (l.targetUserId || '').toLowerCase().includes(search) ||
+        l.action.toLowerCase().includes(search),
+      );
+    }
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const logs = filtered.slice((page - 1) * limit, page * limit);
+    return { logs, total, page, limit, totalPages };
+  }
+
+
+  // ==========================================
+  // PHASE 6: SUPPORT TICKETING
+  // ==========================================
+
+  /** Creates a support ticket submitted by a signed-in user. */
+  public static createSupportTicket(data: {
+    userId: string;
+    subject: string;
+    category: SupportTicket['category'];
+    description: string;
+    priority?: SupportTicket['priority'];
+  }): { success: boolean; message: string; ticket?: SupportTicket } {
+    const user = ServerDatabase.getUserByIdOrEmail(data.userId);
+    if (!user) return { success: false, message: 'Authenticated user could not be resolved.' };
+    const subject = String(data.subject || '').trim();
+    if (!subject) return { success: false, message: 'A subject is required.' };
+    const description = String(data.description || '').trim();
+    if (!description) return { success: false, message: 'A description is required.' };
+    const now = new Date().toISOString();
+    const ticket: SupportTicket = {
+      id: 'tkt_' + crypto.randomBytes(8).toString('hex'),
+      userId: user.id,
+      userEmail: user.email,
+      userName: user.name,
+      subject,
+      category: data.category || 'other',
+      description,
+      priority: data.priority || 'medium',
+      status: 'open',
+      createdAt: now,
+      updatedAt: now,
+      replies: [],
+    };
+    if (!Array.isArray(ServerDatabase.db.supportTickets)) ServerDatabase.db.supportTickets = [];
+    ServerDatabase.db.supportTickets.unshift(ticket);
+    ServerDatabase.db.supportTickets = ServerDatabase.db.supportTickets.slice(0, 2000);
+    ServerDatabase.save();
+    return { success: true, message: 'Support ticket submitted.', ticket };
+  }
+
+  /** Finds a single ticket by id (public access for route handlers). */
+  public static findSupportTicket(id: string): SupportTicket | undefined {
+    return (ServerDatabase.db.supportTickets || []).find((t) => t.id === id);
+  }
+
+  /** All tickets submitted by a given user (newest first). */
+  public static getSupportTicketsByUser(userId: string): SupportTicket[] {
+    return (ServerDatabase.db.supportTickets || []).filter((t) => t.userId === userId)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
+
+  /** All tickets across every user (admin view) with optional status filter. */
+  public static listSupportTickets(status: 'all' | 'open' | 'resolved' = 'all'): SupportTicket[] {
+    const tickets = (ServerDatabase.db.supportTickets || []).slice();
+    const filtered = status === 'all' ? tickets : tickets.filter((t) => t.status === status);
+    return filtered.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
+
+  /** Adds a reply to a ticket and bumps updatedAt. */
+  public static replyToTicket(ticketId: string, authorId: string, authorRole: 'user' | 'admin', message: string): { success: boolean; message: string; ticket?: SupportTicket } {
+    const ticket = (ServerDatabase.db.supportTickets || []).find((t) => t.id === ticketId);
+    if (!ticket) return { success: false, message: 'Ticket not found.' };
+    const text = String(message || '').trim();
+    if (!text) return { success: false, message: 'A reply message is required.' };
+    ticket.replies.push({
+      id: 'rpl_' + crypto.randomBytes(6).toString('hex'),
+      authorId,
+      authorRole,
+      message: text,
+      createdAt: new Date().toISOString(),
+    });
+    ticket.updatedAt = new Date().toISOString();
+    ServerDatabase.save();
+    return { success: true, message: 'Reply added.', ticket };
+  }
+
+  /** Toggles a ticket between open and resolved. */
+  public static updateTicketStatus(ticketId: string, status: 'open' | 'resolved'): { success: boolean; message: string; ticket?: SupportTicket } {
+    const ticket = (ServerDatabase.db.supportTickets || []).find((t) => t.id === ticketId);
+    if (!ticket) return { success: false, message: 'Ticket not found.' };
+    ticket.status = status;
+    ticket.updatedAt = new Date().toISOString();
+    ServerDatabase.save();
+    return { success: true, message: `Ticket marked ${status}.`, ticket };
+  }
+
+
+  // ==========================================
+  // PHASE 6: SMART DUAL-CHANNEL OTP (data layer)
+  // ==========================================
+
+  /** Generates a fresh 6-digit OTP (5-minute TTL, max 3 attempts). */
+  public static generateOtp(userId: string): { success: boolean; message: string; code?: string } {
+    const user = ServerDatabase.getUserByIdOrEmail(userId);
+    if (!user) return { success: false, message: 'User not found.' };
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.otpCode = code;
+    user.otpExpiresAt = Date.now() + 5 * 60 * 1000;
+    user.otpAttempts = 0;
+    ServerDatabase.save();
+    return { success: true, message: 'OTP generated.', code };
+  }
+
+  /** Verifies a submitted OTP (enforces expiry + 3-attempt cap). */
+  public static verifyOtp(userId: string, code: string): { success: boolean; message: string } {
+    const user = ServerDatabase.getUserByIdOrEmail(userId);
+    if (!user) return { success: false, message: 'User not found.' };
+    if (!user.otpCode || !user.otpExpiresAt) return { success: false, message: 'No active OTP. Request a new one.' };
+    if (Date.now() > user.otpExpiresAt) {
+      user.otpCode = undefined; user.otpAttempts = undefined; user.otpExpiresAt = undefined;
+      ServerDatabase.save();
+      return { success: false, message: 'OTP has expired. Request a new one.' };
+    }
+    const attempts = (user.otpAttempts || 0) + 1;
+    user.otpAttempts = attempts;
+    if (attempts > 3) {
+      user.otpCode = undefined; user.otpAttempts = undefined; user.otpExpiresAt = undefined;
+      ServerDatabase.save();
+      return { success: false, message: 'Too many attempts. Request a new OTP.' };
+    }
+    if (String(code || '').trim() !== String(user.otpCode)) {
+      ServerDatabase.save();
+      return { success: false, message: `Invalid OTP. ${3 - attempts} attempt(s) remaining.` };
+    }
+    user.otpCode = undefined; user.otpAttempts = undefined; user.otpExpiresAt = undefined;
+    ServerDatabase.save();
+    return { success: true, message: 'OTP verified.' };
+  }
+
+  // ==========================================
+  // PHASE 6: AUTOMATED EVENT NOTIFICATIONS (in-app)
+  // ==========================================
+
+  /** Creates an in-app system alert for a user (Telegram push handled in server.ts). */
+  public static async notifyUser(userId: string, message: string): Promise<{ inApp: boolean }> {
+    const user = ServerDatabase.getUserByIdOrEmail(userId);
+    if (!user || !message) return { inApp: false };
+    const alert: SystemAlert = {
+      id: 'alr_' + crypto.randomBytes(6).toString('hex'),
+      message,
+      channel: 'in-app',
+      sentBy: 'system',
+      sentAt: new Date().toISOString(),
+    };
+    if (!Array.isArray(ServerDatabase.db.systemAlerts)) ServerDatabase.db.systemAlerts = [];
+    ServerDatabase.db.systemAlerts.unshift(alert);
+    ServerDatabase.db.systemAlerts = ServerDatabase.db.systemAlerts.slice(0, 500);
+    ServerDatabase.save();
+    return { inApp: true };
+  }
+
+  /** Active paid users whose plan expires within `days` days (subscription-reminder sweep). */
+  public static getExpiringSubscriptions(days = 3): UserAccount[] {
+    const horizon = Date.now() + days * 24 * 60 * 60 * 1000;
+    return (ServerDatabase.db.users || []).filter((u) => {
+      if (!u.planExpiresAt || u.subscriptionStatus !== 'active') return false;
+      if (String(u.plan || '') === 'free') return false;
+      const exp = new Date(u.planExpiresAt).getTime();
+      return Number.isFinite(exp) && exp > Date.now() && exp <= horizon;
+    });
+  }
+
 }

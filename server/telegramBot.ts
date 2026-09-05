@@ -1087,6 +1087,11 @@ export class TelegramBotService {
       }
     }
   }
+/** Public helper: send a plain HTML message to a specific chat using a bot token (OTP + notifications). */
+  public static async sendUserMessage(token: string, chatId: string | number, text: string): Promise<void> {
+    await TelegramBotService.sendMessage(token, chatId, text);
+  }
+
 
   private static async uploadTelegramVideo(token: string, state: TelegramUploadState, madeForKids: boolean, chatId: string | number, ownerConfig?: BotConfig | null) {
     if (!state.fileId || !state.topic || !state.privacyStatus || !(ownerConfig || TelegramBotService.currentConfig)) throw new Error('ভিডিও, topic এবং তিনটি upload setting প্রয়োজন।');

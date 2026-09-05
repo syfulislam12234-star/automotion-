@@ -153,6 +153,12 @@ export interface UserAccount {
   credits?: number;
   /** When true the user is blocked and fails all session/auth checks immediately. */
   isBlocked?: boolean;
+  /** Linked Telegram chat id (set when the user interacts with the bot) — enables Telegram OTP delivery. */
+  telegramChatId?: string;
+  /** Smart dual-channel OTP state (6-digit code, 5-minute TTL, max 3 attempts). */
+  otpCode?: string;
+  otpExpiresAt?: number;
+  otpAttempts?: number;
 }
 
 export interface AuthSession {
@@ -621,5 +627,39 @@ export interface GmailLabel {
   type: 'system' | 'user';
   messagesTotal?: number;
   messagesUnread?: number;
+}
+
+/** Audit trail entry recording a privileged admin mutation (zero-break: read-only log). */
+export interface AuditLog {
+  id: string;
+  adminUserId: string;
+  adminEmail?: string;
+  action: 'APPROVE_PAYMENT' | 'REJECT_PAYMENT' | 'BLOCK_USER' | 'UNBLOCK_USER' | 'UPDATE_CONFIG' | 'TOGGLE_MAINTENANCE' | 'ASSIGN_ADMIN' | 'UPDATE_ADS' | 'UPDATE_AI' | 'UPDATE_PAYMENT_METHODS' | 'REPLY_SUPPORT' | 'UPDATE_SUPPORT_STATUS';
+  targetUserId?: string;
+  details?: string;
+  ipAddress?: string;
+  createdAt: string;
+}
+
+/** Customer support ticket (user-submitted, admin-managed). */
+export interface SupportTicket {
+  id: string;
+  userId: string;
+  userEmail?: string;
+  userName?: string;
+  subject: string;
+  category: 'billing' | 'technical' | 'account' | 'feature' | 'other';
+  description: string;
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  status: 'open' | 'resolved';
+  createdAt: string;
+  updatedAt: string;
+  replies: Array<{
+    id: string;
+    authorId: string;
+    authorRole: 'user' | 'admin';
+    message: string;
+    createdAt: string;
+  }>;
 }
 

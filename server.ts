@@ -32,7 +32,7 @@ import {
   extractYouTubeCredentials,
   YouTubeAnalyticsError,
 } from './server/youtubeAnalyticsService';
-import { BotConfig, UserAccount } from './src/types';
+import { BotConfig, UserAccount, AuthSession, SupportTicket } from './src/types';
 
 dotenv.config();
 
@@ -2254,7 +2254,7 @@ async function startServer() {
         }
         return res.status(201).json(result);
       }
-      const standardResult = ServerDatabase.verifyOtp(email, code, req.headers.authorization);
+      const standardResult = ServerDatabase.verifyLegacyOtp(email, code, req.headers.authorization);
       if (standardResult.success) {
         if (standardResult.session?.token && ServerDatabase.isUserAdmin(standardResult.session.user)) {
           setAdminAuthCookie(res, standardResult.session.token);
@@ -2326,7 +2326,7 @@ async function startServer() {
         return res.status(400).json({ success: false, message: 'Email and 6-digit OTP code are required.' });
       }
 
-      const result = ServerDatabase.verifyOtp(email, code, req.headers.authorization);
+      const result = ServerDatabase.verifyLegacyOtp(email, code, req.headers.authorization);
       if (!result.success) {
         return res.status(400).json(result);
       }
@@ -2338,6 +2338,97 @@ async function startServer() {
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Verification failed' });
+    }
+  });
+
+  // ==========================================
+  // PHASE 6: SMART DUAL-CHANNEL OTP
+  // ==========================================
+
+  // Session-guarded: generate + send a fresh OTP. Telegram-first (instant) when the
+  // user has a linked chat id + registered bot, otherwise automatic email fallback.
+  app.post('/api/auth/otp/send', requireSession, async (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      if (user.isVerified === true) {
+        return res.json({ success: false, message: 'Your account is already verified.' });
+      }
+      const gen = ServerDatabase.generateOtp(user.id);
+      if (!gen.success || !gen.code) return res.status(400).json(gen);
+
+      let telegram = false;
+      let email = false;
+
+      // Step 1 — Telegram (instant) when a chat id + usable bot token are available.
+      if (user.telegramChatId) {
+        try {
+          const token = TelegramBotService.getUserBotToken(user.id) || process.env.TELEGRAM_BOT_TOKEN || '';
+          if (token) {
+            await TelegramBotService.sendUserMessage(
+              token,
+              user.telegramChatId,
+              `🔐 Your Automotion verification code is <b>${gen.code}</b>. It expires in 5 minutes.`,
+            );
+            telegram = true;
+          }
+        } catch (err) {
+          console.warn('[OTP] Telegram delivery failed, will use email fallback:', err);
+        }
+      }
+
+      // Step 2 — Email fallback (always attempted so the user receives the code).
+      try {
+        email = await sendEmailVerificationCode(user.email, gen.code);
+      } catch (err) {
+        console.warn('[OTP] Email delivery failed:', err);
+      }
+
+      if (!telegram && !email) {
+        return res.status(503).json({
+          success: false,
+          message: 'Could not deliver the OTP via Telegram or email. Please try again or contact support.',
+        });
+      }
+      return res.json({
+        success: true,
+        message: `Verification code sent${telegram ? ' via Telegram' : ''}${telegram && email ? ' and' : ''}${email ? ' via email' : ''}.`,
+        channel: telegram && email ? 'both' : telegram ? 'telegram' : 'email',
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to send OTP.' });
+    }
+  });
+
+  // Session-guarded: verify the submitted 6-digit code (enforces expiry + 3 attempts).
+  app.post('/api/auth/otp/verify', requireSession, async (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      const code = String(req.body?.code || '').replace(/\D/g, '');
+      if (code.length !== 6) {
+        return res.status(400).json({ success: false, message: 'Enter the 6-digit verification code.' });
+      }
+      const result = ServerDatabase.verifyOtp(user.id, code);
+      if (!result.success) return res.status(400).json(result);
+
+      // Code accepted — mark the account verified and mint a fresh verified session.
+      user.isVerified = true;
+      user.verificationCode = undefined;
+      user.verificationCodeExpiresAt = undefined;
+      const session = ServerDatabase.createSession(user);
+
+      // Single-admin: drop the HttpOnly cookie so the admin can reload `/admin`.
+      if (ServerDatabase.isUserAdmin(user)) {
+        setAdminAuthCookie(res, session.token);
+      }
+      return res.json({
+        success: true,
+        message: 'Verification successful. Your account is now active.',
+        session: { token: session.token, user, expiresAt: session.expiresAt, isVerified: true },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'OTP verification failed.' });
     }
   });
 
@@ -2827,6 +2918,18 @@ async function startServer() {
       if (!result.success) {
         return res.status(404).json(result);
       }
+      // Audit log the admin privilege assignment.
+      const actingAdmin = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+      if (actingAdmin && result.user) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: actingAdmin.id,
+          adminEmail: actingAdmin.email,
+          action: 'ASSIGN_ADMIN',
+          targetUserId: result.user.id,
+          details: `Assigned admin privilege to ${result.user.email}`,
+          ipAddress: req.ip,
+        });
+      }
       const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safeUser } = result.user as UserAccount;
       return res.json({ ...result, user: safeUser });
     } catch (err: any) {
@@ -2886,6 +2989,17 @@ async function startServer() {
       const result = ServerDatabase.toggleBlockUser(identifier, blocked);
       if (!result.success) {
         return res.status(404).json(result);
+      }
+      // Audit log the block/unblock action.
+      if (actingAdmin && result.user) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: actingAdmin.id,
+          adminEmail: actingAdmin.email,
+          action: blocked ? 'BLOCK_USER' : 'UNBLOCK_USER',
+          targetUserId: result.user.id,
+          details: `${blocked ? 'Blocked' : 'Unblocked'} user ${result.user.email}`,
+          ipAddress: req.ip,
+        });
       }
       const { verificationCode: _vc, verificationCodeExpiresAt: _vce, ...safeUser } = (result.user || {}) as UserAccount;
       return res.json({ ...result, user: safeUser });
@@ -2968,6 +3082,56 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // PHASE 6: SUPPORT TICKETING (user-facing)
+  // ==========================================
+
+  // User: submit a new support ticket (session-guarded).
+  app.post('/api/support/tickets', requireSession, (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      const { subject, category, description, priority } = req.body || {};
+      const result = ServerDatabase.createSupportTicket({
+        userId: user.id,
+        subject: String(subject || ''),
+        category: (String(category || 'other') as SupportTicket['category']),
+        description: String(description || ''),
+        priority: (String(priority || 'medium') as SupportTicket['priority']),
+      });
+      if (!result.success) return res.status(400).json(result);
+      return res.status(201).json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to submit ticket.' });
+    }
+  });
+
+  // User: list the signed-in user's own tickets (session-guarded).
+  app.get('/api/support/tickets', requireSession, (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      return res.json({ success: true, tickets: ServerDatabase.getSupportTicketsByUser(user.id) });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load tickets.' });
+    }
+  });
+
+  // User: reply to one of their own tickets (session-guarded).
+  app.post('/api/support/tickets/:id/reply', requireSession, (req, res) => {
+    try {
+      const user = ServerDatabase.getSessionUser(req.headers.authorization);
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      const ticket = ServerDatabase.findSupportTicket(req.params.id);
+      if (!ticket || ticket.userId !== user.id) return res.status(404).json({ success: false, message: 'Ticket not found.' });
+      const result = ServerDatabase.replyToTicket(ticket.id, user.id, 'user', String(req.body?.message || ''));
+      if (!result.success) return res.status(400).json(result);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to add reply.' });
+    }
+  });
+
   // User: manual payment destination numbers shown in the checkout modal (public — no
   // session required; the modal itself is only reachable by logged-in users).
   app.get('/api/payments/methods', (req, res) => {
@@ -3000,7 +3164,7 @@ async function startServer() {
   });
 
   // Approve a pending payment → auto upgrade/extend the payer's subscription.
-  app.post('/api/admin/payments/approve', (req, res) => {
+  app.post('/api/admin/payments/approve', async (req, res) => {
     try {
       const paymentId = String(req.body?.paymentId || '').trim();
       if (!paymentId) {
@@ -3011,6 +3175,21 @@ async function startServer() {
       if (!result.success) {
         return res.status(400).json(result);
       }
+      // Audit log + notify the payer (Telegram + in-app).
+      if (admin) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: admin.id,
+          adminEmail: admin.email,
+          action: 'APPROVE_PAYMENT',
+          targetUserId: result.payment?.userId,
+          details: `Approved payment ${result.payment?.id} (${result.payment?.currency} ${result.payment?.amount}) → plan ${result.payment?.planId}`,
+          ipAddress: req.ip,
+        });
+      }
+      if (result.user) {
+        const msg = `✅ Your ${result.payment?.currency} ${result.payment?.amount} payment was approved! Your ${result.payment?.planId} plan is now active.`;
+        try { await ServerDatabase.notifyUser(result.user.id, msg); } catch { /* noop */ }
+      }
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Failed to approve payment.' });
@@ -3018,16 +3197,33 @@ async function startServer() {
   });
 
   // Reject a pending payment with a mandatory reason note.
-  app.post('/api/admin/payments/reject', (req, res) => {
+  app.post('/api/admin/payments/reject', async (req, res) => {
     try {
       const paymentId = String(req.body?.paymentId || '').trim();
       if (!paymentId) {
         return res.status(400).json({ success: false, message: 'A paymentId is required.' });
       }
       const admin = ServerDatabase.getSessionUser(req.headers.authorization);
-      const result = ServerDatabase.rejectPayment(paymentId, String(req.body?.reason || ''), admin?.id);
+      const reason = String(req.body?.reason || '').trim();
+      const result = ServerDatabase.rejectPayment(paymentId, reason, admin?.id);
       if (!result.success) {
         return res.status(400).json(result);
+      }
+      // Audit log + notify the payer with the rejection reason.
+      if (admin && result.payment) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: admin.id,
+          adminEmail: admin.email,
+          action: 'REJECT_PAYMENT',
+          targetUserId: result.payment.userId,
+          details: `Rejected payment ${result.payment.id} (${result.payment.currency} ${result.payment.amount}). Reason: ${reason || 'none'}`,
+          ipAddress: req.ip,
+        });
+        const target = ServerDatabase.getUserByIdOrEmail(result.payment.userId);
+        if (target) {
+          const msg = `❌ Your ${result.payment.currency} ${result.payment.amount} payment was rejected.${reason ? ` Reason: ${reason}` : ''} Please resubmit or contact support.`;
+          try { await ServerDatabase.notifyUser(target.id, msg); } catch { /* noop */ }
+        }
       }
       return res.json(result);
     } catch (err: any) {
@@ -3052,11 +3248,21 @@ async function startServer() {
   // Update ads toggles, plan eligibility, and ad placements.
   app.post('/api/admin/system/ads', (req, res) => {
     try {
+      const actingAdmin = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
       const config = ServerDatabase.updateAdsConfig({
         adsEnabled: req.body?.adsEnabled === undefined ? undefined : req.body.adsEnabled === true,
         adsByPlan: req.body?.adsByPlan,
         adPlacements: Array.isArray(req.body?.adPlacements) ? req.body.adPlacements : undefined,
       });
+      if (actingAdmin) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: actingAdmin.id,
+          adminEmail: actingAdmin.email,
+          action: 'UPDATE_ADS',
+          details: `Ads enabled=${config.adsEnabled}`,
+          ipAddress: req.ip,
+        });
+      }
       return res.json({ success: true, message: 'Ads configuration saved.', config });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Failed to save ads configuration.' });
@@ -3066,15 +3272,101 @@ async function startServer() {
   // Update AI provider toggles/priority ordering and feature credit costs.
   app.post('/api/admin/system/ai', (req, res) => {
     try {
+      const actingAdmin = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
       const config = ServerDatabase.updateAiConfig({
         aiProviders: Array.isArray(req.body?.aiProviders) ? req.body.aiProviders : undefined,
         featureCreditCosts: req.body?.featureCreditCosts,
       });
+      if (actingAdmin) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: actingAdmin.id,
+          adminEmail: actingAdmin.email,
+          action: 'UPDATE_AI',
+          details: `AI providers updated; credit costs=${JSON.stringify(config.featureCreditCosts)}`,
+          ipAddress: req.ip,
+        });
+      }
       return res.json({ success: true, message: 'AI configuration saved.', config });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message || 'Failed to save AI configuration.' });
     }
   });
+
+  // ==========================================
+  // PHASE 6: ADMIN AUDIT LOGS & SUPPORT MANAGEMENT
+  // ==========================================
+
+  // Admin: paginated audit-trail listing (action + free-text search).
+  app.get('/api/admin/audit-logs', (req, res) => {
+    try {
+      const result = ServerDatabase.listAuditLogs({
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 20,
+        action: String(req.query.action || 'all'),
+        search: String(req.query.search || ''),
+      });
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load audit logs.' });
+    }
+  });
+
+  // Admin: list every support ticket (optional status filter).
+  app.get('/api/admin/support-tickets', (req, res) => {
+    try {
+      const status = ['open', 'resolved'].includes(String(req.query.status)) ? String(req.query.status) as 'open' | 'resolved' : 'all';
+      return res.json({ success: true, tickets: ServerDatabase.listSupportTickets(status) });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to load support tickets.' });
+    }
+  });
+
+  // Admin: reply to a ticket (records an audit entry too).
+  app.post('/api/admin/support-tickets/:id/reply', (req, res) => {
+    try {
+      const admin = ServerDatabase.getSessionUser(req.headers.authorization);
+      const result = ServerDatabase.replyToTicket(String(req.params.id || ''), admin?.id || '', 'admin', String(req.body?.message || ''));
+      if (!result.success) return res.status(400).json(result);
+      if (admin) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: admin.id,
+          adminEmail: admin.email,
+          action: 'REPLY_SUPPORT',
+          targetUserId: result.ticket?.userId,
+          details: `Replied to ticket ${result.ticket?.id}: ${String(req.body?.message || '').slice(0, 80)}`,
+          ipAddress: req.ip,
+        });
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to add reply.' });
+    }
+  });
+
+  // Admin: change a ticket's status open/resolved.
+  app.post('/api/admin/support-tickets/:id/status', (req, res) => {
+    try {
+      const admin = ServerDatabase.getSessionUser(req.headers.authorization);
+      const status = String(req.body?.status || 'open') === 'resolved' ? 'resolved' : 'open';
+      const result = ServerDatabase.updateTicketStatus(String(req.params.id || ''), status);
+      if (!result.success) return res.status(400).json(result);
+      if (admin) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: admin.id,
+          adminEmail: admin.email,
+          action: 'UPDATE_SUPPORT_STATUS',
+          targetUserId: result.ticket?.userId,
+          details: `Ticket ${result.ticket?.id} → ${status}`,
+          ipAddress: req.ip,
+        });
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || 'Failed to update ticket.' });
+    }
+  });
+
+  // PUBLIC/USER ADS SERVING (Phase 4) — session-aware, plan-gated
 
   // ==========================================
   // PUBLIC/USER ADS SERVING (Phase 4) — session-aware, plan-gated
@@ -3141,6 +3433,8 @@ async function startServer() {
   // Admin: update maintenance mode, registration toggle, free trial, and feature toggles.
   app.post('/api/admin/system/app-control', (req, res) => {
     try {
+      const actingAdmin = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+      const previous = ServerDatabase.getSystemConfig();
       const config = ServerDatabase.updateAppControl({
         maintenanceMode: req.body?.maintenanceMode === undefined ? undefined : req.body.maintenanceMode === true,
         maintenanceMessage: req.body?.maintenanceMessage,
@@ -3148,6 +3442,19 @@ async function startServer() {
         freeTrial: req.body?.freeTrial,
         featureToggles: req.body?.featureToggles,
       });
+      // Audit log — distinguish maintenance toggle from general config update.
+      if (actingAdmin) {
+        const maintenanceToggled = req.body?.maintenanceMode !== undefined && req.body.maintenanceMode === true !== previous.maintenanceMode;
+        ServerDatabase.recordAuditLog({
+          adminUserId: actingAdmin.id,
+          adminEmail: actingAdmin.email,
+          action: maintenanceToggled ? 'TOGGLE_MAINTENANCE' : 'UPDATE_CONFIG',
+          details: maintenanceToggled
+            ? `Maintenance mode → ${config.maintenanceMode ? 'ON' : 'OFF'}`
+            : `Updated app control (registration=${config.registrationOpen}, trial=${config.freeTrial.enabled})`,
+          ipAddress: req.ip,
+        });
+      }
       return res.json({
         success: true,
         message: 'App control settings saved.',
@@ -3168,9 +3475,19 @@ async function startServer() {
   // Admin: update the manual payment destination numbers shown in the user checkout modal.
   app.post('/api/admin/system/payment-methods', (req, res) => {
     try {
+      const actingAdmin = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
       const config = ServerDatabase.updateAppControl({
         paymentMethods: req.body?.paymentMethods,
       });
+      if (actingAdmin) {
+        ServerDatabase.recordAuditLog({
+          adminUserId: actingAdmin.id,
+          adminEmail: actingAdmin.email,
+          action: 'UPDATE_PAYMENT_METHODS',
+          details: 'Updated manual payment destination numbers / instructions',
+          ipAddress: req.ip,
+        });
+      }
       return res.json({
         success: true,
         message: 'Payment methods saved.',
@@ -3582,6 +3899,25 @@ async function startServer() {
     void multiChannelGateway.startAll().catch((error: any) => {
       console.error('❌ [MultiChannelGateway] Startup exception:', error);
     });
+
+    // Phase 6: daily subscription-expiry reminder sweep (notifies users 3 days out).
+    const expiryReminderTimer = setInterval(() => {
+      void (async () => {
+        try {
+          const expiring = ServerDatabase.getExpiringSubscriptions(3);
+          for (const user of expiring) {
+            const daysLeft = Math.max(1, Math.ceil((new Date(user.planExpiresAt as string).getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+            const msg = `⏰ Your ${user.plan} plan expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${new Date(user.planExpiresAt as string).toISOString().slice(0, 10)}). Renew now to keep your benefits.`;
+            await ServerDatabase.notifyUser(user.id, msg);
+          }
+          if (expiring.length) console.log(`[SubscriptionReminder] Sent ${expiring.length} expiry reminder(s).`);
+        } catch (error: any) {
+          console.warn('[SubscriptionReminder] Sweep failed:', error?.message || error);
+        }
+      })();
+    }, 24 * 60 * 60 * 1000);
+    expiryReminderTimer.unref?.();
+    console.log('[SubscriptionReminder] Daily expiry-reminder sweep enabled.');
   });
 
   const shutdown = async (signal: string) => {
