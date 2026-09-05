@@ -31,6 +31,11 @@ import {
   type AiGeneratorFn,
   extractYouTubeCredentials,
   YouTubeAnalyticsError,
+  resolveEnvYouTubeClient,
+  buildYouTubeAuthUrl,
+  signYouTubeOAuthState,
+  verifyYouTubeOAuthState,
+  exchangeYouTubeOAuthCode,
 } from './server/youtubeAnalyticsService';
 import { BotConfig, UserAccount, AuthSession, SupportTicket } from './src/types';
 
@@ -2787,6 +2792,170 @@ async function startServer() {
   app.get('/api/youtube/studio-history', handleYouTubeHistoryRequest);
   // Get authenticated user's AI viral video predictions for the Studio Dashboard.
   app.get('/api/youtube/viral-predictions', handleYouTubeViralRequest);
+
+  // ==========================================
+  // YOUTUBE OAUTH 2.0 CONNECT FLOW (click-to-authorize)
+  // ==========================================
+
+  /** HMAC secret binding the OAuth state to a tenant (stable across restarts). */
+  const YOUTUBE_OAUTH_STATE_SECRET = (process.env.WEBHOOK_SECRET
+    || process.env.GOOGLE_CLIENT_SECRET
+    || process.env.YOUTUBE_CLIENT_SECRET
+    || 'naxora-oauth-state-secret-v1').trim();
+
+  /** Deterministic redirect URI shared by the auth-url and callback endpoints. */
+  const resolveYouTubeRedirectUri = (req: express.Request): string => {
+    const configuredBase = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL
+      || process.env.SERVER_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '');
+    if (configuredBase) return `${configuredBase}/api/youtube/oauth/callback`;
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const proto = forwardedProto || req.protocol || 'https';
+    const host = String(req.headers.host || '').trim();
+    return host ? `${proto}://${host}/api/youtube/oauth/callback` : '';
+  };
+
+  /** Branded OAuth result page (auto-closes on success). */
+  const sendYouTubeOAuthPage = (
+    res: express.Response,
+    options: { title: string; emoji: string; bodyHtml: string; ok: boolean },
+  ): void => {
+    res.status(options.ok ? 200 : 400).type('html').send(
+      '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+      + `<title>${options.title} — Naxora AI</title>`
+      + '<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#020617;color:#e2e8f0;font-family:Arial,sans-serif}'
+      + '.card{max-width:480px;margin:16px;padding:32px;border-radius:24px;background:#0f172a;border:1px solid #1e293b;text-align:center}'
+      + '.emoji{font-size:48px}h1{font-size:20px;margin:12px 0 8px}p{font-size:13px;line-height:1.7;color:#94a3b8;word-break:break-word}'
+      + 'code{color:#67e8f9;font-size:12px}'
+      + 'a.btn{display:inline-block;margin-top:14px;padding:10px 20px;border-radius:12px;background:linear-gradient(90deg,#0891b2,#4f46e5);color:#fff;text-decoration:none;font-weight:bold;font-size:13px}</style></head>'
+      + '<body><div class="card"><div class="emoji">' + options.emoji + '</div><h1>' + options.title + '</h1><div>' + options.bodyHtml + '</div>'
+      + '<a class="btn" href="/">Return to Naxora AI</a></div>'
+      + (options.ok ? '<script>setTimeout(function(){try{window.close()}catch(e){}},2600);</script>' : '')
+      + '</body></html>',
+    );
+  };
+
+  // Step 1 — build the Google authorization URL for the signed-in tenant.
+  app.get('/api/youtube/oauth/auth-url', (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const sessionUser = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+        if (!sessionUser) {
+          return res.status(401).json({ success: false, message: 'Sign in to connect your YouTube channel.' });
+        }
+        const savedConfig = (ServerDatabase.getBotConfig(sessionUser.id)?.config
+          || ServerDatabase.getBotConfig(sessionUser.email)?.config
+          || null) as unknown as Record<string, unknown> | null;
+        const envClient = resolveEnvYouTubeClient();
+        const clientId = String(savedConfig?.youtubeClientId || '').trim() || envClient.clientId;
+        if (!clientId) {
+          return res.status(400).json({
+            success: false,
+            message: 'No OAuth Client ID configured. Paste your Google OAuth Client ID in Config Panel → YouTube Studio tab, or set YOUTUBE_CLIENT_ID on the server.',
+          });
+        }
+        const redirectUri = resolveYouTubeRedirectUri(req);
+        if (!redirectUri) {
+          return res.status(400).json({ success: false, message: 'Could not determine the public base URL for the OAuth redirect.' });
+        }
+        const state = signYouTubeOAuthState(sessionUser.id, YOUTUBE_OAUTH_STATE_SECRET);
+        return res.json({
+          success: true,
+          authUrl: buildYouTubeAuthUrl(clientId, redirectUri, state),
+          redirectUri,
+          alreadyConnected: Boolean(String(savedConfig?.youtubeRefreshToken || '').trim()),
+        });
+      } catch (error: any) {
+        console.warn('[YouTube OAuth] auth-url failed:', error?.message || error);
+        return res.status(500).json({ success: false, message: String(error?.message || 'Failed to build the authorization URL.') });
+      }
+    })();
+  });
+
+  // Step 2 — public callback: verify state, exchange code, persist refresh token (per-tenant).
+  app.get('/api/youtube/oauth/callback', (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const query = req.query as Record<string, unknown>;
+        const errorText = String(query.error || '').trim();
+        if (errorText) {
+          console.warn('[YouTube OAuth] Callback reported an error:', errorText);
+          return sendYouTubeOAuthPage(res, {
+            title: 'Authorization declined',
+            emoji: '🚫',
+            bodyHtml: `<p>Google reported: <b>${errorText.replace(/[<>&]/g, '')}</b></p><p>Retry the connection from the Config Panel.</p>`,
+            ok: false,
+          });
+        }
+        const code = String(query.code || '').trim();
+        const state = String(query.state || '').trim();
+        if (!code || !state) {
+          return sendYouTubeOAuthPage(res, { title: 'Invalid OAuth callback', emoji: '⚠️', bodyHtml: '<p>Missing authorization code or state parameter.</p>', ok: false });
+        }
+        const userId = verifyYouTubeOAuthState(state, YOUTUBE_OAUTH_STATE_SECRET);
+        if (!userId) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'Connect link expired',
+            emoji: '⌛',
+            bodyHtml: '<p>This connect link has expired or is invalid. Return to the Config Panel and start the connection again.</p>',
+            ok: false,
+          });
+        }
+        const account = ServerDatabase.getUserById(userId);
+        if (!account) {
+          return sendYouTubeOAuthPage(res, { title: 'Account not found', emoji: '⚠️', bodyHtml: '<p>The account that started this connection no longer exists.</p>', ok: false });
+        }
+        const existing = (ServerDatabase.getBotConfig(userId)?.config || {}) as Partial<BotConfig>;
+        const envClient = resolveEnvYouTubeClient();
+        const clientId = String(existing.youtubeClientId || '').trim() || envClient.clientId;
+        const clientSecret = String(existing.youtubeClientSecret || '').trim() || envClient.clientSecret;
+        const redirectUri = resolveYouTubeRedirectUri(req);
+        if (!clientId || !clientSecret || !redirectUri) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'OAuth client not configured',
+            emoji: '⚙️',
+            bodyHtml: '<p>The OAuth Client ID / Secret could not be resolved. Add them in the Config Panel or set YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET on the server.</p>',
+            ok: false,
+          });
+        }
+        const tokens = await exchangeYouTubeOAuthCode(code, clientId, clientSecret, redirectUri);
+        if (!tokens.refreshToken) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'No refresh token returned',
+            emoji: '🔄',
+            bodyHtml: '<p>Google did not return a refresh token. Revoke app access at myaccount.google.com/permissions, then reconnect.</p>',
+            ok: false,
+          });
+        }
+        ServerDatabase.saveBotConfig(userId, {
+          ...existing,
+          youtubeClientId: clientId,
+          youtubeClientSecret: clientSecret,
+          youtubeRefreshToken: tokens.refreshToken,
+        } as unknown as BotConfig);
+        GlobalApiKeyStore.syncFromDatabase();
+        console.log(`[YouTube OAuth] Refresh token permanently saved for user ${userId} (scope: ${tokens.scope || 'n/a'})`);
+        return sendYouTubeOAuthPage(res, {
+          title: 'YouTube connected',
+          emoji: '✅',
+          bodyHtml: '<p>Your YouTube channel is now linked to <b>Naxora AI</b>.</p><p>The OAuth 2.0 status now shows <b>✅ Connected</b> — you can close this window.</p>',
+          ok: true,
+        });
+      } catch (error: any) {
+        console.error('[YouTube OAuth] Callback failed:', error?.message || error);
+        const detail = String(error?.message || 'Unexpected error.').replace(/[<>&]/g, '');
+        const redirectHint = resolveYouTubeRedirectUri(req);
+        return sendYouTubeOAuthPage(res, {
+          title: 'Connection failed',
+          emoji: '❌',
+          bodyHtml: `<p>${detail}</p>`
+            + (/redirect_uri_mismatch/i.test(detail)
+              ? `<p>Add this exact Redirect URI in Google Cloud Console → Credentials → your OAuth Client → "Authorized redirect URIs":<br><code>${redirectHint}</code></p>`
+              : ''),
+          ok: false,
+        });
+      }
+    })();
+  });
 
   // Get User's Bot Configuration from Server DB
   app.get('/api/user/config', (req, res) => {

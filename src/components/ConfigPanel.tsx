@@ -93,6 +93,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
   const [channelStatuses, setChannelStatuses] = useState<Record<string, { status: string; error?: string }>>({});
   const [revealedFields, setRevealedFields] = useState<Record<string, boolean>>({});
   const [isRegisteringWebhook, setIsRegisteringWebhook] = useState(false);
+  const [isOAuthConnecting, setIsOAuthConnecting] = useState(false);
   const [draftKeys, setDraftKeys] = useState<Partial<Record<keyof BotConfig, string>>>(() => {
     const savedKeys = (() => {
       try {
@@ -247,6 +248,27 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
       onShowToast(`✅ Pasted key for ${serviceName}!`);
     } catch {
       onShowToast(`⚠️ Could not read clipboard. Please paste manually.`);
+    }
+  };
+
+  /** One-click YouTube OAuth: opens Google consent, callback saves the refresh token permanently. */
+  const startYouTubeOAuth = async (): Promise<void> => {
+    setIsOAuthConnecting(true);
+    try {
+      const session = AuthService.getCurrentSession();
+      const response = await fetch('/api/youtube/oauth/auth-url', {
+        headers: { Authorization: `Bearer ${session?.token || ''}` },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success || !data?.authUrl) {
+        throw new Error(data?.message || 'Could not start the YouTube OAuth flow.');
+      }
+      window.open(String(data.authUrl), '_blank', 'noopener,width=520,height=740');
+      onShowToast('🔗 Complete the Google sign-in — your refresh token is saved automatically.');
+    } catch (error: any) {
+      onShowToast(`YouTube OAuth: ${error?.message || 'failed to start'}`);
+    } finally {
+      setIsOAuthConnecting(false);
     }
   };
 
@@ -1553,6 +1575,21 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({
                   {revealedFields['youtubeRefreshToken'] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 </button>
                 <button type="button" onClick={() => handlePasteKey('youtubeRefreshToken', 'YouTube refresh token')} className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer">Paste</button>
+              </div>
+              <div className={`mt-2.5 p-2.5 rounded-xl border ${config.youtubeRefreshToken ? 'bg-emerald-950/40 border-emerald-500/30' : 'bg-gradient-to-r from-cyan-950/50 to-indigo-950/50 border-cyan-500/30'}`}>
+                <button
+                  type="button"
+                  onClick={() => void startYouTubeOAuth()}
+                  disabled={isOAuthConnecting}
+                  className={`w-full px-3 py-2 rounded-lg text-white text-xs font-bold cursor-pointer disabled:opacity-50 ${config.youtubeRefreshToken ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500'}`}
+                >
+                  {config.youtubeRefreshToken ? '🔗 Reconnect YouTube Channel with Google' : '🔗 Connect YouTube Channel with Google (1-Click)'}
+                </button>
+                <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                  {config.youtubeRefreshToken
+                    ? 'OAuth 2.0 is connected. Reconnect only if you revoked access or changed Google accounts.'
+                    : 'Opens the Google consent screen, grants youtube.upload + analytics scopes, and saves your Refresh Token automatically — no manual Playground steps.'}
+                </p>
               </div>
             </div>
           </div>

@@ -1,4 +1,6 @@
-﻿/**
+﻿import crypto from 'crypto';
+
+/**
  * YouTube Analytics & Status Service (Multi-Tenant)
  *
  * OAuth-backed fetchers built on:
@@ -834,5 +836,106 @@ export async function getViralVideoPredictions(
     }))
     .filter((p) => p.title || p.hook)
     .slice(0, 5);
+}
+
+// ==========================================
+// OAUTH 2.0 CONNECT FLOW (click-to-authorize)
+// ==========================================
+
+/** OAuth scopes requested on the consent screen (upload + read + analytics). */
+export const YOUTUBE_OAUTH_SCOPES = [
+  'https://www.googleapis.com/auth/youtube.upload',
+  'https://www.googleapis.com/auth/youtube.readonly',
+  'https://www.googleapis.com/auth/yt-analytics.readonly',
+  'https://www.googleapis.com/auth/userinfo.email',
+];
+
+/** Deployment-level OAuth client from env (used when the user has not pasted their own). */
+export function resolveEnvYouTubeClient(): { clientId: string; clientSecret: string } {
+  return {
+    clientId: String(process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || process.env.OWNER_YOUTUBE_CLIENT_ID || '').trim(),
+    clientSecret: String(process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || process.env.OWNER_YOUTUBE_CLIENT_SECRET || '').trim(),
+  };
+}
+
+/** Builds the Google authorization URL. `access_type=offline` + `prompt=consent` always yields a refresh token. */
+export function buildYouTubeAuthUrl(clientId: string, redirectUri: string, state: string): string {
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: YOUTUBE_OAUTH_SCOPES.join(' '),
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    state,
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+/** Signs `userId|expiresAt` with HMAC-SHA256 so the public callback can attribute the grant to the right tenant. */
+export function signYouTubeOAuthState(userId: string, secret: string, ttlMs = 10 * 60_000): string {
+  const expiresAt = Date.now() + Math.max(60_000, ttlMs);
+  const payload = `${userId}|${expiresAt}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  return `${Buffer.from(payload, 'utf8').toString('base64url')}.${sig}`;
+}
+
+/** Verifies the OAuth state (HMAC + expiry) and returns the tenant userId, or null when invalid. */
+export function verifyYouTubeOAuthState(state: string, secret: string): string | null {
+  if (!state || !state.includes('.')) return null;
+  const dot = state.lastIndexOf('.');
+  const encoded = state.slice(0, dot);
+  const sig = state.slice(dot + 1);
+  if (!encoded || !sig) return null;
+  let payload = '';
+  try {
+    payload = Buffer.from(encoded, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+  const sep = payload.indexOf('|');
+  if (sep <= 0) return null;
+  const userId = payload.slice(0, sep);
+  const expiresAt = Number(payload.slice(sep + 1));
+  if (!userId || !Number.isFinite(expiresAt) || Date.now() > expiresAt) return null;
+  return userId;
+}
+
+/** Exchanges the authorization code for tokens at Google's token endpoint. */
+export async function exchangeYouTubeOAuthCode(
+  code: string,
+  clientId: string,
+  clientSecret: string,
+  redirectUri: string,
+): Promise<{ refreshToken: string; accessToken: string; expiresInSeconds: number; scope: string }> {
+  const body = new URLSearchParams({
+    code,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri,
+    grant_type: 'authorization_code',
+  });
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) {
+    const detail = String(payload?.error_description || payload?.error || `HTTP ${response.status}`);
+    throw new YouTubeAnalyticsError(`Google token exchange failed: ${detail}`);
+  }
+  return {
+    refreshToken: String(payload.refresh_token || '').trim(),
+    accessToken: String(payload.access_token || '').trim(),
+    expiresInSeconds: Number(payload.expires_in) || 3600,
+    scope: String(payload.scope || '').trim(),
+  };
 }
 

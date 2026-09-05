@@ -1073,8 +1073,8 @@ def _yt_not_connected_text() -> str:
         "1️⃣ Open https://console.cloud.google.com → enable <b>YouTube Data API v3</b>\n"
         "2️⃣ OAuth consent screen → External → add your Google account as a Test user\n"
         "3️⃣ Credentials → <b>OAuth Client ID</b> → Web application → copy ID + Secret\n"
-        "4️⃣ Generate a <b>Refresh Token</b> (the Google OAuth 2.0 Playground works great)\n"
-        "5️⃣ Set OWNER_YOUTUBE_CLIENT_ID / OWNER_YOUTUBE_CLIENT_SECRET / OWNER_YOUTUBE_REFRESH_TOKEN, then restart\n\n"
+        "4️⃣ ⚡ FASTEST: Web App → Config Panel → YouTube Studio tab → <b>\"Connect YouTube Channel with Google\"</b> — one click, refresh token saved automatically\n"
+        "5️⃣ Or set OWNER_YOUTUBE_CLIENT_ID / OWNER_YOUTUBE_CLIENT_SECRET / OWNER_YOUTUBE_REFRESH_TOKEN, then restart\n\n"
         "Then send /yt_check again for your live channel report! ✨"
     )
 

@@ -287,8 +287,8 @@ export class TelegramBotService {
       '1️⃣ Open https://console.cloud.google.com → enable **YouTube Data API v3**',
       '2️⃣ OAuth consent screen → External → add your Google account as a Test user',
       '3️⃣ Credentials → **OAuth Client ID** → Web application → copy ID + Secret',
-      '4️⃣ Generate a **Refresh Token** (the Google OAuth 2.0 Playground works great)',
-      '5️⃣ Web App → Config Panel → YouTube Studio tab → paste → Save',
+      '4️⃣ ⚡ FASTEST: Web App → Config Panel → YouTube Studio tab → **"Connect YouTube Channel with Google"** — one click, refresh token saved automatically',
+      '5️⃣ Or paste Client ID / Secret / Refresh Token manually in that same tab and Save',
       '',
       'Then send /yt_check again for your live channel report! ✨',
     ].join('\n');
@@ -852,8 +852,8 @@ export class TelegramBotService {
           '3️⃣ OAuth consent screen → External → add your Google account as a Test user\n' +
           '4️⃣ Credentials → Create credentials → **OAuth Client ID** → Web application\n' +
           '5️⃣ Copy the Client ID and Client Secret\n' +
-          '6️⃣ Generate a Refresh Token with the youtube.upload scope (the Google OAuth 2.0 Playground works great)\n' +
-          '7️⃣ Paste Client ID, Secret and Refresh Token in the Web App → Config Panel → YouTube Studio tab\n\n' +
+          '6️⃣ ⚡ Connect in one click: Web App → Config Panel → YouTube Studio tab → "Connect YouTube Channel with Google" (auto-saves the refresh token)\n' +
+          '7️⃣ Or paste Client ID, Secret and Refresh Token in that same tab\n\n' +
           '**📺 VIDEO TUTORIALS**\n' +
           '• Get a Gemini API key: https://www.youtube.com/results?search_query=how+to+get+google+gemini+api+key+free\n' +
           '• Get a Groq API key: https://www.youtube.com/results?search_query=how+to+get+groq+api+key+free\n' +
