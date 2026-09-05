@@ -6,3 +6,15 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# local scratch/verification output
+tsc_*.txt
+verify_*.txt
+pyc_*.txt
+diff_*.txt
+*_exit.txt
+brace_check.py
+
+# python bytecode
+__pycache__/
+*.pyc
