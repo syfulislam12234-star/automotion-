@@ -23,6 +23,9 @@ import {
 import { AuthService } from '../services/authService';
 import { UserAccount, AuthSession } from '../types';
 
+/** localStorage key holding the email that still has an OTP flow in progress. */
+const PENDING_VERIFY_EMAIL_KEY = 'am_pending_verify_email_v1';
+
 interface AuthModalProps {
   isOpen: boolean;
   onClose?: () => void;
@@ -78,15 +81,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
-  // Reset states when opening
+  // Reset states when opening (keep the pending email across re-opens/step transitions
+  // so verify + resend never fire with an empty email — root cause of "Email is required.").
   useEffect(() => {
     if (isOpen) {
       setActiveTab(initialTab);
-      setVerifyEmail(initialEmail);
+      setVerifyEmail((prev) => {
+        let pending = initialEmail || prev;
+        if (!pending) {
+          try {
+            pending = localStorage.getItem(PENDING_VERIFY_EMAIL_KEY) || '';
+          } catch { /* storage unavailable */ }
+        }
+        return pending;
+      });
       setErrorMessage(null);
       setSuccessMessage(null);
     }
   }, [isOpen, initialTab, initialEmail]);
+
+  // Persist the in-flight verification email so a remount/reopen can restore it.
+  useEffect(() => {
+    if (verifyEmail) {
+      try {
+        localStorage.setItem(PENDING_VERIFY_EMAIL_KEY, verifyEmail);
+      } catch { /* storage unavailable */ }
+    }
+  }, [verifyEmail]);
+
+  /**
+   * Resolves the email to use for OTP verify/resend requests.
+   * Falls back through: verify step state → login/signup forms → active session user.
+   */
+  const resolveAuthEmail = (): string => {
+    const email = verifyEmail || loginEmail || signupEmail
+      || AuthService.getCurrentSession()?.user?.email
+      || '';
+    return String(email).trim();
+  };
 
   // Resend cooldown timer
   useEffect(() => {
@@ -316,12 +348,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setErrorMessage('Please enter all 6 digits of your verification code.');
       return;
     }
+    const authEmail = resolveAuthEmail();
+    if (!authEmail) {
+      setErrorMessage('Your email was lost between steps. Please go back and log in again so we can re-send the code.');
+      return;
+    }
+    setVerifyEmail(authEmail);
 
     setIsLoading(true);
     try {
       const res = isAdminSignupPending
-        ? await AuthService.verifyAdminSignUp(verifyEmail, fullCode)
-        : await AuthService.verifyEmailCode(verifyEmail, fullCode);
+        ? await AuthService.verifyAdminSignUp(authEmail, fullCode)
+        : await AuthService.verifyEmailCode(authEmail, fullCode);
 
       if (!res.success || !res.session) {
         setErrorMessage(res.message || 'Verification failed. Please check the code.');
@@ -349,12 +387,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setErrorMessage('Please start a new administrator registration to request another code.');
         return;
       }
-      const res = await AuthService.resendVerificationCode(verifyEmail);
+      const authEmail = resolveAuthEmail();
+      if (!authEmail) {
+        setErrorMessage('We could not determine your email. Please log in again to request a new code.');
+        return;
+      }
+      setVerifyEmail(authEmail);
+      const res = await AuthService.resendVerificationCode(authEmail);
       if (res.success && res.code) {
         setLastGeneratedOtp(null);
         setResendCooldown(60);
         setSuccessMessage(res.message);
-        onShowToast(`📬 New verification code sent to ${verifyEmail}`);
+        onShowToast(`📬 New verification code sent to ${authEmail}`);
       } else {
         setErrorMessage(res.message);
       }

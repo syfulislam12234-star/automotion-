@@ -2321,7 +2321,11 @@ async function startServer() {
   // Verify OTP
   app.post('/api/auth/verify-otp', authRateLimiter, async (req, res) => {
     try {
-      const { email, code } = req.body;
+      const bodyEmail = String(req.body?.email || '').trim();
+      const code = String(req.body?.code || '').trim();
+      // State-loss tolerance: fall back to the email bound to the presented session token.
+      const sessionUser = ServerDatabase.getSessionUser(req.headers.authorization);
+      const email = bodyEmail || sessionUser?.email || '';
       if (!email || !code) {
         return res.status(400).json({ success: false, message: 'Email and 6-digit OTP code are required.' });
       }
@@ -2435,7 +2439,9 @@ async function startServer() {
   // Resend OTP
   app.post('/api/auth/resend-otp', authRateLimiter, async (req, res) => {
     try {
-      const { email } = req.body;
+      // State-loss tolerance: fall back to the email bound to the presented session token.
+      const sessionUser = ServerDatabase.getSessionUser(req.headers.authorization);
+      const email = String(req.body?.email || '').trim() || sessionUser?.email || '';
       if (!email) {
         return res.status(400).json({ success: false, message: 'Email is required.' });
       }
