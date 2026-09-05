@@ -424,7 +424,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
 
           <div className="flex items-center gap-3">
-            <img src="/logo.svg" alt="Naxora AI logo" className="w-12 h-12 shrink-0 object-contain drop-shadow-lg" />
+            <img src="/logo.png" alt="Naxora AI logo" className="w-12 h-12 shrink-0 object-contain drop-shadow-lg" />
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-lg font-extrabold text-white tracking-tight">

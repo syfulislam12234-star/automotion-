@@ -666,7 +666,7 @@ function AppContent() {
         <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg relative overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <img src="/logo.svg" alt="Naxora AI logo" className="w-10 h-10 shrink-0 object-contain drop-shadow-lg" />
+              <img src="/logo.png" alt="Naxora AI logo" className="w-10 h-10 shrink-0 object-contain drop-shadow-lg" />
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-bold text-slate-100">Naxora AI Automation Engine</h2>

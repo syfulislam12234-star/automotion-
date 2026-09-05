@@ -123,10 +123,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           {/* Logo & Brand - Only displayed when sidebar is expanded */}
           {isCollapsed ? (
-            <img src="/logo.svg" alt="Naxora AI logo" className="w-9 h-9 shrink-0 object-contain drop-shadow-lg" />
+            <img src="/logo.png" alt="Naxora AI logo" className="w-9 h-9 shrink-0 object-contain drop-shadow-lg" />
           ) : (
             <div className="flex items-center gap-3 overflow-hidden animate-fadeIn">
-              <img src="/logo.svg" alt="Naxora AI logo" className="w-9 h-9 shrink-0 object-contain drop-shadow-lg" />
+              <img src="/logo.png" alt="Naxora AI logo" className="w-9 h-9 shrink-0 object-contain drop-shadow-lg" />
 
               <div>
                 <h1 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">

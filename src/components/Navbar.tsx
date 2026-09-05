@@ -77,7 +77,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Menu className="h-5 w-5" />
             </button>
           )}
-          <img src="/logo.svg" alt="Naxora AI logo" className="h-10 w-10 shrink-0 object-contain drop-shadow-lg" />
+          <img src="/logo.png" alt="Naxora AI logo" className="h-10 w-10 shrink-0 object-contain drop-shadow-lg" />
           <div>
             <h1 className="font-bold text-slate-100 text-base sm:text-lg tracking-tight whitespace-nowrap">
               Naxora AI
