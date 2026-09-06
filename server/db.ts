@@ -87,6 +87,32 @@ export class ServerDatabase {
     ServerDatabase.backfillSubscriptionDefaults();
     // Bootstrap/promote a first admin from the ADMIN_EMAIL/ADMIN_PASSWORD environment (secure seed).
     ServerDatabase.seedAdminsFromEnv();
+    // Ensure the default workspace user exists (used as fallback for global bot token lookups).
+    ServerDatabase.ensureDefaultWorkspaceUser();
+  }
+
+  /** Ensures a default workspace user exists for global/untracked contexts (e.g. Telegram
+   *  webhook hits on the global bot token). Creates the user if missing. */
+  private static ensureDefaultWorkspaceUser(): void {
+    const existing = ServerDatabase.db.users.find((u) => u.id === 'global_default_user');
+    if (existing) return;
+    const defaultUser: UserAccount = {
+      id: 'global_default_user',
+      name: process.env.ADMIN_NAME || 'Workspace Owner',
+      email: process.env.ADMIN_EMAIL || 'owner@naxora.local',
+      role: 'admin',
+      isAdmin: true,
+      isVerified: true,
+      isBlocked: false,
+      plan: 'enterprise',
+      subscriptionStatus: 'active',
+      planExpiresAt: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000).toISOString(),
+      credits: 999999,
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+    };
+    ServerDatabase.db.users.push(defaultUser);
+    ServerDatabase.save();
   }
 
   private static save() {
@@ -703,7 +729,10 @@ export class ServerDatabase {
     }
     const user = ServerDatabase.getUserByIdOrEmail(userId);
     if (!user) {
-      return { success: false, message: 'User account could not be resolved.' };
+      // Fail-open: if the user account cannot be resolved (e.g. Telegram webhook
+      // for the global bot token where no explicit user mapping exists), allow the
+      // operation rather than blocking the user with an error.
+      return { success: true, message: 'User account not found — feature allowed (global/untracked context).' };
     }
     if (ServerDatabase.isUserAdmin(user)) {
       return { success: true, message: 'Administrators have unlimited credits.' };

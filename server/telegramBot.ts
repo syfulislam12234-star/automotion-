@@ -417,7 +417,9 @@ export class TelegramBotService {
   }
 
   /** /yt_check (alias /analytics) — live channel stats, impressions, CTR and security audit. */
-  /** Phase 4: resolve the owning user id for a bot token (in-memory registry first, then database). */
+  /** Phase 4: resolve the owning user id for a bot token (in-memory registry first, then database).
+   *  Falls back to DEFAULT_WORKSPACE_ID when the token is the global env-configured bot
+   *  (not saved to any specific user) so single-user setups never fail with "account not resolved". */
   private static resolveOwnerIdByToken(token: string): string | null {
     const cleanToken = String(token || '').trim();
     if (!cleanToken) return null;
@@ -426,10 +428,17 @@ export class TelegramBotService {
     }
     try {
       const match = ServerDatabase.getAllBotConfigs().find((entry) => String(entry.config?.telegramBotToken || '').trim() === cleanToken);
-      return match?.targetId || null;
+      if (match?.targetId) return match.targetId;
     } catch {
-      return null;
+      // fall through to default
     }
+    // Fallback: if the token matches the globally-configured env bot token,
+    // attribute it to the default workspace user so YouTube/credit lookups succeed.
+    const envToken = String(process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_ADMIN_BOT_TOKEN || '').trim();
+    if (envToken && envToken === cleanToken) {
+      return 'global_default_user';
+    }
+    return null;
   }
 
   /**
