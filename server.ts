@@ -2932,6 +2932,9 @@ async function startServer() {
           youtubeClientSecret: clientSecret,
           youtubeRefreshToken: tokens.refreshToken,
         } as unknown as BotConfig);
+        // Also persist to the global shared store so Telegram bots (Python + TS)
+        // and the web app all report "OAuth 2.0: Connected" without per-user lookup.
+        ServerDatabase.saveGlobalYouTubeCredentials(tokens.refreshToken, clientId, clientSecret);
         GlobalApiKeyStore.syncFromDatabase();
         console.log(`[YouTube OAuth] Refresh token permanently saved for user ${userId} (scope: ${tokens.scope || 'n/a'})`);
         return sendYouTubeOAuthPage(res, {

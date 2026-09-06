@@ -19,6 +19,9 @@ interface StoredDb {
   systemAlerts: SystemAlert[];
   auditLogs: AuditLog[];
   supportTickets: SupportTicket[];
+  /** Global YouTube OAuth credentials — shared fallback so Telegram bots (Python + TS)
+   *  and the web app all report the same "Connected" status after any user runs OAuth. */
+  youtubeCredentials: Record<string, { refreshToken: string; clientId: string; clientSecret: string; updatedAt: string }>;
 }
 
 /** Zero-break defaults: everything enabled exactly like the pre-Phase-4 behaviour. */
@@ -65,6 +68,7 @@ export class ServerDatabase {
     systemAlerts: [],
     auditLogs: [],
     supportTickets: [],
+    youtubeCredentials: {},
   };
 
   public static init() {
@@ -1367,6 +1371,28 @@ export class ServerDatabase {
     };
     ServerDatabase.save();
     return true;
+  }
+
+  /** Persist YouTube OAuth credentials to the global shared store under a stable key
+   *  (`default`) so every bot instance + the web app resolve the same refresh token. */
+  static saveGlobalYouTubeCredentials(refreshToken: string, clientId: string, clientSecret: string): void {
+    const clean = (v: string) => String(v || '').trim();
+    const rt = clean(refreshToken);
+    if (!rt) return;
+    ServerDatabase.db.youtubeCredentials = ServerDatabase.db.youtubeCredentials || {};
+    ServerDatabase.db.youtubeCredentials['default'] = {
+      refreshToken: rt,
+      clientId: clean(clientId),
+      clientSecret: clean(clientSecret),
+      updatedAt: new Date().toISOString(),
+    };
+    ServerDatabase.save();
+  }
+
+  /** Returns the globally-shared YouTube refresh token, or empty string if none saved. */
+  static getGlobalYouTubeRefreshToken(): string {
+    const entry = ServerDatabase.db?.youtubeCredentials?.['default'];
+    return entry?.refreshToken ? String(entry.refreshToken).trim() : '';
   }
 
   public static removeSession(authHeader: string): void {

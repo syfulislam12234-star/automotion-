@@ -130,6 +130,35 @@ LEGACY_AI_PROVIDER_ORDER: List[Dict[str, Any]] = [
 ]
 
 
+_YT_CRED_CACHE: Dict[str, Any] = {"token": "", "readAt": 0.0}
+_YT_CRED_TTL_SECONDS = 60.0
+
+
+def _load_youtube_refresh_token_from_store() -> str:
+    """Read the global YouTube refresh token from data_store.json (shared with the Node server).
+    Falls back to OWNER_SETTINGS env-var if the store has nothing yet."""
+    now = time.time()
+    cached = _YT_CRED_CACHE.get("token")
+    if cached is not None and now - float(_YT_CRED_CACHE.get("readAt", 0.0)) < _YT_CRED_TTL_SECONDS:
+        return cached  # type: ignore[return-value]
+    token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "").strip()
+    try:
+        store_path = os.path.join(os.getcwd(), "data_store.json")
+        if os.path.exists(store_path):
+            with open(store_path, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            yt = raw.get("youtubeCredentials") if isinstance(raw, dict) else None
+            default_entry = yt.get("default") if isinstance(yt, dict) else None
+            stored_token = str(default_entry.get("refreshToken") or "").strip() if isinstance(default_entry, dict) else ""
+            if stored_token:
+                token = stored_token
+    except Exception as exc:
+        logger.warning(f"YouTube credential store read failed (using env fallback): {exc}")
+    _YT_CRED_CACHE["token"] = token
+    _YT_CRED_CACHE["readAt"] = now
+    return token
+
+
 def load_system_config() -> Dict[str, Any]:
     """Read the shared admin system config (ads + AI providers) with a 60s cache."""
     now = time.time()
@@ -520,8 +549,12 @@ async def safe_reply(
 
 
 def _youtube_connected() -> bool:
-    """Whether the owner's YouTube OAuth credentials are configured."""
-    return bool(OWNER_SETTINGS.get("youtubeClientId") and OWNER_SETTINGS.get("youtubeClientSecret") and OWNER_SETTINGS.get("youtubeRefreshToken"))
+    """Whether the owner's YouTube OAuth credentials are configured.
+    Checks: env OWNER_YOUTUBE_* → global data_store.json youtubeCredentials.default → per-user botConfigs."""
+    if OWNER_SETTINGS.get("youtubeClientId") and OWNER_SETTINGS.get("youtubeClientSecret") and OWNER_SETTINGS.get("youtubeRefreshToken"):
+        return True
+    # Fall back to the shared store that the Node server populates via OAuth callback
+    return bool(_load_youtube_refresh_token_from_store())
 
 
 def youtube_status_text() -> str:
@@ -632,6 +665,8 @@ async def _youtube_access_token() -> str:
     client_id = str(OWNER_SETTINGS.get("youtubeClientId") or "")
     client_secret = str(OWNER_SETTINGS.get("youtubeClientSecret") or "")
     refresh_token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "")
+    if not refresh_token:
+        refresh_token = _load_youtube_refresh_token_from_store()
     if not refresh_token:
         raise RuntimeError("YouTube is not connected. Add OAuth credentials in the Config Panel.")
     if not client_id or not client_secret:
@@ -1158,7 +1193,7 @@ async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not update.effective_message or not update.effective_chat:
         return
-    if not OWNER_SETTINGS.get("youtubeRefreshToken"):
+    if not _youtube_connected():
         await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
         return
     try:
@@ -1188,7 +1223,7 @@ async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if not update.effective_message or not update.effective_chat:
         return
-    if not OWNER_SETTINGS.get("youtubeRefreshToken"):
+    if not _youtube_connected():
         await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
         return
     chat_id = update.effective_chat.id
@@ -1406,7 +1441,7 @@ async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not update.effective_message or not update.effective_chat:
         return
-    if not OWNER_SETTINGS.get("youtubeRefreshToken"):
+    if not _youtube_connected():
         await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
         return
     chat_id = update.effective_chat.id

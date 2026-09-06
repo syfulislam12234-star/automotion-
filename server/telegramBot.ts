@@ -207,7 +207,11 @@ export class TelegramBotService {
 
   /** Builds the user's connected YouTube OAuth token status report from their saved config. */
   private static getYoutubeStatusReport(config: BotConfig | null): string {
-    const hasOAuth = Boolean(config?.youtubeClientId && config?.youtubeClientSecret && config?.youtubeRefreshToken);
+    const hasUserOAuth = Boolean(config?.youtubeClientId && config?.youtubeClientSecret && config?.youtubeRefreshToken);
+    // Also accept the globally-shared refresh token (populated by the OAuth callback)
+    // so status shows "Connected" even when the per-user config hasn't been hydrated yet.
+    const hasGlobalOAuth = !hasUserOAuth && Boolean(ServerDatabase.getGlobalYouTubeRefreshToken());
+    const hasOAuth = hasUserOAuth || hasGlobalOAuth;
     const lines = [
       '**📺 YouTube Connection Status**',
       '',
