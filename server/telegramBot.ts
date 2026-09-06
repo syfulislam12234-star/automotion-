@@ -174,6 +174,76 @@ export class TelegramBotService {
     };
   }
 
+  /** Persistent custom reply keyboard pinned at the bottom of the chat for quick access.
+   *  One tap triggers the action — no need to remember commands. */
+  private static buildPersistentReplyKeyboard(): Record<string, any> {
+    return {
+      keyboard: [
+        [{ text: '📊 Channel Status' }, { text: '🔗 YouTube OAuth' }],
+        [{ text: '🚀 AI SEO / Tools' }, { text: '⚙️ Settings' }],
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      input_field_placeholder: 'Tap a button below or type a command…',
+    };
+  }
+
+  /** Sends the persistent reply keyboard as a standalone message so it stays pinned
+   *  at the bottom of the chat for easy access. */
+  private static async sendPersistentKeyboard(token: string, chatId: string | number): Promise<void> {
+    await TelegramBotService.sendMessage(
+      token,
+      chatId,
+      '📌 **Quick actions** — tap any button below anytime:',
+      TelegramBotService.buildPersistentReplyKeyboard(),
+    );
+  }
+
+  /** Maps a persistent reply-keyboard button label to its action key (or null if not a keyboard button). */
+  private static resolvePersistentKeyboardAction(text: string): string | null {
+    const t = text.toLowerCase().trim();
+    if (t === '📊 channel status' || t === 'channel status') return 'status';
+    if (t === '🔗 youtube oauth' || t === 'youtube oauth' || t === 'youtube connect') return 'youtube';
+    if (t === '🚀 ai seo / tools' || t === 'ai seo' || t === 'seo') return 'seo';
+    if (t === '⚙️ settings' || t === 'settings') return 'settings';
+    return null;
+  }
+
+  /** Handles a persistent reply-keyboard button tap by routing to the matching action. */
+  private static async handlePersistentKeyboardAction(
+    token: string,
+    chatId: string | number,
+    action: string,
+    effectiveConfig: BotConfig | null,
+  ): Promise<void> {
+    switch (action) {
+      case 'status':
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          TelegramBotService.getYoutubeStatusReport(effectiveConfig),
+          TelegramBotService.buildPersistentReplyKeyboard(),
+        );
+        break;
+      case 'youtube':
+        await TelegramBotService.sendMessage(token, chatId, TelegramBotService.getYoutubeStatusReport(effectiveConfig), TelegramBotService.buildPersistentReplyKeyboard());
+        break;
+      case 'seo':
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '🔥 **AI SEO** — high-CTR titles, descriptions, hashtags & ranking tags, generated automatically.\n\nEvery upload gets viral AI SEO. Start with /upload or send /yt_seo for a full channel audit.',
+          TelegramBotService.buildPersistentReplyKeyboard(),
+        );
+        break;
+      case 'settings':
+        await TelegramBotService.sendMessage(token, chatId, '⚙️ **Settings**\n\nTap the toggle to change it:', TelegramBotService.buildSettingsKeyboard(effectiveConfig));
+        break;
+      default:
+        break;
+    }
+  }
+
   /** Settings menu keyboard (Auto-Upload ON/OFF toggle + back to main menu). */
   private static buildSettingsKeyboard(config: BotConfig | null): Record<string, any> {
     const autoUpload = config?.enableYtAutoUploadQueue !== false;
@@ -203,6 +273,7 @@ export class TelegramBotService {
   /** Sends the welcome message together with the interactive inline main menu. */
   private static async sendMainMenu(token: string, chatId: string | number): Promise<void> {
     await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildWelcomeText(), TelegramBotService.buildMainMenuKeyboard());
+    await TelegramBotService.sendPersistentKeyboard(token, chatId);
   }
 
   /** Builds the user's connected YouTube OAuth token status report from their saved config. */
@@ -962,6 +1033,14 @@ export class TelegramBotService {
         }
         return { ok: true };
       }
+      // Persistent reply-keyboard button taps — route to the matching action
+      // without treating the tap as an AI chat message.
+      const keyboardAction = TelegramBotService.resolvePersistentKeyboardAction(text);
+      if (keyboardAction) {
+        await TelegramBotService.handlePersistentKeyboardAction(token, chatId, keyboardAction, effectiveConfig);
+        return { ok: true };
+      }
+
       void TelegramBotService.sendChatAction(token, chatId).catch((error: any) => {
         console.warn('[TelegramBotService] Typing action dispatch failed:', error?.message || error);
       });

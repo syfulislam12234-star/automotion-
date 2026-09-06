@@ -238,7 +238,7 @@ def is_feature_enabled(feature: str) -> bool:
 
 # Lazy-loaded python-telegram-bot modules
 try:
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Update
     from telegram.constants import ParseMode, ChatAction
     from telegram.ext import (
         Application,
@@ -1090,7 +1090,68 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• ⏰ <b>Reminders:</b> <code>/remind &lt;minutes&gt; &lt;task&gt;</code>\n\n"
         f"💬 <i>Send any message to chat with the AI, or type <code>/help</code> for the full command list!</i>"
     )
+    # Show both the inline menu (buttons inside the message) and the persistent
+    # reply keyboard (pinned at the bottom of the chat) for maximum accessibility.
     await safe_reply(update, welcome_msg, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
+    await safe_reply(
+        update,
+        "📌 <b>Quick actions</b> — tap any button below anytime:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=persistent_reply_keyboard(),
+    )
+
+
+# ==========================================
+# PERSISTENT REPLY KEYBOARD (bottom menu)
+# ==========================================
+
+def persistent_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Custom reply keyboard pinned at the bottom of the chat for quick access.
+    One tap triggers the action — no need to remember commands."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📊 Channel Status"), KeyboardButton("🔗 YouTube OAuth")],
+            [KeyboardButton("🚀 AI SEO / Tools"), KeyboardButton("⚙️ Settings")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Tap a button below or type a command…",
+    )
+
+
+# Map button labels to their handler functions for the text-message router.
+PERSISTENT_KEYBOARD_ACTIONS = {
+    "📊 channel status": "status",
+    "🔗 youtube oauth": "youtube",
+    "🚀 ai seo / tools": "seo",
+    "⚙️ settings": "settings",
+}
+
+
+async def handle_persistent_keyboard_tap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route a persistent reply-keyboard button tap to the matching command handler."""
+    text = (update.effective_message.text or "").strip().lower()
+    action = PERSISTENT_KEYBOARD_ACTIONS.get(text)
+    if action == "status":
+        # Show YouTube connection status (same as /youtube command)
+        await safe_reply(update, youtube_status_text(), parse_mode=ParseMode.HTML, reply_markup=persistent_reply_keyboard())
+    elif action == "youtube":
+        await youtube_command(update, context)
+    elif action == "seo":
+        # Show AI SEO info
+        await safe_reply(
+            update,
+            "🔥 <b>AI SEO</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nEvery upload automatically gets a high-CTR viral title, engagement-focused description, hashtags and ranking tags — powered by the multi-model AI cascade. Start with /upload or send /yt_seo for a full channel audit.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+    elif action == "settings":
+        await safe_reply(
+            update,
+            "⚙️ <b>Settings</b>\n\nTap the toggle to change it:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=settings_keyboard(),
+        )
 
 
 async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1976,6 +2037,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user_text = (update.effective_message.text or update.effective_message.caption or "").strip()
     if not user_text:
+        return
+
+    # Check if the user tapped a persistent reply keyboard button — if so, route
+    # it to the matching handler instead of treating it as an AI chat message.
+    if PERSISTENT_KEYBOARD_ACTIONS.get(user_text.lower()):
+        await handle_persistent_keyboard_tap(update, context)
         return
 
     chat_id = update.effective_chat.id
