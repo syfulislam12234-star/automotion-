@@ -134,14 +134,21 @@ _YT_CRED_CACHE: Dict[str, Any] = {"token": "", "readAt": 0.0}
 _YT_CRED_TTL_SECONDS = 60.0
 
 
-def _load_youtube_refresh_token_from_store() -> str:
+def _load_youtube_refresh_token_from_store(force: bool = False) -> str:
     """Read the global YouTube refresh token from data_store.json (shared with the Node server).
-    Falls back to OWNER_SETTINGS env-var if the store has nothing yet."""
+
+    - Reads the STORE first (freshest source — the web app's OAuth callback writes here),
+      then falls back to OWNER_SETTINGS env-var only when the store has nothing.
+    - `force=True` bypasses the 60s cache so `/yt_check` and "📊 Channel Status" always
+      see a freshly-saved token immediately after the user connects in the web app.
+    - When the resolved token differs from the cached one, the access-token cache is
+      invalidated so the next API call re-mints an access token from the NEW identity.
+    """
     now = time.time()
     cached = _YT_CRED_CACHE.get("token")
-    if cached is not None and now - float(_YT_CRED_CACHE.get("readAt", 0.0)) < _YT_CRED_TTL_SECONDS:
+    if not force and cached is not None and now - float(_YT_CRED_CACHE.get("readAt", 0.0)) < _YT_CRED_TTL_SECONDS:
         return cached  # type: ignore[return-value]
-    token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "").strip()
+    token = ""
     try:
         store_path = os.path.join(os.getcwd(), "data_store.json")
         if os.path.exists(store_path):
@@ -154,6 +161,17 @@ def _load_youtube_refresh_token_from_store() -> str:
                 token = stored_token
     except Exception as exc:
         logger.warning(f"YouTube credential store read failed (using env fallback): {exc}")
+    if not token:
+        token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "").strip()
+    # A changed refresh token means a new OAuth identity was authorized — drop any
+    # cached access token minted from the old identity so the next API call refreshes.
+    if cached is not None and token and token != cached:
+        try:
+            _YT_ACCESS_TOKEN_CACHE["token"] = ""
+            _YT_ACCESS_TOKEN_CACHE["expiresAt"] = 0.0
+            logger.info("🔑 YouTube refresh token changed — access-token cache invalidated.")
+        except Exception:
+            pass
     _YT_CRED_CACHE["token"] = token
     _YT_CRED_CACHE["readAt"] = now
     return token
@@ -656,7 +674,12 @@ _YT_ACCESS_TOKEN_CACHE: Dict[str, object] = {"token": "", "expiresAt": 0.0}
 
 
 async def _youtube_access_token() -> str:
-    """Exchange the owner's refresh token for an access token (cached until near-expiry)."""
+    """Exchange the owner's refresh token for an access token (cached until near-expiry).
+
+    Always sources the refresh token with `force=True` so a token freshly saved in
+    data_store.json by the web app's OAuth callback is picked up immediately —
+    no stale 60s caches. Access tokens are still reused until 5 minutes before expiry.
+    """
     import time
     cached_token = str(_YT_ACCESS_TOKEN_CACHE.get("token") or "")
     expires_at = float(_YT_ACCESS_TOKEN_CACHE.get("expiresAt") or 0.0)
@@ -664,9 +687,8 @@ async def _youtube_access_token() -> str:
         return cached_token
     client_id = str(OWNER_SETTINGS.get("youtubeClientId") or "")
     client_secret = str(OWNER_SETTINGS.get("youtubeClientSecret") or "")
-    refresh_token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "")
-    if not refresh_token:
-        refresh_token = _load_youtube_refresh_token_from_store()
+    # Priority: shared data_store.json (freshest) -> OWNER_SETTINGS env fallback.
+    refresh_token = _load_youtube_refresh_token_from_store(force=True)
     if not refresh_token:
         raise RuntimeError("YouTube is not connected. Add OAuth credentials in the Config Panel.")
     if not client_id or not client_secret:
@@ -685,6 +707,8 @@ async def _youtube_access_token() -> str:
             data = await resp.json()
             if resp.status != 200 or not data.get("access_token"):
                 detail = data.get("error_description") or data.get("error") or f"HTTP {resp.status}"
+                # Log the raw Google response for debugging.
+                logger.error("[YouTube OAuth] token refresh failed (HTTP %s): %s", resp.status, data)
                 raise RuntimeError(f"YouTube OAuth token refresh failed: {detail}")
     _YT_ACCESS_TOKEN_CACHE["token"] = data["access_token"]
     _YT_ACCESS_TOKEN_CACHE["expiresAt"] = time.time() + max(60, int(data.get("expires_in", 3600)))
@@ -692,14 +716,18 @@ async def _youtube_access_token() -> str:
 
 
 async def _yt_get_json(url: str, token: str) -> object:
-    """Authorized GET returning parsed JSON (raises with the API error detail)."""
+    """Authorized GET returning parsed JSON (raises with the API error reason)."""
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=25)) as resp:
             data = await resp.json()
             if resp.status != 200:
-                detail = str(data.get("error", {}).get("message") if isinstance(data, dict) else "") or f"HTTP {resp.status}"
-                raise RuntimeError(f"YouTube API error: {detail}")
+                error_obj = data.get("error", {}) if isinstance(data, dict) else {}
+                reason = str(error_obj.get("errors", [{}])[0].get("reason") if isinstance(error_obj, dict) and error_obj.get("errors") else "").strip()
+                message = str(error_obj.get("message") or "") or f"HTTP {resp.status}"
+                # Log the raw Google API error response for debugging.
+                logger.error("[YouTube API] GET failed (HTTP %s) reason=%s: %s", resp.status, reason, message)
+                raise RuntimeError(f"YouTube API error [reason={reason or 'unknown'}]: {message}")
             return data
 
 
@@ -1199,6 +1227,32 @@ def _yt_not_connected_text() -> str:
     )
 
 
+def _yt_friendly_error(err: Exception) -> str:
+    """Map a raw YouTube/Google error to an actionable, human-friendly message.
+
+    Differentiates the most common Google API failure modes instead of blanket
+    labeling everything as 'token expired':
+      - invalid_grant            → OAuth re-authentication required
+      - invalid_client           → wrong OAuth client credentials
+      - accessNotConfigured      → YouTube Data/ Analytics API not enabled in GCP
+      - insufficientPermissions  → OAuth scope missing from the consent grant
+      - quotaExceeded            → API quota exhausted
+    """
+    raw = str(err)
+    low = raw.lower()
+    if "invalid_grant" in low:
+        return "🔐 <b>OAuth Re-Authentication Required.</b>\nYour Google refresh token was revoked or expired.\n\n👉 Reconnect: Web App → Config Panel → YouTube Studio → <b>\"Connect YouTube Channel with Google\"</b> (one click, new token saved automatically)."
+    if "invalid_client" in low:
+        return "🔧 <b>Invalid OAuth Client Credentials.</b>\nThe Client ID / Secret are wrong or revoked.\n\n👉 Fix them in Web App → Config Panel → YouTube Studio and try again."
+    if "accessnotconfigured" in low or "access not configured" in low or "youtube data api has not been used" in low:
+        return "⚙️ <b>YouTube API Not Enabled</b> (403 Access Not Configured).\n\n👉 Open Google Cloud Console → enable <b>YouTube Data API v3</b> and <b>YouTube Analytics API</b> for your project, then wait ~1 minute and retry."
+    if "insufficientpermissions" in low or "insufficient permission" in low:
+        return "🚫 <b>Insufficient Permissions.</b>\nThe granted OAuth scope is missing.\n\n👉 Reconnect YouTube and make sure you grant <b>youtube.upload</b> + <b>youtube.readonly</b>/analytics scopes on the consent screen."
+    if "quotaexceeded" in low or "quota exceeded" in low:
+        return "📊 <b>YouTube API Quota Exceeded.</b>\nDaily quota is used up — try again later today."
+    return f"⚠️ <b>YouTube request failed.</b>\n<code>{html.escape(raw[:300])}</code>\n\nCheck your OAuth credentials and try again."
+
+
 def _format_yt_check_report(stats: dict, analytics: dict) -> str:
     """Emoji analytics + security-audit report for /yt_check (HTML parse mode)."""
     audit = stats.get("audit", {}) or {}
@@ -1269,7 +1323,7 @@ async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logger.warning("⚠️ /yt_check failed: %s", err)
         await safe_reply(
             update,
-            f"⚠️ <b>Could not load YouTube analytics.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n<code>{html.escape(str(err))}</code>\n\nCheck your OAuth credentials and try /yt_check again.",
+            "⚠️ <b>Could not load YouTube analytics.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n" + _yt_friendly_error(err),
             parse_mode=ParseMode.HTML,
         )
 
@@ -1298,7 +1352,7 @@ async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.warning("⚠️ /yt_seo context fetch failed: %s", err)
         await safe_reply(
             update,
-            f"⚠️ <b>Could not load channel data for AI SEO.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n<code>{html.escape(str(err))}</code>\n\nCheck your OAuth credentials and try /yt_seo again.",
+            "⚠️ <b>Could not load channel data for AI SEO.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n" + _yt_friendly_error(err),
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1532,7 +1586,7 @@ async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logger.warning("⚠️ /yt_viral failed: %s", err)
         await safe_reply(
             update,
-            f"⚠️ <b>Could not generate viral predictions.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n<code>{html.escape(str(err))}</code>\n\nCheck your OAuth credentials and try /yt_viral again.",
+            "⚠️ <b>Could not generate viral predictions.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n" + _yt_friendly_error(err),
             parse_mode=ParseMode.HTML,
         )
 

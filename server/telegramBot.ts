@@ -319,6 +319,28 @@ export class TelegramBotService {
     return extracted.refreshToken;
   }
 
+  /** Maps a YouTubeAnalyticsError to a code-specific, actionable user message. */
+  private static formatYtError(error: any): string {
+    const rawMessage = String(error?.message || error || 'Unknown YouTube error.');
+    const code = error instanceof YouTubeAnalyticsError ? error.code : '';
+    switch (code) {
+      case 'invalid_grant':
+        return '🔐 **OAuth Re-Authentication Required.**\nYour Google refresh token was revoked or expired.\n\n👉 Reconnect: Web App → Config Panel → YouTube Studio → "Connect YouTube Channel with Google" — a new token is saved automatically.';
+      case 'invalid_client':
+        return '🔧 **Invalid OAuth Client Credentials.**\nThe Client ID / Secret are wrong or revoked.\n\n👉 Fix them in Web App → Config Panel → YouTube Studio and try again.';
+      case 'access_not_configured':
+        return '⚙️ **YouTube API Not Enabled** (403 Access Not Configured).\n\n👉 Open Google Cloud Console → enable **YouTube Data API v3** and **YouTube Analytics API** for your project, then retry.';
+      case 'insufficient_permissions':
+        return '🚫 **Insufficient Permissions.**\nThe granted OAuth scope is missing.\n\n👉 Reconnect YouTube and grant **youtube.upload** + analytics scopes on the consent screen.';
+      case 'quota_exceeded':
+        return '📊 **YouTube API Quota Exceeded.**\nDaily quota used up — try again later today.';
+      case 'oauth_required':
+        return `🔐 YouTube OAuth token is expired or invalid.\n👉 Reconnect: Web App → Config Panel → YouTube Studio → "Connect YouTube Channel with Google".\n(_Detail: ${TelegramBotService.escapeHtml(rawMessage.slice(0, 160))})`;
+      default:
+        return `⚠️ YouTube request failed: ${TelegramBotService.escapeHtml(rawMessage.slice(0, 300))}`;
+    }
+  }
+
     /** Inline quick actions attached to the /yt_check analytics report. */
   private static buildYtCheckKeyboard(): Record<string, any> {
     return {
@@ -508,10 +530,7 @@ export class TelegramBotService {
       ]);
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.formatYtCheckReport(stats, analytics), TelegramBotService.buildYtCheckKeyboard());
     } catch (error: any) {
-      const authorizationIssue = error instanceof YouTubeAnalyticsError && error.authorizationIssue;
-      const message = authorizationIssue
-        ? '🔐 YouTube OAuth token টি expired বা invalid। অনুগ্রহ করে Web App → Config Panel → YouTube Studio-তে একটি নতুন Refresh Token যোগ করুন, তারপর আবার /yt_check পাঠান।'
-        : `⚠️ YouTube analytics আনতে ব্যর্থ: ${TelegramBotService.escapeHtml(String(error?.message || error))}`;
+      const message = `⚠️ **আনালিটিক্স আনা ব্যর্থ হয়েছে।**\n${TelegramBotService.formatYtError(error)}`;
       await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
     }
   }
@@ -597,10 +616,7 @@ export class TelegramBotService {
       lines.push('', '⚡ Quick actions below — upload with this SEO or view your analytics.');
       await TelegramBotService.sendMessage(token, chatId, lines.join('\n'), TelegramBotService.buildSeoActionsKeyboard());
     } catch (error: any) {
-      const authorizationIssue = error instanceof YouTubeAnalyticsError && error.authorizationIssue;
-      const message = authorizationIssue
-        ? '🔐 YouTube OAuth token টি expired বা invalid। Config Panel → YouTube Studio-তে নতুন Refresh Token যোগ করে আবার চেষ্টা করুন।'
-        : `⚠️ AI SEO তৈরি করতে ব্যর্থ: ${TelegramBotService.escapeHtml(String(error?.message || error))}`;
+      const message = `⚠️ **AI SEO তৈরি করতে ব্যর্থ।**\n${TelegramBotService.formatYtError(error)}`;
       await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
     }
   }
@@ -693,10 +709,7 @@ export class TelegramBotService {
         TelegramBotService.buildYtViralKeyboard(),
       );
     } catch (error: any) {
-      const authorizationIssue = error instanceof YouTubeAnalyticsError && error.authorizationIssue;
-      const message = authorizationIssue
-        ? '🔐 YouTube OAuth token টি expired বা invalid। Config Panel → YouTube Studio-তে নতুন Refresh Token যোগ করে আবার চেষ্টা করুন।'
-        : `⚠️ ভিরাল প্রকল্পন তৈরিতে ব্যর্য: ${TelegramBotService.escapeHtml(String(error?.message || error))}`;
+      const message = `⚠️ **ভিরাল প্রকল্পন তৈরিতে ব্যর্থ।**\n${TelegramBotService.formatYtError(error)}`;
       await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
     }
   }

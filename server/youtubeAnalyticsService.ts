@@ -103,11 +103,33 @@ export interface ChannelSeoContext {
 export class YouTubeAnalyticsError extends Error {
   /** True when the failure is caused by a missing/invalid OAuth scope or token. */
   readonly authorizationIssue: boolean;
-  constructor(message: string, authorizationIssue = false) {
+  /** Coarse machine-readable Google error code: 'invalid_grant' | 'invalid_client' |
+   *  'access_not_configured' | 'insufficient_permissions' | 'quota_exceeded' |
+   *  'not_found' | 'oauth_required' | 'unknown'. */
+  readonly code: string;
+  constructor(message: string, authorizationIssue = false, code: string = 'unknown') {
     super(message);
     this.name = 'YouTubeAnalyticsError';
     this.authorizationIssue = authorizationIssue;
+    this.code = code;
   }
+}
+
+/** Classifies a raw Google/YouTube error detail string into a coarse code. */
+function classifyGoogleError(status: number, detail: string, reason = ''): { code: string; authorizationIssue: boolean } {
+  const combined = `${detail} ${reason}`.toLowerCase();
+  if (/invalid_grant/.test(combined)) return { code: 'invalid_grant', authorizationIssue: true };
+  if (/invalid_client/.test(combined)) return { code: 'invalid_client', authorizationIssue: true };
+  if (/accessnotconfigured|access not configured|api has not been used/i.test(combined)) {
+    return { code: 'access_not_configured', authorizationIssue: true };
+  }
+  if (/insufficientpermissions|insufficient permission/i.test(combined)) {
+    return { code: 'insufficient_permissions', authorizationIssue: true };
+  }
+  if (/quotaexceeded|quota exceeded/i.test(combined)) return { code: 'quota_exceeded', authorizationIssue: false };
+  if (/notfound|not found/i.test(combined)) return { code: 'not_found', authorizationIssue: false };
+  if (status === 401 || status === 403) return { code: 'oauth_required', authorizationIssue: true };
+  return { code: 'unknown', authorizationIssue: false };
 }
 
 const YOUTUBE_TIMEOUT_MS = 30000;
@@ -159,8 +181,14 @@ export async function resolveAccessToken(credentials: YouTubeCredentials): Promi
   };
   if (!tokenResponse.ok || !tokenPayload.access_token) {
     const detail = tokenPayload.error_description || tokenPayload.error || `HTTP ${tokenResponse.status}`;
-    const unauthorized = tokenResponse.status === 401 || tokenResponse.status === 403 || /invalid_grant|invalid_client/i.test(detail);
-    throw new YouTubeAnalyticsError(`YouTube OAuth token refresh failed: ${detail}`, unauthorized);
+    // Log the raw Google error response for debugging.
+    console.error('[YouTubeAnalyticsService] OAuth token refresh failed:', JSON.stringify(tokenPayload));
+    const classification = classifyGoogleError(tokenResponse.status, detail, String(tokenPayload.error || ''));
+    throw new YouTubeAnalyticsError(
+      `YouTube OAuth token refresh failed: ${detail}`,
+      classification.authorizationIssue,
+      classification.code,
+    );
   }
   const expiresAt = Date.now() + Math.max(60, Number(tokenPayload.expires_in) || 3600) * 1000;
   accessTokenCache.set(cacheKey, { token: tokenPayload.access_token, expiresAt });
@@ -276,7 +304,14 @@ async function fetchOwnChannelResource(accessToken: string): Promise<ChannelReso
   );
   if (!ok || status === 401 || status === 403) {
     const reason = String(data?.error?.errors?.[0]?.reason || data?.error?.message || `HTTP ${status}`);
-    throw new YouTubeAnalyticsError(`YouTube channel lookup failed: ${reason}`, status === 401 || status === 403);
+    // Log the raw Google API error response for debugging.
+    console.error('[YouTubeAnalyticsService] Channel lookup failed:', JSON.stringify(data?.error || { status }));
+    const classification = classifyGoogleError(status, reason, String(data?.error?.errors?.[0]?.reason || ''));
+    throw new YouTubeAnalyticsError(
+      `YouTube channel lookup failed: ${reason}`,
+      classification.authorizationIssue,
+      classification.code,
+    );
   }
   const items: any[] = Array.isArray(data?.items) ? data.items : [];
   if (!items.length) {
