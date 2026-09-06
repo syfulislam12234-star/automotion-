@@ -464,10 +464,34 @@ def chunk_text(text: str, max_len: int = 3900) -> List[str]:
 # TELEGRAM BOT COMMAND HANDLERS
 # ==========================================
 
+def format_telegram_html(text: str) -> str:
+    """Escape raw HTML special chars, then convert Markdown patterns to HTML tags.
+
+    Mirrors the TypeScript bot's formatTelegramHtml so both bots behave identically:
+    every message is sent with parse_mode=HTML, Markdown **bold** / __bold__ /
+    *bold* / _bold_ / `code` / ~~strikethrough~~ are translated to HTML, and
+    any literal < > & characters are escaped so they never break Telegram's
+    HTML parser or render as raw tags.
+    """
+    escaped = (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    result = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+    result = re.sub(r"__(.+?)__", r"<b>\1</b>", result)
+    result = re.sub(r"\*(\S.*?\S)\*", r"<b>\1</b>", result)
+    result = re.sub(r"_(\S.*?\S)_", r"<b>\1</b>", result)
+    result = re.sub(r"`([^`]+)`", r"<code>\1</code>", result)
+    result = re.sub(r"~~(.+?)~~", r"<s>\1</s>", result)
+    return result
+
+
 async def safe_reply(
     update: Update,
     text: str,
-    parse_mode: Optional[str] = ParseMode.MARKDOWN,
+    parse_mode: Optional[str] = ParseMode.HTML,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> None:
     """Send text in chunks with automatic fallback to plain text if parsing errors occur."""
@@ -1857,8 +1881,8 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     code_res = await generate_ai_reply(update.effective_chat.id, prompt)
     await safe_reply(
         update,
-        f"💻 <b>Code Solution:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{code_res}",
-        parse_mode=ParseMode.MARKDOWN,
+        format_telegram_html(f"💻 <b>Code Solution:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{code_res}"),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -1937,11 +1961,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.warning("No AI response was available for Telegram message from %s.", chat_id)
         return
 
-    # Save to sliding window history
+        # Save to sliding window history
     update_chat_history(chat_id, user_text, reply_text)
 
-    # Send formatted response safely
-    await safe_reply(update, reply_text, parse_mode=ParseMode.MARKDOWN)
+    # Send formatted response safely — escape raw HTML and convert any
+    # Markdown styling from the AI into proper HTML tags so <b> etc. render.
+    await safe_reply(update, format_telegram_html(reply_text), parse_mode=ParseMode.HTML)
 
 
 # ==========================================
