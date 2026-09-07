@@ -2936,7 +2936,11 @@ async function startServer() {
         // and the web app all report "OAuth 2.0: Connected" without per-user lookup.
         ServerDatabase.saveGlobalYouTubeCredentials(tokens.refreshToken, clientId, clientSecret);
         GlobalApiKeyStore.syncFromDatabase();
-        console.log(`[YouTube OAuth] Refresh token permanently saved for user ${userId} (scope: ${tokens.scope || 'n/a'})`);
+        console.log(
+          `[YouTube OAuth] Credentials saved for user ${userId}` +
+          ` { refreshToken: present, clientId: ${clientId ? 'present' : 'MISSING'}, clientSecret: ${clientSecret ? 'present' : 'MISSING'} }` +
+          ` (scope: ${tokens.scope || 'n/a'})`,
+        );
         return sendYouTubeOAuthPage(res, {
           title: 'YouTube connected',
           emoji: '✅',

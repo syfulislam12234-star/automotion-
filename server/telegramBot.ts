@@ -278,18 +278,40 @@ export class TelegramBotService {
 
   /** Builds the user's connected YouTube OAuth token status report from their saved config. */
   private static getYoutubeStatusReport(config: BotConfig | null): string {
-    const hasUserOAuth = Boolean(config?.youtubeClientId && config?.youtubeClientSecret && config?.youtubeRefreshToken);
-    // Also accept the globally-shared refresh token (populated by the OAuth callback)
-    // so status shows "Connected" even when the per-user config hasn't been hydrated yet.
-    const hasGlobalOAuth = !hasUserOAuth && Boolean(ServerDatabase.getGlobalYouTubeRefreshToken());
-    const hasOAuth = hasUserOAuth || hasGlobalOAuth;
+    // Resolve each credential with a flexible fallback chain:
+    //   clientId     : saved config  → env YOUTUBE_CLIENT_ID/GOOGLE_CLIENT_ID/OWNER_YOUTUBE_CLIENT_ID → global store
+    //   clientSecret : saved config  → env YOUTUBE_CLIENT_SECRET/GOOGLE_CLIENT_SECRET/OWNER_YOUTUBE_CLIENT_SECRET → global store
+    //   refreshToken : saved config  → global store → env OWNER_YOUTUBE_REFRESH_TOKEN
+    const savedClientId = String(config?.youtubeClientId || '').trim();
+    const savedClientSecret = String(config?.youtubeClientSecret || '').trim();
+    const savedRefreshToken = String(config?.youtubeRefreshToken || '').trim();
+    const envClientId = String(process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || process.env.OWNER_YOUTUBE_CLIENT_ID || '').trim();
+    const envClientSecret = String(process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || process.env.OWNER_YOUTUBE_CLIENT_SECRET || '').trim();
+    const globalCreds = ServerDatabase.getGlobalYouTubeCredentials();
+
+    const clientId = savedClientId || envClientId || globalCreds.clientId;
+    const clientSecret = savedClientSecret || envClientSecret || globalCreds.clientSecret;
+    const refreshToken = savedRefreshToken || globalCreds.refreshToken || String(process.env.OWNER_YOUTUBE_REFRESH_TOKEN || '').trim();
+    const hasOAuth = Boolean(refreshToken && clientId && clientSecret);
+
+    // Debug aid: log exactly which credential key is missing.
+    if (!hasOAuth) {
+      console.warn(
+        `[TelegramBotService] YouTube NOT connected — missing: {` +
+        ` clientId: ${clientId ? 'present' : 'MISSING'},` +
+        ` clientSecret: ${clientSecret ? 'present' : 'MISSING'},` +
+        ` refreshToken: ${refreshToken ? 'present' : 'MISSING'}` +
+        ` }  (saved cfg / env / global store all consulted)`,
+      );
+    }
+
     const lines = [
       '**📺 YouTube Connection Status**',
       '',
       `OAuth 2.0: **${hasOAuth ? '✅ Connected' : '❌ Not connected'}**`,
     ];
     if (hasOAuth) {
-      lines.push(`Client ID: **${TelegramBotService.escapeHtml(String(config!.youtubeClientId).slice(0, 24))}…**`);
+      lines.push(`Client ID: **${TelegramBotService.escapeHtml(clientId.slice(0, 24))}…**`);
     }
     lines.push(
       `Channel ID: **${config?.youtubeChannelId ? TelegramBotService.escapeHtml(String(config.youtubeChannelId)) : 'default channel'}**`,

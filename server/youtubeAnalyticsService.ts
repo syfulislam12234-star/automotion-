@@ -1,4 +1,5 @@
 ﻿import crypto from 'crypto';
+import { ServerDatabase } from './db';
 
 /**
  * YouTube Analytics & Status Service (Multi-Tenant)
@@ -211,18 +212,23 @@ export function extractYouTubeCredentials(source: Record<string, unknown> | null
   };
 }
 
-/** Normalizes full credentials or a bare refresh token (env OAuth client fallback). */
+/** Normalizes full credentials or a bare refresh token.
+ *  Client id/secret fallback chain: provided value → env OWNER_YOUTUBE/YOUTUBE/GOOGLE_* → global store. */
 function normalizeCredentials(credentials: YouTubeCredentials | string): YouTubeCredentials {
+  const envClientId = String(process.env.OWNER_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '').trim();
+  const envClientSecret = String(process.env.OWNER_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '').trim();
   if (typeof credentials === 'string') {
+    const store = ServerDatabase.getGlobalYouTubeCredentials();
     return {
-      clientId: String(process.env.OWNER_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '').trim(),
-      clientSecret: String(process.env.OWNER_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '').trim(),
+      clientId: envClientId || store.clientId,
+      clientSecret: envClientSecret || store.clientSecret,
       refreshToken: credentials.trim(),
     };
   }
+  const store = ServerDatabase.getGlobalYouTubeCredentials();
   return {
-    clientId: String(credentials?.clientId || '').trim(),
-    clientSecret: String(credentials?.clientSecret || '').trim(),
+    clientId: String(credentials?.clientId || '').trim() || envClientId || store.clientId,
+    clientSecret: String(credentials?.clientSecret || '').trim() || envClientSecret || store.clientSecret,
     refreshToken: String(credentials?.refreshToken || '').trim(),
   };
 }

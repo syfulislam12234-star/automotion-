@@ -1424,6 +1424,16 @@ export class ServerDatabase {
     return entry?.refreshToken ? String(entry.refreshToken).trim() : '';
   }
 
+  /** Returns the full globally-shared YouTube credential entry (client id, secret, refresh token). */
+  static getGlobalYouTubeCredentials(): { refreshToken: string; clientId: string; clientSecret: string } {
+    const entry = ServerDatabase.db?.youtubeCredentials?.['default'];
+    return {
+      refreshToken: entry?.refreshToken ? String(entry.refreshToken).trim() : '',
+      clientId: entry?.clientId ? String(entry.clientId).trim() : '',
+      clientSecret: entry?.clientSecret ? String(entry.clientSecret).trim() : '',
+    };
+  }
+
   public static removeSession(authHeader: string): void {
     if (!authHeader) return;
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();

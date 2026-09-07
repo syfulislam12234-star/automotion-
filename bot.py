@@ -130,8 +130,65 @@ LEGACY_AI_PROVIDER_ORDER: List[Dict[str, Any]] = [
 ]
 
 
-_YT_CRED_CACHE: Dict[str, Any] = {"token": "", "readAt": 0.0}
+_YT_CRED_CACHE: Dict[str, Any] = {"token": "", "clientId": "", "clientSecret": "", "readAt": 0.0}
 _YT_CRED_TTL_SECONDS = 60.0
+
+
+def _load_yt_store_credentials(force: bool = False) -> Dict[str, str]:
+    """Read the full `youtubeCredentials.default` entry from data_store.json (shared with the Node server).
+    Returns a dict with refreshToken/clientId/clientSecret — each possibly empty. Never raises."""
+    now = time.time()
+    cached_token = _YT_CRED_CACHE.get("token")
+    cached_id = _YT_CRED_CACHE.get("clientId")
+    cached_secret = _YT_CRED_CACHE.get("clientSecret")
+    if (
+        not force
+        and now - float(_YT_CRED_CACHE.get("readAt", 0.0)) < _YT_CRED_TTL_SECONDS
+    ):
+        return {
+            "refreshToken": str(cached_token or ""),
+            "clientId": str(cached_id or ""),
+            "clientSecret": str(cached_secret or ""),
+        }
+    entry: Dict[str, str] = {"refreshToken": "", "clientId": "", "clientSecret": ""}
+    try:
+        store_path = os.path.join(os.getcwd(), "data_store.json")
+        if os.path.exists(store_path):
+            with open(store_path, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            yt = raw.get("youtubeCredentials") if isinstance(raw, dict) else None
+            default_entry = yt.get("default") if isinstance(yt, dict) else None
+            if isinstance(default_entry, dict):
+                entry["refreshToken"] = str(default_entry.get("refreshToken") or "").strip()
+                entry["clientId"] = str(default_entry.get("clientId") or "").strip()
+                entry["clientSecret"] = str(default_entry.get("clientSecret") or "").strip()
+    except Exception as exc:
+        logger.warning(f"YouTube credential store read failed (using env fallback): {exc}")
+    _YT_CRED_CACHE["token"] = entry["refreshToken"]
+    _YT_CRED_CACHE["clientId"] = entry["clientId"]
+    _YT_CRED_CACHE["clientSecret"] = entry["clientSecret"]
+    _YT_CRED_CACHE["readAt"] = now
+    return entry
+
+
+def _youtube_client_id() -> str:
+    """Resolve the OAuth client id: OWNER_SETTINGS → env YOUTUBE_CLIENT_ID/GOOGLE_CLIENT_ID → store."""
+    return (
+        str(OWNER_SETTINGS.get("youtubeClientId") or "").strip()
+        or os.getenv("YOUTUBE_CLIENT_ID", "").strip()
+        or os.getenv("GOOGLE_CLIENT_ID", "").strip()
+        or _load_yt_store_credentials().get("clientId", "")
+    )
+
+
+def _youtube_client_secret() -> str:
+    """Resolve the OAuth client secret: OWNER_SETTINGS → env YOUTUBE_CLIENT_SECRET/GOOGLE_CLIENT_SECRET → store."""
+    return (
+        str(OWNER_SETTINGS.get("youtubeClientSecret") or "").strip()
+        or os.getenv("YOUTUBE_CLIENT_SECRET", "").strip()
+        or os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+        or _load_yt_store_credentials().get("clientSecret", "")
+    )
 
 
 def _load_youtube_refresh_token_from_store(force: bool = False) -> str:
@@ -144,27 +201,13 @@ def _load_youtube_refresh_token_from_store(force: bool = False) -> str:
     - When the resolved token differs from the cached one, the access-token cache is
       invalidated so the next API call re-mints an access token from the NEW identity.
     """
-    now = time.time()
-    cached = _YT_CRED_CACHE.get("token")
-    if not force and cached is not None and now - float(_YT_CRED_CACHE.get("readAt", 0.0)) < _YT_CRED_TTL_SECONDS:
-        return cached  # type: ignore[return-value]
-    token = ""
-    try:
-        store_path = os.path.join(os.getcwd(), "data_store.json")
-        if os.path.exists(store_path):
-            with open(store_path, "r", encoding="utf-8") as handle:
-                raw = json.load(handle)
-            yt = raw.get("youtubeCredentials") if isinstance(raw, dict) else None
-            default_entry = yt.get("default") if isinstance(yt, dict) else None
-            stored_token = str(default_entry.get("refreshToken") or "").strip() if isinstance(default_entry, dict) else ""
-            if stored_token:
-                token = stored_token
-    except Exception as exc:
-        logger.warning(f"YouTube credential store read failed (using env fallback): {exc}")
+    entry = _load_yt_store_credentials(force=force)
+    token = entry.get("refreshToken", "")
     if not token:
         token = str(OWNER_SETTINGS.get("youtubeRefreshToken") or "").strip()
     # A changed refresh token means a new OAuth identity was authorized — drop any
     # cached access token minted from the old identity so the next API call refreshes.
+    cached = _YT_CRED_CACHE.get("token")
     if cached is not None and token and token != cached:
         try:
             _YT_ACCESS_TOKEN_CACHE["token"] = ""
@@ -172,8 +215,6 @@ def _load_youtube_refresh_token_from_store(force: bool = False) -> str:
             logger.info("🔑 YouTube refresh token changed — access-token cache invalidated.")
         except Exception:
             pass
-    _YT_CRED_CACHE["token"] = token
-    _YT_CRED_CACHE["readAt"] = now
     return token
 
 
@@ -567,24 +608,54 @@ async def safe_reply(
 
 
 def _youtube_connected() -> bool:
-    """Whether the owner's YouTube OAuth credentials are configured.
-    Checks: env OWNER_YOUTUBE_* → global data_store.json youtubeCredentials.default → per-user botConfigs."""
-    if OWNER_SETTINGS.get("youtubeClientId") and OWNER_SETTINGS.get("youtubeClientSecret") and OWNER_SETTINGS.get("youtubeRefreshToken"):
+    """Whether a full YouTube OAuth credential set can be resolved.
+
+    Flexible fallback chain — considered CONNECTED when ALL THREE resolve:
+      clientId     : OWNER_SETTINGS → env YOUTUBE_CLIENT_ID / GOOGLE_CLIENT_ID → store default.clientId
+      clientSecret : OWNER_SETTINGS → env YOUTUBE_CLIENT_SECRET / GOOGLE_CLIENT_SECRET → store default.clientSecret
+      refreshToken : store default.refreshToken → OWNER_SETTINGS (env OWNER_YOUTUBE_REFRESH_TOKEN)
+
+    When any key is missing, logs EXACTLY which one(s) for instant debugging.
+    """
+    client_id = _youtube_client_id()
+    client_secret = _youtube_client_secret()
+    refresh_token = _load_youtube_refresh_token_from_store()
+    if client_id and client_secret and refresh_token:
         return True
-    # Fall back to the shared store that the Node server populates via OAuth callback
-    return bool(_load_youtube_refresh_token_from_store())
+    missing = {
+        "clientId": "present" if client_id else "MISSING",
+        "clientSecret": "present" if client_secret else "MISSING",
+        "refreshToken": "present" if refresh_token else "MISSING",
+    }
+    logger.warning(
+        "📺 [YouTube Status] Not connected — missing credential keys: %s "
+        "(env YOUTUBE_CLIENT_ID/SECRET + data_store.json youtubeCredentials.default all consulted)",
+        missing,
+    )
+    return False
 
 
 def youtube_status_text() -> str:
     """Report the connected YouTube OAuth token status."""
-    connected = _youtube_connected()
+    client_id = _youtube_client_id()
+    client_secret = _youtube_client_secret()
+    refresh_token = _load_youtube_refresh_token_from_store()
+    connected = bool(client_id and client_secret and refresh_token)
     lines = [
         "📺 <b>YouTube Connection Status</b>",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         f"• OAuth 2.0: <b>{'✅ Connected' if connected else '❌ Not connected'}</b>",
     ]
     if connected:
-        lines.append(f"• Client ID: <code>{str(OWNER_SETTINGS.get('youtubeClientId'))[:24]}…</code>")
+        lines.append(f"• Client ID: <code>{html.escape(client_id[:24])}…</code>")
+    else:
+        missing = [
+            f"<code>{name}</code>"
+            for name, value in (("clientId", client_id), ("clientSecret", client_secret), ("refreshToken", refresh_token))
+            if not value
+        ]
+        if missing:
+            lines.append(f"• Missing: {', '.join(missing)}")
     channel = str(OWNER_SETTINGS.get("youtubeChannelId") or "")
     lines.append(f"• Channel ID: <code>{channel if channel else 'default channel'}</code>")
     lines.append(f"• Auto-Upload: <b>{'ON ✅' if OWNER_SETTINGS.get('autoUpload') else 'OFF ❌'}</b>")
@@ -685,17 +756,17 @@ async def _youtube_access_token() -> str:
     expires_at = float(_YT_ACCESS_TOKEN_CACHE.get("expiresAt") or 0.0)
     if cached_token and expires_at - 300 > time.time():
         return cached_token
-    client_id = str(OWNER_SETTINGS.get("youtubeClientId") or "")
-    client_secret = str(OWNER_SETTINGS.get("youtubeClientSecret") or "")
+    client_id = _youtube_client_id()
+    client_secret = _youtube_client_secret()
     # Priority: shared data_store.json (freshest) -> OWNER_SETTINGS env fallback.
     refresh_token = _load_youtube_refresh_token_from_store(force=True)
     if not refresh_token:
         raise RuntimeError("YouTube is not connected. Add OAuth credentials in the Config Panel.")
     if not client_id or not client_secret:
-        client_id = os.getenv("YOUTUBE_CLIENT_ID", "").strip() or os.getenv("GOOGLE_CLIENT_ID", "").strip()
-        client_secret = os.getenv("YOUTUBE_CLIENT_SECRET", "").strip() or os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
-    if not client_id or not client_secret:
-        raise RuntimeError("YouTube OAuth client credentials are missing.")
+        raise RuntimeError(
+            f"YouTube OAuth client credentials are missing (clientId={'present' if client_id else 'MISSING'}, "
+            f"clientSecret={'present' if client_secret else 'MISSING'})."
+        )
     payload = {
         "client_id": client_id,
         "client_secret": client_secret,
