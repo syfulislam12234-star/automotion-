@@ -9,6 +9,7 @@ Key Capabilities:
 3. Expanded Utilities: /translate, /summarize, /image, /weather, /search, /code, /remind, /memory, /status, /ping, /id, /reset
 4. Telegram Markdown Chunking (up to 4000 chars) with automatic plain-text fallback for parse errors
 5. Async HTTP server (aiohttp) for /health and /webhook endpoints
+6. Phase 1 Viral Shorts Studio: /viral_shorts <topic|YouTube URL> -> AI hook, script, hashtags & thumbnail prompt
 """
 
 import os
@@ -738,6 +739,95 @@ def yt_viral_keyboard() -> InlineKeyboardMarkup:
 
 
 # ==========================================
+# PHASE 1: AI VIRAL SHORTS & SCRIPT GENERATOR
+# Free AI power-tool (no YouTube OAuth needed): the user supplies a topic,
+# keyword or YouTube URL and the multi-tier AI cascade returns a ready-to-film
+# Shorts package — hook, script, hashtags/caption and a thumbnail prompt.
+# ==========================================
+
+# Per-chat memory of the last Viral Shorts generation (topic + raw AI text) so
+# the inline "🔄 Regenerate" / "📋 Copy Script" buttons can act without re-prompting.
+viral_shorts_state: Dict[int, Dict[str, str]] = {}
+
+# Canonical section markers the AI is instructed to emit. The hashtag marker is
+# searched WITHOUT its variation selector so "🏷" and "🏷️" both match.
+_VIRAL_SHORTS_SECTION_MARKERS: List[str] = ["🪝", "📜", "🏷", "🎨"]
+
+
+def build_viral_shorts_prompt(topic: str) -> str:
+    """Deterministic creator-brief prompt — the four emoji markers double as the
+    canonical structure the response is rendered (and re-parsed) with."""
+    return (
+        "You are an elite YouTube Shorts growth strategist. Create a viral Shorts "
+        "package for the topic or video link below.\n"
+        "If a YouTube URL is given, treat it as the source context for the script.\n\n"
+        "STRICT FORMAT — reply with EXACTLY these four labelled sections, in this order, "
+        "using these exact emoji markers as section headers and no extra top-level sections:\n"
+        "🪝 Viral Hook (First 3 seconds)\n"
+        "📜 Script (15-60 seconds voiceover dialogue)\n"
+        "🏷️ High-reach Hashtags & Captions\n"
+        "🎨 Thumbnail Prompt (DALL-E / Midjourney ready)\n\n"
+        "Rules: the hook must stop the scroll within the first 3 seconds; the script must be "
+        "short, spoken-style lines that fit 15-60 seconds of voiceover; the hashtags must be "
+        "high-reach Shorts tags plus one engaging caption; the thumbnail prompt must be a "
+        "concrete, copy-paste-ready image-generation prompt.\n\n"
+        f"Topic / video link: {topic}"
+    )
+
+
+def extract_viral_shorts_section(text: str, marker: str) -> str:
+    """Return the body of one emoji-marked section (marker -> next marker / end)."""
+    if not text:
+        return ""
+    idx = text.find(marker)
+    if idx == -1:
+        return ""
+    body = text[idx + len(marker):]
+    cut = len(body)
+    for other in _VIRAL_SHORTS_SECTION_MARKERS:
+        if other == marker:
+            continue
+        pos = body.find(other)
+        if pos != -1 and pos < cut:
+            cut = pos
+    return body[:cut].strip()
+
+
+def format_viral_shorts_message(ai_text: str, topic: str) -> str:
+    """Render the AI Shorts package with a clean header (HTML parse mode)."""
+    body = (ai_text or "").strip()
+    if not body:
+        body = "⚠️ The AI returned an empty script — tap 🔄 Regenerate or try again."
+    return (
+        "🎬 <b>Viral Shorts Package</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 <b>Topic:</b> {html.escape(str(topic))}\n\n"
+        f"{format_telegram_html(body)}\n\n"
+        "⚡ <i>Tap a button below to regenerate or copy the script.</i>"
+    )
+
+
+def viral_shorts_keyboard() -> InlineKeyboardMarkup:
+    """Inline actions attached to every generated Viral Shorts package."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Regenerate", callback_data="vs:regenerate"),
+            InlineKeyboardButton("📋 Copy Script", callback_data="vs:copy_script"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+async def generate_viral_shorts_package(chat_id: int, topic: str) -> str:
+    """Run the topic through the multi-tier AI cascade and cache the raw result."""
+    ai_text = await generate_ai_reply(chat_id, build_viral_shorts_prompt(topic))
+    viral_shorts_state[chat_id] = {"topic": topic, "text": ai_text}
+    return ai_text
+
+
+# ==========================================
 # YOUTUBE ANALYTICS & SEO DATA LAYER (OAuth)
 # ==========================================
 
@@ -1211,6 +1301,7 @@ def persistent_reply_keyboard() -> ReplyKeyboardMarkup:
         [
             [KeyboardButton("📊 Channel Status"), KeyboardButton("🔗 YouTube OAuth")],
             [KeyboardButton("🚀 AI SEO / Tools"), KeyboardButton("⚙️ Settings")],
+            [KeyboardButton("🔥 Viral Shorts")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -1224,6 +1315,7 @@ PERSISTENT_KEYBOARD_ACTIONS = {
     "🔗 youtube oauth": "youtube",
     "🚀 ai seo / tools": "seo",
     "⚙️ settings": "settings",
+    "🔥 viral shorts": "viral_shorts",
 }
 
 
@@ -1241,6 +1333,16 @@ async def handle_persistent_keyboard_tap(update: Update, context: ContextTypes.D
         await safe_reply(
             update,
             "🔥 <b>AI SEO</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nEvery upload automatically gets a high-CTR viral title, engagement-focused description, hashtags and ranking tags — powered by the multi-model AI cascade. Start with /upload or send /yt_seo for a full channel audit.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+    elif action == "viral_shorts":
+        await safe_reply(
+            update,
+            "🎬 <b>AI Viral Shorts Generator</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Send me a <b>topic, keyword or YouTube URL</b> and the AI cascade returns a ready-to-film Shorts package: "
+            "🪝 hook, 📜 15-60s voiceover script, 🏷️ hashtags &amp; caption, 🎨 thumbnail prompt.\n\n"
+            "Example: <code>/viral_shorts AI side hustles for students</code>",
             parse_mode=ParseMode.HTML,
             reply_markup=persistent_reply_keyboard(),
         )
@@ -1672,6 +1774,53 @@ async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
+async def viral_shorts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /viral_shorts [topic | YouTube URL] — AI hook, script, hashtags & thumbnail prompt."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        await safe_reply(
+            update,
+            "🎬 <b>AI Viral Shorts Generator</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Send me a <b>topic, keyword or YouTube URL</b> and the AI cascade returns a ready-to-film Shorts package:\n"
+            "• 🪝 Viral Hook (First 3 seconds)\n"
+            "• 📜 Script (15-60 seconds voiceover dialogue)\n"
+            "• 🏷️ High-reach Hashtags &amp; Captions\n"
+            "• 🎨 Thumbnail Prompt (DALL-E / Midjourney ready)\n\n"
+            "Example: <code>/viral_shorts AI side hustles for students</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+        return
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    await safe_reply(
+        update,
+        "🎬 <b>Cooking your viral Shorts package…</b> Hook, script, hashtags &amp; thumbnail on the way! 🔥",
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        ai_text = await generate_viral_shorts_package(chat_id, topic)
+        await safe_reply(
+            update,
+            format_viral_shorts_message(ai_text, topic),
+            parse_mode=ParseMode.HTML,
+            reply_markup=viral_shorts_keyboard(),
+        )
+    except Exception as err:
+        logger.warning("⚠️ /viral_shorts failed: %s", err)
+        await safe_reply(
+            update,
+            "⚠️ <b>Could not generate the Shorts package.</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nThe AI cascade is busy or unavailable — please try again in a moment.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard(),
+        )
+
+
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /settings — interactive configuration options (Auto-Upload ON/OFF)."""
     if not update.effective_message:
@@ -1727,6 +1876,54 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await yt_seo_command(update, context)
     elif data == "yt:viral":
         await yt_viral_command(update, context)
+    elif data == "vs:regenerate":
+        state = viral_shorts_state.get(chat_id) or {}
+        topic = str(state.get("topic") or "").strip()
+        if not topic:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🎬 No cached topic yet — generate one first with <code>/viral_shorts &lt;topic&gt;</code>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=persistent_reply_keyboard(),
+            )
+            return
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=chat_id, text="🔄 <b>Regenerating your viral Shorts package…</b> 🔥", parse_mode=ParseMode.HTML)
+        try:
+            ai_text = await generate_viral_shorts_package(chat_id, topic)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=format_viral_shorts_message(ai_text, topic),
+                parse_mode=ParseMode.HTML,
+                reply_markup=viral_shorts_keyboard(),
+            )
+        except Exception as err:
+            logger.warning("⚠️ /viral_shorts regenerate failed: %s", err)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ <b>Regeneration failed.</b> The AI cascade is busy — please try again in a moment.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard(),
+            )
+    elif data == "vs:copy_script":
+        state = viral_shorts_state.get(chat_id) or {}
+        script = extract_viral_shorts_section(str(state.get("text") or ""), "📜")
+        if script:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"📋 <b>Copy-ready Script</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{format_telegram_html(script)}",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ No cached script yet — generate one first with <code>/viral_shorts &lt;topic&gt;</code>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=persistent_reply_keyboard(),
+            )
     else:  # menu:home and any unknown payload
         await context.bot.send_message(chat_id=chat_id, text=welcome_menu_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
@@ -1754,6 +1951,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• <code>/yt_check</code> or <code>/analytics</code> - Live channel analytics & health audit\n"
                 "• <code>/yt_seo</code> - AI channel keywords, viral bio, tags & SEO plan\n"
         "• <code>/yt_viral</code> - AI-powered viral video concept predictions\n"
+        "• <code>/viral_shorts &lt;topic&gt;</code> - AI Shorts hook, script, hashtags &amp; thumbnail\n"
         "• <code>/upload</code> - Publish a video with viral AI SEO\n\n"
         "💡 <i>Tip: Reply to any message with <code>/summarize</code> or <code>/translate Spanish</code>!</i>"
     )
@@ -2522,6 +2720,7 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("remind", remind_command))
+    app.add_handler(CommandHandler(["viral_shorts", "viralshorts"], viral_shorts_command))
 
     # Register Slash Commands for Upload / YouTube / Settings + Interactive Menus
     app.add_handler(CommandHandler("upload", upload_command))

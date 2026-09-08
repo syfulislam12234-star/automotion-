@@ -42,6 +42,10 @@ export class TelegramBotService {
   private static environmentToken = '';
   private static uploadStates = new Map<string, TelegramUploadState>();
   private static callbackQueryStates = new Map<string, CallbackQueryContext>();
+  /** Phase 1: per-chat memory of the last Viral Shorts generation (topic + raw AI text)
+   *  so the inline "🔄 Regenerate" / "📋 Copy Script" buttons can act without re-prompting. */
+  private static viralShortsLastTopic = new Map<string, string>();
+  private static viralShortsLastResult = new Map<string, string>();
   /** Per-owner registry: ownerId → bot config holding that user's exact Telegram token. */
   private static userBotRegistry = new Map<string, BotConfig>();
   /** Owner ids whose per-user webhook is currently registered with Telegram. */
@@ -181,6 +185,7 @@ export class TelegramBotService {
       keyboard: [
         [{ text: '📊 Channel Status' }, { text: '🔗 YouTube OAuth' }],
         [{ text: '🚀 AI SEO / Tools' }, { text: '⚙️ Settings' }],
+        [{ text: '🔥 Viral Shorts' }],
       ],
       resize_keyboard: true,
       one_time_keyboard: false,
@@ -206,6 +211,7 @@ export class TelegramBotService {
     if (t === '🔗 youtube oauth' || t === 'youtube oauth' || t === 'youtube connect') return 'youtube';
     if (t === '🚀 ai seo / tools' || t === 'ai seo' || t === 'seo') return 'seo';
     if (t === '⚙️ settings' || t === 'settings') return 'settings';
+    if (t === '🔥 viral shorts' || t === 'viral shorts') return 'viral_shorts';
     return null;
   }
 
@@ -233,6 +239,14 @@ export class TelegramBotService {
           token,
           chatId,
           '🔥 **AI SEO** — high-CTR titles, descriptions, hashtags & ranking tags, generated automatically.\n\nEvery upload gets viral AI SEO. Start with /upload or send /yt_seo for a full channel audit.',
+          TelegramBotService.buildPersistentReplyKeyboard(),
+        );
+        break;
+      case 'viral_shorts':
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '🎬 **AI Viral Shorts Generator**\n\nSend me a **topic, keyword or YouTube URL** and the AI cascade returns a ready-to-film Shorts package: 🪝 hook, 📜 15-60s voiceover script, 🏷️ hashtags & caption, 🎨 thumbnail prompt.\n\nExample: `/viral_shorts AI side hustles for students`',
           TelegramBotService.buildPersistentReplyKeyboard(),
         );
         break;
@@ -688,6 +702,89 @@ export class TelegramBotService {
     };
   }
 
+  /** Phase 1: canonical Viral Shorts section markers the AI is instructed to emit.
+   *  The hashtag marker is searched WITHOUT its variation selector so "🏷" and "🏷️" both match. */
+  private static readonly VIRAL_SHORTS_SECTION_MARKERS: string[] = ['🪝', '📜', '🏷', '🎨'];
+
+  /** Deterministic creator-brief prompt — the four emoji markers double as the
+   *  canonical structure the response is rendered (and re-parsed) with. */
+  private static buildViralShortsPrompt(topic: string): string {
+    return [
+      'You are an elite YouTube Shorts growth strategist. Create a viral Shorts package for the topic or video link below.',
+      'If a YouTube URL is given, treat it as the source context for the script.',
+      '',
+      'STRICT FORMAT — reply with EXACTLY these four labelled sections, in this order, using these exact emoji markers as section headers and no extra top-level sections:',
+      '🪝 Viral Hook (First 3 seconds)',
+      '📜 Script (15-60 seconds voiceover dialogue)',
+      '🏷️ High-reach Hashtags & Captions',
+      '🎨 Thumbnail Prompt (DALL-E / Midjourney ready)',
+      '',
+      'Rules: the hook must stop the scroll within the first 3 seconds; the script must be short, spoken-style lines that fit 15-60 seconds of voiceover; the hashtags must be high-reach Shorts tags plus one engaging caption; the thumbnail prompt must be a concrete, copy-paste-ready image-generation prompt.',
+      '',
+      `Topic / video link: ${topic}`,
+    ].join('\n');
+  }
+
+  /** Returns the body of one emoji-marked section (marker -> next marker / end). */
+  private static extractViralShortsSection(text: string, marker: string): string {
+    if (!text) return '';
+    const idx = text.indexOf(marker);
+    if (idx === -1) return '';
+    const body = text.slice(idx + marker.length);
+    let cut = body.length;
+    for (const other of TelegramBotService.VIRAL_SHORTS_SECTION_MARKERS) {
+      if (other === marker) continue;
+      const pos = body.indexOf(other);
+      if (pos !== -1 && pos < cut) cut = pos;
+    }
+    return body.slice(0, cut).trim();
+  }
+
+  /** Renders the AI Shorts package with a clean header (markdown → HTML happens in sendMessage). */
+  private static formatViralShortsMessage(aiText: string, topic: string): string {
+    const body = String(aiText || '').trim() || '⚠️ The AI returned an empty script — tap 🔄 Regenerate or try again.';
+    return [
+      '🎬 **Viral Shorts Package**',
+      `📌 **Topic:** ${topic}`,
+      '',
+      body,
+      '',
+      '⚡ **Tip:** tap a button below to regenerate or copy the script.',
+    ].join('\n');
+  }
+
+  /** Inline actions attached to every generated Viral Shorts package. */
+  private static buildViralShortsKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '🔄 Regenerate', callback_data: 'vs:regenerate' },
+          { text: '📋 Copy Script', callback_data: 'vs:copy_script' },
+        ],
+        [{ text: '⬅️ Main Menu', callback_data: 'menu:home' }],
+      ],
+    };
+  }
+
+  /** Runs the topic through the configured AI cascade and caches the raw result. */
+  private static async generateViralShortsPackage(
+    token: string,
+    chatId: string | number,
+    topic: string,
+    effectiveConfig: BotConfig | null,
+  ): Promise<string> {
+    if (!TelegramBotService.aiGenerator) throw new Error('AI generator is not configured.');
+    const aiText = await TelegramBotService.aiGenerator(
+      TelegramBotService.buildViralShortsPrompt(topic),
+      effectiveConfig?.modelName || undefined,
+    );
+    const text = String(aiText || '').trim();
+    if (!text) throw new Error('AI engine returned an empty Shorts package.');
+    TelegramBotService.viralShortsLastTopic.set(String(chatId), topic);
+    TelegramBotService.viralShortsLastResult.set(String(chatId), text);
+    return text;
+  }
+
   /** Formats the AI viral video prediction report for /yt_viral. */
   private static formatYtViralReport(
     channelName: string,
@@ -762,6 +859,49 @@ export class TelegramBotService {
     }
   }
 
+  /** /viral_shorts — AI viral Shorts generator: hook, script, hashtags & thumbnail prompt.
+   *  Free AI power-tool (no YouTube OAuth needed) routed through the configured provider cascade. */
+  private static async handleViralShortsCommand(
+    token: string,
+    chatId: string | number,
+    effectiveConfig: BotConfig | null,
+    topic: string,
+  ): Promise<void> {
+    const cleanTopic = String(topic || '').trim();
+    if (!cleanTopic) {
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        '🎬 **AI Viral Shorts Generator**\n\nSend me a **topic, keyword or YouTube URL** and the AI cascade returns a ready-to-film Shorts package:\n• 🪝 Viral Hook (First 3 seconds)\n• 📜 Script (15-60 seconds voiceover dialogue)\n• 🏷️ High-reach Hashtags & Captions\n• 🎨 Thumbnail Prompt (DALL-E / Midjourney ready)\n\nExample: `/viral_shorts AI side hustles for students`',
+        TelegramBotService.buildPersistentReplyKeyboard(),
+      );
+      return;
+    }
+    if (!TelegramBotService.aiGenerator) {
+      await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /viral_shorts again.');
+      return;
+    }
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '🎬 **Cooking your viral Shorts package…** Hook, script, hashtags & thumbnail on the way! 🔥');
+    try {
+      const aiText = await TelegramBotService.generateViralShortsPackage(token, chatId, cleanTopic, effectiveConfig);
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        TelegramBotService.formatViralShortsMessage(aiText, cleanTopic),
+        TelegramBotService.buildViralShortsKeyboard(),
+      );
+    } catch (error: any) {
+      console.warn('[TelegramBotService] /viral_shorts failed:', error?.message || error);
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        '⚠️ **Could not generate the Shorts package.** The AI cascade is busy or unavailable — please try again in a moment.',
+        TelegramBotService.buildMainMenuKeyboard(),
+      );
+    }
+  }
+
   private static async answerCallbackQuery(token: string, callbackQueryId: string, text?: string): Promise<void> {
     try {
       await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
@@ -818,6 +958,54 @@ export class TelegramBotService {
       case 'yt:viral':
         await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig);
         return;
+      case 'vs:regenerate': {
+        const cachedTopic = (TelegramBotService.viralShortsLastTopic.get(String(chatId)) || '').trim();
+        if (!cachedTopic) {
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '🎬 No cached topic yet — generate one first with `/viral_shorts <topic>`.',
+            TelegramBotService.buildPersistentReplyKeyboard(),
+          );
+          return;
+        }
+        await TelegramBotService.sendMessage(token, chatId, '🔄 **Regenerating your viral Shorts package…** 🔥');
+        try {
+          const aiText = await TelegramBotService.generateViralShortsPackage(token, chatId, cachedTopic, effectiveConfig);
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            TelegramBotService.formatViralShortsMessage(aiText, cachedTopic),
+            TelegramBotService.buildViralShortsKeyboard(),
+          );
+        } catch (error: any) {
+          console.warn('[TelegramBotService] /viral_shorts regenerate failed:', error?.message || error);
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '⚠️ **Regeneration failed.** The AI cascade is busy — please try again in a moment.',
+            TelegramBotService.buildMainMenuKeyboard(),
+          );
+        }
+        return;
+      }
+      case 'vs:copy_script': {
+        const script = TelegramBotService.extractViralShortsSection(
+          TelegramBotService.viralShortsLastResult.get(String(chatId)) || '',
+          '📜',
+        );
+        if (script) {
+          await TelegramBotService.sendMessage(token, chatId, `📋 **Copy-ready Script**\n\n${script}`);
+        } else {
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '⚠️ No cached script yet — generate one first with `/viral_shorts <topic>`.',
+            TelegramBotService.buildPersistentReplyKeyboard(),
+          );
+        }
+        return;
+      }
       case 'settings:toggle_autoupload': {
         if (effectiveConfig && typeof effectiveConfig === 'object') {
           effectiveConfig.enableYtAutoUploadQueue = !(effectiveConfig.enableYtAutoUploadQueue !== false);
@@ -983,6 +1171,7 @@ export class TelegramBotService {
           '/yt_check or /analytics — Live channel views, impressions, CTR, watch time & health audit\n' +
           '/yt_seo — AI-generated channel keywords, viral bio, tags & SEO recommendations\n' +
           '/yt_viral — AI-powered viral video concept predictions for your channel\n' +
+          '/viral_shorts <topic|YouTube URL> — AI Shorts hook, script, hashtags & thumbnail prompt\n' +
           'Send any text — Chat with the multi-model AI brain (instant failover)\n\n' +
           '**🔑 STEP 1 — ADD AI API KEYS (unlocks AI replies)**\n' +
           '1️⃣ Google Gemini (FREE): open https://aistudio.google.com/app/apikey → sign in → Create API key → copy\n' +
@@ -1040,6 +1229,13 @@ export class TelegramBotService {
       // /yt_viral — AI-powered viral video concept predictions for the channel.
       if (command === '/yt_viral') {
         await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig || null);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // /viral_shorts — AI-powered viral Shorts script generator (topic, keyword or YouTube URL).
+      if (command === '/viral_shorts' || command === '/viralshorts') {
+        const shortsTopic = (commandSource || '').replace(/^\/viral_?shorts(\@\S+)?\s*/i, '').trim();
+        await TelegramBotService.handleViralShortsCommand(token, chatId, effectiveConfig || null, shortsTopic);
         TelegramBotService.lastError = null;
         return { ok: true };
       }
