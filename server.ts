@@ -2871,6 +2871,69 @@ async function startServer() {
     })();
   });
 
+  // Step 1b — Telegram one-tap connect: `?telegramId=<chat_id>` (no session needed)
+  // resolves the owning account, signs the OAuth state for it, and 302-redirects
+  // straight to the Google consent screen. The inline keyboard button in both bots
+  // points here, so standard users never see any developer setup steps.
+  app.get('/api/youtube/oauth-url', (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const telegramId = String(req.query.telegramId || '').trim();
+        // Authenticated web-session callers get the same JSON payload as auth-url.
+        const sessionUser = req.headers.authorization ? ServerDatabase.getSessionUser(req.headers.authorization) : null;
+        if (sessionUser) {
+          const savedConfig = (ServerDatabase.getBotConfig(sessionUser.id)?.config || null) as unknown as Record<string, unknown> | null;
+          const envClient = resolveEnvYouTubeClient();
+          const clientId = String(savedConfig?.youtubeClientId || '').trim() || envClient.clientId;
+          const redirectUri = resolveYouTubeRedirectUri(req);
+          if (!clientId || !redirectUri) {
+            return res.status(400).json({ success: false, message: 'OAuth Client ID or public base URL is not configured on the server.' });
+          }
+          const state = signYouTubeOAuthState(sessionUser.id, YOUTUBE_OAUTH_STATE_SECRET);
+          return res.json({
+            success: true,
+            authUrl: buildYouTubeAuthUrl(clientId, redirectUri, state),
+            redirectUri,
+            alreadyConnected: Boolean(String(savedConfig?.youtubeRefreshToken || '').trim()),
+          });
+        }
+        if (!telegramId) {
+          return res.status(401).json({ success: false, message: 'Sign in, or pass ?telegramId=<chat_id> to connect via Telegram.' });
+        }
+        // Resolve the owning account for this Telegram user: an existing account whose
+        // telegramChatId matches wins; otherwise the persistent default owner account.
+        const linked = ServerDatabase.getUsers().find((u) => String(u.telegramChatId || '').trim() === telegramId);
+        const ownerUser = linked || ServerDatabase.getUsers().find((u) => u.id === 'global_default_user') || null;
+        if (!ownerUser) {
+          return res.status(500).json({ success: false, message: 'Default owner account is missing. Restart the server to re-seed it.' });
+        }
+        if (!linked && ownerUser.id === 'global_default_user') {
+          ServerDatabase.linkTelegramChatId(ownerUser.id, telegramId);
+        }
+        const savedConfig = (ServerDatabase.getBotConfig(ownerUser.id)?.config || null) as unknown as Record<string, unknown> | null;
+        const envClient = resolveEnvYouTubeClient();
+        const globalCreds = ServerDatabase.getGlobalYouTubeCredentials();
+        const clientId = String(savedConfig?.youtubeClientId || '').trim() || envClient.clientId || globalCreds.clientId;
+        const redirectUri = resolveYouTubeRedirectUri(req);
+        if (!clientId || !redirectUri) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'YouTube connect unavailable',
+            emoji: '⚙️',
+            bodyHtml: '<p>The server administrator has not finished the YouTube configuration yet. Please try again later.</p>',
+            ok: false,
+          });
+        }
+        const state = signYouTubeOAuthState(ownerUser.id, YOUTUBE_OAUTH_STATE_SECRET);
+        const authUrl = buildYouTubeAuthUrl(clientId, redirectUri, state);
+        console.log(`[YouTube OAuth] Telegram one-tap connect for chat ${telegramId} → owner ${ownerUser.id}`);
+        return res.redirect(302, authUrl);
+      } catch (error: any) {
+        console.warn('[YouTube OAuth] oauth-url failed:', error?.message || error);
+        return res.status(500).json({ success: false, message: String(error?.message || 'Failed to build the authorization URL.') });
+      }
+    })();
+  });
+
   // Step 2 — public callback: verify state, exchange code, persist refresh token (per-tenant).
   app.get('/api/youtube/oauth/callback', (req: express.Request, res: express.Response) => {
     void (async () => {

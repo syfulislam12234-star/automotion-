@@ -1286,16 +1286,26 @@ def _fmt_watch_time(minutes: object) -> str:
 
 def _yt_not_connected_text() -> str:
     return (
-        "📺 <b>YouTube Not Connected Yet</b>\n"
+        "📺 <b>Connect Your YouTube Channel</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "To unlock live analytics and AI SEO I need your YouTube OAuth credentials:\n\n"
-        "1️⃣ Open https://console.cloud.google.com → enable <b>YouTube Data API v3</b>\n"
-        "2️⃣ OAuth consent screen → External → add your Google account as a Test user\n"
-        "3️⃣ Credentials → <b>OAuth Client ID</b> → Web application → copy ID + Secret\n"
-        "4️⃣ ⚡ FASTEST: Web App → Config Panel → YouTube Studio tab → <b>\"Connect YouTube Channel with Google\"</b> — one click, refresh token saved automatically\n"
-        "5️⃣ Or set OWNER_YOUTUBE_CLIENT_ID / OWNER_YOUTUBE_CLIENT_SECRET / OWNER_YOUTUBE_REFRESH_TOKEN, then restart\n\n"
-        "Then send /yt_check again for your live channel report! ✨"
+        "Click the button below to authorize with Google in 1-click:\n\n"
+        "Your refresh token is saved automatically — no setup, no keys, no copy-pasting. "
+        "Once connected you get live analytics, AI SEO and viral predictions. ✨"
     )
+
+
+def _yt_connect_keyboard(chat_id: object) -> InlineKeyboardMarkup:
+    """One-tap OAuth keyboard: the button opens the server's oauth-url endpoint which
+    302-redirects straight to the Google consent screen for this Telegram user."""
+    base = PUBLIC_BASE_URL
+    if base:
+        connect_url = f"{base}/api/youtube/oauth-url?telegramId={chat_id}"
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 Connect YouTube Channel", url=connect_url)],
+            [InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home")],
+        ])
+    # Graceful degradation when no public base URL is configured.
+    return main_menu_keyboard()
 
 
 def _yt_friendly_error(err: Exception) -> str:
@@ -1380,7 +1390,7 @@ async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not update.effective_message or not update.effective_chat:
         return
     if not _youtube_connected():
-        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
         return
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -1410,7 +1420,7 @@ async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.effective_message or not update.effective_chat:
         return
     if not _youtube_connected():
-        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
         return
     chat_id = update.effective_chat.id
     try:
@@ -1628,7 +1638,7 @@ async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not update.effective_message or not update.effective_chat:
         return
     if not _youtube_connected():
-        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML)
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
         return
     chat_id = update.effective_chat.id
     try:

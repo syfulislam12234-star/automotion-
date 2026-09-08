@@ -333,12 +333,22 @@ export class TelegramBotService {
    */
   private static resolveTenantYouTubeCredentials(config: BotConfig | null): YouTubeCredentials | string | null {
     const extracted = extractYouTubeCredentials(config as unknown as Record<string, unknown> | null);
-    if (!extracted) return null;
-    // Client credentials missing → pass the bare refresh token so the analytics
-    // service can fall back to the deployment's OAuth client. The refresh token
-    // itself remains the isolation boundary (access tokens cache per refresh token).
-    if (extracted.clientId && extracted.clientSecret) return extracted;
-    return extracted.refreshToken;
+    if (extracted) {
+      // Client credentials missing → pass the bare refresh token so the analytics
+      // service can fall back to the deployment's OAuth client. The refresh token
+      // itself remains the isolation boundary (access tokens cache per refresh token).
+      if (extracted.clientId && extracted.clientSecret) return extracted;
+      return extracted.refreshToken;
+    }
+    // Fallback: the globally-shared credentials saved by the one-tap OAuth callback
+    // (youtubeCredentials.default) — lets standard Telegram users run /yt_check etc.
+    // right after authorizing, even when no per-user bot config exists yet.
+    const globalCreds = ServerDatabase.getGlobalYouTubeCredentials();
+    if (globalCreds.refreshToken) {
+      if (globalCreds.clientId && globalCreds.clientSecret) return globalCreds;
+      return globalCreds.refreshToken;
+    }
+    return null;
   }
 
   /** Maps a YouTubeAnalyticsError to a code-specific, actionable user message. */
@@ -396,21 +406,37 @@ export class TelegramBotService {
     };
   }
 
-  /** Not-connected guide shown instead of analytics when the tenant has no OAuth tokens. */
+  /** Public server base URL (same env chain as the OAuth redirect resolver). */
+  private static resolvePublicBaseUrl(): string {
+    return (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL
+      || process.env.SERVER_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  }
+
+  /** One-click connect message — standard users never see developer setup steps. */
   private static buildYtConnectGuide(): string {
     return [
-      '**📺 YouTube Not Connected Yet**',
+      '**📺 Connect Your YouTube Channel**',
       '',
-      'To unlock live analytics and AI SEO I need your YouTube OAuth credentials:',
+      'Click the button below to authorize with Google in 1-click:',
       '',
-      '1️⃣ Open https://console.cloud.google.com → enable **YouTube Data API v3**',
-      '2️⃣ OAuth consent screen → External → add your Google account as a Test user',
-      '3️⃣ Credentials → **OAuth Client ID** → Web application → copy ID + Secret',
-      '4️⃣ ⚡ FASTEST: Web App → Config Panel → YouTube Studio tab → **"Connect YouTube Channel with Google"** — one click, refresh token saved automatically',
-      '5️⃣ Or paste Client ID / Secret / Refresh Token manually in that same tab and Save',
-      '',
-      'Then send /yt_check again for your live channel report! ✨',
+      'Your refresh token is saved automatically — no setup, no keys, no copy-pasting. Once connected you get live analytics, AI SEO and viral predictions.',
     ].join('\n');
+  }
+
+  /** Inline keyboard with a direct URL button into the one-tap OAuth flow. */
+  private static buildYtConnectKeyboard(chatId: string | number): Record<string, any> {
+    const base = TelegramBotService.resolvePublicBaseUrl();
+    if (!base) {
+      // Graceful degradation: no public URL configured → menu only.
+      return TelegramBotService.buildMainMenuKeyboard();
+    }
+    const connectUrl = `${base}/api/youtube/oauth-url?telegramId=${encodeURIComponent(String(chatId))}`;
+    return {
+      inline_keyboard: [
+        [{ text: '🔗 Connect YouTube Channel', url: connectUrl }],
+        [{ text: '⬅️ Main Menu', callback_data: 'menu:home' }],
+      ],
+    };
   }
 
   /** Emojis for a single traffic source id (falls back to a generic bar). */
@@ -537,7 +563,7 @@ export class TelegramBotService {
   private static async handleYtCheckCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
-      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
       return;
     }
     const ytCheckCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytCheck', 'Channel Analytics (/yt_check)');
@@ -577,7 +603,7 @@ export class TelegramBotService {
   private static async handleYtSeoCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
-      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
       return;
     }
     const ytSeoCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytSeo', 'AI Channel SEO (/yt_seo)');
@@ -693,7 +719,7 @@ export class TelegramBotService {
   private static async handleYtViralCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
-      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildMainMenuKeyboard());
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
       return;
     }
     if (!TelegramBotService.aiGenerator) {

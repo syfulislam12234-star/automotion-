@@ -136,6 +136,20 @@ export class ServerDatabase {
     ServerDatabase.db.sessions[token] = session;
     ServerDatabase.save();
     return session;
+    }
+
+  /** All user accounts (internal admin/bot use — callers must not mutate or leak PII). */
+  public static getUsers(): UserAccount[] {
+    return ServerDatabase.db.users || [];
+  }
+
+  /** Persists the Telegram chat id onto a user account (matched by id or email). */
+  public static linkTelegramChatId(idOrEmail: string, chatId: string): UserAccount | null {
+    const user = ServerDatabase.getUserByIdOrEmail(idOrEmail);
+    if (!user) return null;
+    user.telegramChatId = String(chatId);
+    ServerDatabase.save();
+    return user;
   }
 
   public static hasAdminUsers(): boolean {
