@@ -1055,3 +1055,19 @@ export async function exchangeYouTubeOAuthCode(
   };
 }
 
+/**
+ * Phase 7: fetches the freshly-connected Google account's OWN YouTube channel via
+ * the Data API v3 `channels` endpoint (`mine=true`) so the OAuth callback can persist
+ * the REAL channel id + title mapped to the Telegram user who just connected.
+ */
+export async function getOAuthChannelIdentity(credentials: YouTubeCredentials | string): Promise<{ channelId: string; channelTitle: string }> {
+  const normalized = normalizeCredentials(credentials);
+  const accessToken = await resolveAccessToken(normalized);
+  const resource = await fetchOwnChannelResource(accessToken);
+  const snippet = resource?.snippet || {};
+  return {
+    channelId: String(resource?.id || ''),
+    channelTitle: String(snippet?.title || 'My Channel'),
+  };
+}
+

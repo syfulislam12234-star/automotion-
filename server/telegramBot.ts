@@ -473,10 +473,10 @@ export class TelegramBotService {
       // Graceful degradation: no public URL configured → menu only.
       return TelegramBotService.buildMainMenuKeyboard();
     }
-    const connectUrl = `${base}/api/youtube/oauth-url?telegramId=${encodeURIComponent(String(chatId))}`;
+    const connectUrl = `${base}/api/auth/youtube?telegramId=${encodeURIComponent(String(chatId))}`;
     return {
       inline_keyboard: [
-        [{ text: '🔗 Connect YouTube Channel', url: connectUrl }],
+        [{ text: '🔗 Connect YouTube', url: connectUrl }],
         [{ text: '⬅️ Main Menu', callback_data: 'menu:home' }],
       ],
     };
@@ -1933,6 +1933,7 @@ export class TelegramBotService {
           '/help or /setup — Show this master guide\n' +
           '/status — Live AI engine, provider pool and key status\n' +
           '/upload or /yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
+          '/connect_youtube — 1-click link your YouTube channel with Google OAuth\n' +
           '/yt_check or /analytics — Live channel views, impressions, CTR, watch time & health audit\n' +
           '/yt_seo — AI-generated channel keywords, viral bio, tags & SEO recommendations\n' +
           '/yt_viral — AI-powered viral video concept predictions for your channel\n' +
@@ -1982,6 +1983,17 @@ export class TelegramBotService {
       // /youtube — report the user's connected YouTube OAuth token status (DB-backed config).
       if (command === '/youtube') {
         await TelegramBotService.sendMessage(token, chatId, TelegramBotService.getYoutubeStatusReport(effectiveConfig), TelegramBotService.buildMainMenuKeyboard());
+        return { ok: true };
+      }
+      // /connect_youtube — Phase 7: 1-click Google OAuth to link a YouTube channel
+      // (inline URL button → /api/auth/youtube?telegramId=<chat_id>).
+      if (command === '/connect_youtube' || command === '/connectyoutube') {
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          TelegramBotService.buildYtConnectGuide(),
+          TelegramBotService.buildYtConnectKeyboard(chatId),
+        );
         return { ok: true };
       }
       // /yt_check (alias /analytics) — live channel stats, impressions, CTR and security audit.

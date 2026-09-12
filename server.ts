@@ -36,6 +36,7 @@ import {
   signYouTubeOAuthState,
   verifyYouTubeOAuthState,
   exchangeYouTubeOAuthCode,
+  getOAuthChannelIdentity,
 } from './server/youtubeAnalyticsService';
 import { BotConfig, UserAccount, AuthSession, SupportTicket } from './src/types';
 
@@ -2803,15 +2804,16 @@ async function startServer() {
     || process.env.YOUTUBE_CLIENT_SECRET
     || 'naxora-oauth-state-secret-v1').trim();
 
-  /** Deterministic redirect URI shared by the auth-url and callback endpoints. */
-  const resolveYouTubeRedirectUri = (req: express.Request): string => {
+  /** Deterministic redirect URI shared by the auth-url and callback endpoints.
+   *  Phase 7 passes the canonical `/api/auth/youtube/callback` path. */
+  const resolveYouTubeRedirectUri = (req: express.Request, callbackPath = '/api/youtube/oauth/callback'): string => {
     const configuredBase = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL
       || process.env.SERVER_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '');
-    if (configuredBase) return `${configuredBase}/api/youtube/oauth/callback`;
+    if (configuredBase) return `${configuredBase}${callbackPath}`;
     const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
     const proto = forwardedProto || req.protocol || 'https';
     const host = String(req.headers.host || '').trim();
-    return host ? `${proto}://${host}/api/youtube/oauth/callback` : '';
+    return host ? `${proto}://${host}${callbackPath}` : '';
   };
 
   /** Branded OAuth result page (auto-closes on success). */
@@ -3021,6 +3023,200 @@ async function startServer() {
             + (/redirect_uri_mismatch/i.test(detail)
               ? `<p>Add this exact Redirect URI in Google Cloud Console → Credentials → your OAuth Client → "Authorized redirect URIs":<br><code>${redirectHint}</code></p>`
               : ''),
+          ok: false,
+        });
+      }
+    })();
+  });
+
+  // ==========================================
+  // PHASE 7 — 1-CLICK TELEGRAM YOUTUBE OAUTH (canonical paths)
+  //   GET /api/auth/youtube?telegramId=<id>      — signs the raw Telegram id into the
+  //     Google OAuth `state` and 302-redirects straight to the consent screen.
+  //   GET /api/auth/youtube/callback?code&state  — verifies the state back into the
+  //     telegramId, exchanges the code for tokens, fetches the connected channel's
+  //     id + title via the Data API, stores everything mapped directly by telegramId,
+  //     renders the success page AND fires the "🎉 Success! …" Telegram message back.
+  // ==========================================
+
+  /** Sends the "🎉 Success!" confirmation to the Telegram chat that just connected
+   *  (fail-open: a notification error never breaks the completed OAuth flow). */
+  const sendTelegramYouTubeConnectedNotice = async (telegramId: string, channelTitle: string): Promise<void> => {
+    try {
+      const tid = String(telegramId || '').trim();
+      if (!tid) return;
+      const linked = ServerDatabase.getUsers().find((u) => String(u.telegramChatId || '').trim() === tid);
+      const ownerId = linked?.id || 'global_default_user';
+      const botToken = TelegramBotService.getUserBotToken(ownerId) || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      if (!botToken) {
+        console.warn(`[YouTube OAuth] Telegram success notice skipped: no bot token resolved for chat ${tid}.`);
+        return;
+      }
+      const safeTitle = String(channelTitle || 'your channel').replace(/[<>&]/g, '');
+      await TelegramBotService.sendUserMessage(botToken, tid, `🎉 Success! Your YouTube Channel (<b>${safeTitle}</b>) is now connected.`);
+    } catch (error: any) {
+      console.warn('[YouTube OAuth] Telegram success notice failed (non-fatal):', error?.message || error);
+    }
+  };
+
+  // Step 1 — Phase 7 Telegram one-tap entry: `?telegramId=<chat_id>` (no session needed).
+  app.get('/api/auth/youtube', (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const telegramId = String(req.query.telegramId || '').trim();
+        if (!telegramId) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'Telegram connect failed',
+            emoji: '⚠️',
+            bodyHtml: '<p>Missing <code>telegramId</code>. Start the connection from the Telegram bot with <code>/connect_youtube</code>.</p>',
+            ok: false,
+          });
+        }
+        // Resolve the owning account for this Telegram chat: an existing account whose
+        // telegramChatId matches wins; otherwise the persistent default owner account.
+        const linked = ServerDatabase.getUsers().find((u) => String(u.telegramChatId || '').trim() === telegramId);
+        const ownerUser = linked || ServerDatabase.getUsers().find((u) => u.id === 'global_default_user') || null;
+        if (!ownerUser) {
+          return res.status(500).json({ success: false, message: 'Default owner account is missing. Restart the server to re-seed it.' });
+        }
+        if (!linked && ownerUser.id === 'global_default_user') {
+          ServerDatabase.linkTelegramChatId(ownerUser.id, telegramId);
+        }
+        const savedConfig = (ServerDatabase.getBotConfig(ownerUser.id)?.config || null) as unknown as Record<string, unknown> | null;
+        const envClient = resolveEnvYouTubeClient();
+        const globalCreds = ServerDatabase.getGlobalYouTubeCredentials();
+        const clientId = String(savedConfig?.youtubeClientId || '').trim() || envClient.clientId || globalCreds.clientId;
+        const redirectUri = resolveYouTubeRedirectUri(req, '/api/auth/youtube/callback');
+        if (!clientId || !redirectUri) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'YouTube connect unavailable',
+            emoji: '⚙️',
+            bodyHtml: '<p>The server administrator has not finished the YouTube configuration yet. Please try again later.</p>',
+            ok: false,
+          });
+        }
+        // Phase 7: the raw Telegram id IS the signed OAuth state — it round-trips
+        // back through Google untouched so the callback can attribute the grant.
+        const state = signYouTubeOAuthState(telegramId, YOUTUBE_OAUTH_STATE_SECRET);
+        const authUrl = buildYouTubeAuthUrl(clientId, redirectUri, state);
+        console.log(`[YouTube OAuth] Phase 7 one-tap connect for telegramId ${telegramId} → owner ${ownerUser.id}`);
+        return res.redirect(302, authUrl);
+      } catch (error: any) {
+        console.warn('[YouTube OAuth] /api/auth/youtube failed:', error?.message || error);
+        return res.status(500).json({ success: false, message: String(error?.message || 'Failed to build the authorization URL.') });
+      }
+    })();
+  });
+
+  // Step 2 — Phase 7 callback: state decodes straight back to the Telegram chat id.
+  app.get('/api/auth/youtube/callback', (req: express.Request, res: express.Response) => {
+    void (async () => {
+      try {
+        const query = req.query as Record<string, unknown>;
+        const errorText = String(query.error || '').trim();
+        if (errorText) {
+          console.warn('[YouTube OAuth] Phase 7 callback reported an error:', errorText);
+          return sendYouTubeOAuthPage(res, {
+            title: 'Authorization declined',
+            emoji: '🚫',
+            bodyHtml: `<p>Google reported: <b>${errorText.replace(/[<>&]/g, '')}</b></p><p>Retry from the Telegram bot with <code>/connect_youtube</code>.</p>`,
+            ok: false,
+          });
+        }
+        const code = String(query.code || '').trim();
+        const state = String(query.state || '').trim();
+        if (!code || !state) {
+          return sendYouTubeOAuthPage(res, { title: 'Invalid OAuth callback', emoji: '⚠️', bodyHtml: '<p>Missing authorization code or state parameter.</p>', ok: false });
+        }
+        const telegramId = verifyYouTubeOAuthState(state, YOUTUBE_OAUTH_STATE_SECRET);
+        if (!telegramId) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'Connect link expired',
+            emoji: '⌛',
+            bodyHtml: '<p>This connect link has expired or is invalid. Return to the Telegram bot and tap <b>/connect_youtube</b> again.</p>',
+            ok: false,
+          });
+        }
+        const linked = ServerDatabase.getUsers().find((u) => String(u.telegramChatId || '').trim() === telegramId);
+        const ownerUser = linked || ServerDatabase.getUsers().find((u) => u.id === 'global_default_user') || null;
+        if (!ownerUser) {
+          return sendYouTubeOAuthPage(res, { title: 'Account not found', emoji: '⚠️', bodyHtml: '<p>The account that started this connection no longer exists.</p>', ok: false });
+        }
+        const existing = (ServerDatabase.getBotConfig(ownerUser.id)?.config || {}) as Partial<BotConfig>;
+        const envClient = resolveEnvYouTubeClient();
+        const globalCreds = ServerDatabase.getGlobalYouTubeCredentials();
+        const clientId = String(existing.youtubeClientId || '').trim() || envClient.clientId || globalCreds.clientId;
+        const clientSecret = String(existing.youtubeClientSecret || '').trim() || envClient.clientSecret || globalCreds.clientSecret;
+        const redirectUri = resolveYouTubeRedirectUri(req, '/api/auth/youtube/callback');
+        if (!clientId || !clientSecret || !redirectUri) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'OAuth client not configured',
+            emoji: '⚙️',
+            bodyHtml: '<p>The OAuth Client ID / Secret could not be resolved. Ask the administrator to configure YouTube OAuth.</p>',
+            ok: false,
+          });
+        }
+        const tokens = await exchangeYouTubeOAuthCode(code, clientId, clientSecret, redirectUri);
+        if (!tokens.refreshToken) {
+          return sendYouTubeOAuthPage(res, {
+            title: 'No refresh token returned',
+            emoji: '🔄',
+            bodyHtml: '<p>Google did not return a refresh token. Revoke app access at myaccount.google.com/permissions, then reconnect.</p>',
+            ok: false,
+          });
+        }
+        // Fetch the connected channel's id + title via the Data API `channels` endpoint.
+        let channelId = '';
+        let channelTitle = '';
+        try {
+          const identity = await getOAuthChannelIdentity({ clientId, clientSecret, refreshToken: tokens.refreshToken });
+          channelId = identity.channelId;
+          channelTitle = identity.channelTitle;
+        } catch (identityError: any) {
+          console.warn('[YouTube OAuth] Channel identity fetch failed (tokens still saved):', identityError?.message || identityError);
+        }
+        // Store the grant mapped DIRECTLY to the Telegram id, mirror the owner config +
+        // the global/default store, and keep the shared key store in sync.
+        ServerDatabase.saveTelegramYouTubeCredentials(telegramId, {
+          refreshToken: tokens.refreshToken,
+          clientId,
+          clientSecret,
+          channelId,
+          channelTitle,
+        });
+        ServerDatabase.saveBotConfig(ownerUser.id, {
+          ...existing,
+          youtubeClientId: clientId,
+          youtubeClientSecret: clientSecret,
+          youtubeRefreshToken: tokens.refreshToken,
+          youtubeChannelId: channelId,
+        } as unknown as BotConfig);
+        ServerDatabase.saveGlobalYouTubeCredentials(tokens.refreshToken, clientId, clientSecret);
+        GlobalApiKeyStore.syncFromDatabase();
+        console.log(
+          `[YouTube OAuth] Phase 7 connected telegramId ${telegramId}` +
+          ` { channel: "${channelTitle || 'n/a'}" (${channelId || 'id n/a'}), scope: ${tokens.scope || 'n/a'} }`,
+        );
+        // Browser feedback, then the Telegram success message.
+        const safeChannel = channelTitle.replace(/[<>&]/g, '');
+        const channelHtml = safeChannel
+          ? `<p>✅ Channel Connected Successfully! Your YouTube Channel <b>${safeChannel}</b> is linked to <b>Naxora AI</b>.</p>`
+          : '<p>✅ Channel Connected Successfully! Your YouTube channel is linked to <b>Naxora AI</b>.</p>';
+        sendYouTubeOAuthPage(res, {
+          title: 'Channel Connected Successfully!',
+          emoji: '✅',
+          bodyHtml: channelHtml + '<p>You can close this tab and return to Telegram.</p>',
+          ok: true,
+        });
+        void sendTelegramYouTubeConnectedNotice(telegramId, channelTitle);
+        return;
+      } catch (error: any) {
+        console.error('[YouTube OAuth] Phase 7 callback failed:', error?.message || error);
+        const detail = String(error?.message || 'Unexpected error.').replace(/[<>&]/g, '');
+        return sendYouTubeOAuthPage(res, {
+          title: 'Connection failed',
+          emoji: '❌',
+          bodyHtml: `<p>${detail}</p>`,
           ok: false,
         });
       }

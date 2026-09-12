@@ -2108,6 +2108,22 @@ async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await safe_reply(update, youtube_status_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 
+async def connect_youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /connect_youtube — 1-click Google OAuth to link a YouTube channel.
+
+    Phase 7: renders the one-tap inline button pointing at the canonical
+    /api/auth/youtube?telegramId=<chat_id> URL; the whole connect → save → notify
+    round-trip happens in the browser + server, so the user just taps and returns."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    await safe_reply(
+        update,
+        _yt_not_connected_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_yt_connect_keyboard(update.effective_chat.id),
+    )
+
+
 def _fmt_watch_time(minutes: object) -> str:
     """125.5 -> '2h 6m' style watch-time formatting."""
     try:
@@ -2129,13 +2145,14 @@ def _yt_not_connected_text() -> str:
 
 
 def _yt_connect_keyboard(chat_id: object) -> InlineKeyboardMarkup:
-    """One-tap OAuth keyboard: the button opens the server's oauth-url endpoint which
-    302-redirects straight to the Google consent screen for this Telegram user."""
+    """One-tap OAuth keyboard: the button opens the Phase 7 canonical connect URL
+    (`/api/auth/youtube?telegramId=<chat_id>`) which 302-redirects straight to the
+    Google consent screen for this Telegram user."""
     base = PUBLIC_BASE_URL
     if base:
-        connect_url = f"{base}/api/youtube/oauth-url?telegramId={chat_id}"
+        connect_url = f"{base}/api/auth/youtube?telegramId={chat_id}"
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Connect YouTube Channel", url=connect_url)],
+            [InlineKeyboardButton("🔗 Connect YouTube", url=connect_url)],
             [InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home")],
         ])
     # Graceful degradation when no public base URL is configured.
@@ -2956,6 +2973,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• <code>/id</code> - Show your Chat ID and user metadata\n\n"
         "🔹 <b>YouTube Studio:</b>\n"
         "• <code>/yt_check</code> or <code>/analytics</code> - Live channel analytics & health audit\n"
+        "• <code>/connect_youtube</code> - 1-click link your YouTube channel with Google OAuth\n"
                 "• <code>/yt_seo</code> - AI channel keywords, viral bio, tags & SEO plan\n"
         "• <code>/yt_viral</code> - AI-powered viral video concept predictions\n"
         "• <code>/yt_spy &lt;YouTube URL&gt;</code> - Spy a rival video: real metrics, hidden tags & AI takedown plan\n"
@@ -3746,6 +3764,7 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     # Register Slash Commands for Upload / YouTube / Settings + Interactive Menus
     app.add_handler(CommandHandler("upload", upload_command))
     app.add_handler(CommandHandler("youtube", youtube_command))
+    app.add_handler(CommandHandler(["connect_youtube", "connectyoutube"], connect_youtube_command))
     app.add_handler(CommandHandler(["yt_check", "analytics"], yt_check_command))
     app.add_handler(CommandHandler("yt_seo", yt_seo_command))
     app.add_handler(CommandHandler("yt_viral", yt_viral_command))

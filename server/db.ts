@@ -26,6 +26,10 @@ interface StoredDb {
   telegramUsage: Record<string, TelegramUsageEntry>;
   /** Phase 6: append-only Telegram Stars payment audit log (capped to the most recent 500). */
   telegramPayments: TelegramStarsPayment[];
+  /** Phase 7: per-Telegram-user YouTube OAuth credentials + channel metadata, keyed
+   *  DIRECTLY by the raw Telegram chat/user id so the OAuth callback can attribute
+   *  tokens to the exact chat that started the 1-click connection. */
+  telegramYouTubeCredentials: Record<string, TelegramYouTubeCredential>;
 }
 
 /** Zero-break defaults: everything enabled exactly like the pre-Phase-4 behaviour. */
@@ -104,6 +108,16 @@ export interface TelegramStarsPayment {
   at: string;
 }
 
+/** Phase 7: YouTube OAuth grant stored mapped directly to a Telegram user's chat id. */
+export interface TelegramYouTubeCredential {
+  refreshToken: string;
+  clientId: string;
+  clientSecret: string;
+  channelId: string;
+  channelTitle: string;
+  connectedAt: string;
+}
+
 export class ServerDatabase {
   private static db: StoredDb = {
     users: [],
@@ -122,6 +136,7 @@ export class ServerDatabase {
     youtubeCredentials: {},
     telegramUsage: {},
     telegramPayments: [],
+    telegramYouTubeCredentials: {},
   };
 
   public static init() {
@@ -1681,6 +1696,34 @@ export class ServerDatabase {
       clientId: entry?.clientId ? String(entry.clientId).trim() : '',
       clientSecret: entry?.clientSecret ? String(entry.clientSecret).trim() : '',
     };
+  }
+
+  /** Phase 7: persist a Telegram user's YouTube OAuth grant + channel metadata keyed
+   *  directly by the raw Telegram chat/user id. Read back with getTelegramYouTubeCredentials. */
+  static saveTelegramYouTubeCredentials(
+    telegramId: string,
+    data: { refreshToken: string; clientId: string; clientSecret: string; channelId?: string; channelTitle?: string },
+  ): void {
+    const clean = (v: string) => String(v || '').trim();
+    const key = clean(telegramId);
+    const rt = clean(data.refreshToken);
+    if (!key || !rt) return;
+    ServerDatabase.db.telegramYouTubeCredentials = ServerDatabase.db.telegramYouTubeCredentials || {};
+    ServerDatabase.db.telegramYouTubeCredentials[key] = {
+      refreshToken: rt,
+      clientId: clean(data.clientId),
+      clientSecret: clean(data.clientSecret),
+      channelId: clean(data.channelId || ''),
+      channelTitle: clean(data.channelTitle || ''),
+      connectedAt: new Date().toISOString(),
+    };
+    ServerDatabase.save();
+  }
+
+  /** Phase 7: returns the YouTube OAuth grant stored for a Telegram chat id (or null). */
+  static getTelegramYouTubeCredentials(telegramId: string): TelegramYouTubeCredential | null {
+    const key = String(telegramId || '').trim();
+    return ServerDatabase.db?.telegramYouTubeCredentials?.[key] || null;
   }
 
   public static removeSession(authHeader: string): void {
