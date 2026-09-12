@@ -2287,7 +2287,8 @@ def build_yt_spy_prompt(spy: dict) -> str:
         f"Channel: {spy.get('channelTitle', '')}\n"
         f"Views: {spy.get('viewCount') or 'hidden'} | Likes: {spy.get('likeCount') or 'hidden'} | Duration: {spy.get('durationText') or 'unknown'}\n"
         f"Hidden SEO Tags: {', '.join(spy.get('tags') or []) or 'none exposed by the API'}\n"
-        f"Description (first 600 chars): {str(spy.get('description') or 'empty')[:600]}"
+        f"Description (first 600 chars): {str(spy.get('description') or 'empty')[:600]}\n"
+        + (f"Transcript (first 2500 chars):\n{str(spy.get('transcript'))[:2500]}" if spy.get("transcript") else "")
     )
 
 
@@ -2382,6 +2383,14 @@ async def yt_spy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not spy:
             await safe_reply(update, "🔍 <b>Video not found.</b> It may be private/deleted — check the URL.", parse_mode=ParseMode.HTML)
             return
+        # Phase 8: enrich the spy analysis with the video transcript when available.
+        try:
+            transcript = await fetch_youtube_transcript(video_id)
+            if transcript.strip():
+                spy = dict(spy)
+                spy["transcript"] = transcript.strip()[:2500]
+        except Exception:
+            pass
         ai_text = await generate_ai_reply(chat_id, build_yt_spy_prompt(spy))
         ai_body = (ai_text or "").strip() or "⚠️ Empty AI breakdown — try again."
         views = spy.get("viewCount")
@@ -3398,6 +3407,177 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     asyncio.create_task(_send_later())
 
 
+# ==========================================
+# PHASE 8: AUTO LINK PARSING, YOUTUBE TRANSCRIPT EXTRACTOR
+#          & VIRAL SEO CHANNEL STRATEGIST
+# General-chat messages that contain a YouTube link are automatically enriched
+# with real metadata + a transcript and routed through a specialized Viral-SEO
+# system prompt (hook audit, High-CTR SEO suite, next-video blueprint). Ordinary
+# http(s) links are scraped to clean main text for the AI. Every network call
+# below fails open — it can never crash the bot.
+# ==========================================
+
+_YOUTUBE_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.|m\.)?"
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|v/|embed/|shorts/|live/|attribution_link\?(?:.*&)?v=)|youtu\.be/)"
+    r"([\w-]{5,30})",
+    re.IGNORECASE,
+)
+
+_HTTP_LINK_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+
+
+def extract_youtube_video_id(text: str) -> str:
+    """Pull a YouTube video id from watch/shorts/live/embed links, youtu.be or a bare id."""
+    if not text:
+        return ""
+    match = _YOUTUBE_URL_RE.search(str(text))
+    if match:
+        return match.group(1)
+    if re.fullmatch(r"[\w-]{11}", str(text).strip()):
+        return str(text).strip()
+    return ""
+
+
+def _first_http_link(text: str) -> str:
+    """First http(s) URL in a message (trailing punctuation trimmed)."""
+    match = _HTTP_LINK_RE.search(str(text or ""))
+    return match.group(0).rstrip(".,;:!?)]}'\">") if match else ""
+
+
+async def fetch_youtube_video_metadata(video_id: str) -> Dict[str, str]:
+    """Best-effort metadata (title, channel, description, views, tags). Prefers the
+    authorized Data API when OAuth is connected; falls back to keyless oEmbed."""
+    meta: Dict[str, str] = {"videoId": video_id, "title": "", "channelTitle": "", "description": "", "views": "", "tags": ""}
+    if _youtube_connected():
+        try:
+            token = await _youtube_access_token()
+            url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}"
+            data = await _yt_get_json(url, token)
+            items = (data.get("items") or []) if isinstance(data, dict) else []
+            if items:
+                snippet = items[0].get("snippet") or {}
+                stats = items[0].get("statistics") or {}
+                meta["title"] = str(snippet.get("title") or "")
+                meta["channelTitle"] = str(snippet.get("channelTitle") or "")
+                meta["description"] = str(snippet.get("description") or "")
+                meta["views"] = str(stats.get("viewCount") or "")
+                meta["tags"] = ", ".join(str(t).strip() for t in (snippet.get("tags") or [])[:10] if str(t).strip())
+                return meta
+        except Exception as err:
+            logger.debug("[Phase 8] Data API metadata lookup failed (falling back to oEmbed): %s", err)
+    try:
+        oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(oembed_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                if resp.status == 200:
+                    payload = await resp.json()
+                    meta["title"] = str(payload.get("title") or "")
+                    meta["channelTitle"] = str(payload.get("author_name") or "")
+    except Exception as err:
+        logger.debug("[Phase 8] oEmbed metadata lookup failed: %s", err)
+    return meta
+
+
+async def fetch_youtube_transcript(video_id: str) -> str:
+    """Transcript via youtube-transcript-api: explicit subtitles first, then
+    auto-generated Bengali/English subtitles. Returns '' when unavailable."""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except Exception as err:
+        logger.debug("[Phase 8] youtube-transcript-api not installed: %s", err)
+        return ""
+    attempts = (
+        {"video_id": video_id},
+        {"video_id": video_id, "languages": ["bn", "bn-BD", "hi", "en", "en-GB", "en-US"]},
+    )
+    for attempt in attempts:
+        try:
+            data = YouTubeTranscriptApi.get_transcript(**attempt)
+            segments = [seg for seg in (data or []) if isinstance(seg, dict) and seg.get("text")]
+            if segments:
+                return " ".join(str(seg["text"]).strip() for seg in segments).strip()
+        except Exception as err:
+            logger.debug("[Phase 8] transcript attempt failed (%s): %s", video_id, err)
+    return ""
+
+
+async def scrape_webpage_text(url: str) -> Dict[str, str]:
+    """Fetch a non-YouTube page and strip it to clean main text. Uses httpx +
+    BeautifulSoup when installed, else aiohttp + regex. Never raises."""
+    result: Dict[str, str] = {"url": url, "title": "", "text": ""}
+    body = ""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; NaxoraAIBot/1.0; +https://naxora.ai)"}
+    try:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=18.0, follow_redirects=True, headers=headers) as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    body = response.text
+        except Exception:
+            body = ""
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=18)) as resp:
+                    if resp.status == 200:
+                        body = await resp.text()
+    except Exception as err:
+        logger.debug("[Phase 8] Page fetch failed for %s: %s", url, err)
+        return result
+    if not body:
+        return result
+    try:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(body, "html.parser")
+            for tag in soup(["script", "style", "noscript", "svg", "nav", "header", "footer"]):
+                tag.decompose()
+            result["title"] = (soup.title.string or "").strip() if soup.title else ""
+            raw_text = soup.get_text(separator=" ")
+        except Exception:
+            raw_text = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", body)
+            raw_text = re.sub(r"(?is)<(nav|header|footer)[^>]*>.*?</\1>", " ", raw_text)
+            raw_text = re.sub(r"(?s)<[^>]+>", " ", raw_text)
+            match = re.search(r"(?is)<title[^>]*>(.*?)</title>", body)
+            if match:
+                result["title"] = match.group(1).strip()
+        text = re.sub(r"\s+", " ", raw_text).strip()
+        text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&quot;", '"')
+        result["text"] = text[:6000]
+    except Exception as err:
+        logger.debug("[Phase 8] Page parse failed for %s: %s", url, err)
+    return result
+
+
+def build_viral_seo_strategy_prompt(metadata: Dict[str, Any], transcript: str, notice: str = "") -> str:
+    """Phase 8: specialized Viral SEO Channel Strategist system prompt fed to the AI pool."""
+    title = str(metadata.get("title") or "Untitled video")
+    channel = str(metadata.get("channelTitle") or "Unknown channel")
+    description = str(metadata.get("description") or "")
+    views = str(metadata.get("views") or "")
+    tags = str(metadata.get("tags") or "")
+    transcript_block = str(transcript or "").strip()[:4000] if transcript else "[No transcript available]"
+    notice_block = f" {notice}" if notice else ""
+    return (
+        "You are an elite Viral SEO Channel Strategist. A user shared a YouTube video to be "
+        "reverse-engineered into a growth blueprint. Analyze the metadata and transcript below "
+        "and return a concise strategy with EXACTLY these sections:\n"
+        "🚀 Viral Hook & Script Audit — judge the first 5-10 second hook, retention flaws, and "
+        "script pacing (what keeps or bores viewers).\n"
+        "🎯 High-CTR SEO Suite — 3 click-worthy titles (aiming for 10%+ CTR), high-volume SEO tags "
+        "(comma-separated, easy to copy), and one optimized meta description.\n"
+        "🔥 Next Video Blueprint (80-90% Viral Potential) — analyze the channel's niche and this "
+        "video's context, then propose 3 specific next-video topics including for each: exact title, "
+        "hook angle, target audience psychology, and why it has a high viral probability.\n\n"
+        f"VIDEO TITLE: {title}\n"
+        f"CHANNEL: {channel}\n"
+        + (f"VIEWS: {views}\n" if views else "")
+        + (f"TAGS: {tags}\n" if tags else "")
+        + (f"DESCRIPTION: {description[:600]}\n" if description else "")
+        + f"TRANSCRIPT{notice_block}:\n{transcript_block}"
+    )
+
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process normal user chat messages and bridge to AI cascade."""
     if not update.effective_message or not update.effective_chat:
@@ -3425,9 +3605,53 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.debug(f"Typing indicator error: {e}")
 
+    # Phase 8: auto link parsing — YouTube links are transcribed and run through the
+    # Viral SEO Channel Strategist; other http(s) links are scraped for the AI.
+    video_id = extract_youtube_video_id(user_text)
+    link_url = _first_http_link(user_text) if not video_id else ""
+    notice = ""
+
     # Generate response
-    reply_text = await generate_ai_reply(chat_id, user_text)
-    if not reply_text.strip():
+    if video_id:
+        await safe_reply(
+            update,
+            "🔎 <b>Analyzing this video…</b> Grabbing metadata &amp; transcript, then cooking the viral blueprint! 🔥",
+            parse_mode=ParseMode.HTML,
+        )
+        metadata = await fetch_youtube_video_metadata(video_id)
+        transcript = await fetch_youtube_transcript(video_id)
+        if not transcript.strip():
+            notice = "(Transcript unavailable; analyzed using video metadata)"
+        ai_body = await generate_ai_reply(chat_id, build_viral_seo_strategy_prompt(metadata, transcript, notice))
+        reply_text = (ai_body or "").strip() or "⚠️ The AI strategist could not be reached right now. Please try again in a moment."
+        header_lines = ["🧠 <b>Viral SEO Channel Strategist</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━"]
+        if metadata.get("title"):
+            header_lines.append(f"📺 <b>{html.escape(str(metadata.get('title'))[:120])}</b>")
+        if notice:
+            header_lines.append(f"ℹ️ <i>{html.escape(notice)}</i>")
+        reply_text = "\n".join(header_lines) + "\n\n" + format_telegram_html(reply_text)
+    elif link_url:
+        await safe_reply(
+            update,
+            "🌐 <b>Fetching that page…</b> Extracting the content for the AI to analyze! 🔎",
+            parse_mode=ParseMode.HTML,
+        )
+        page = await scrape_webpage_text(link_url)
+        if page.get("text"):
+            reply_text = await generate_ai_reply(
+                chat_id,
+                "The user shared a web page. Summarize it and answer their implied question. "
+                "If they explicitly asked something, answer that with page evidence.\n\n"
+                f"PAGE URL: {page.get('url', '')}\n"
+                f"PAGE TITLE: {page.get('title', '')}\n\n"
+                f"PAGE CONTENT:\n{page.get('text', '')[:4000]}",
+            )
+        else:
+            reply_text = await generate_ai_reply(chat_id, user_text)
+    else:
+        reply_text = await generate_ai_reply(chat_id, user_text)
+
+    if not reply_text or not reply_text.strip():
         logger.warning("No AI response was available for Telegram message from %s.", chat_id)
         return
 

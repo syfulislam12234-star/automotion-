@@ -663,6 +663,7 @@ export class TelegramBotService {
   private static buildYtSpyPrompt(spy: {
     title: string; description: string; channelTitle: string; tags: string[];
     viewCount: number | null; likeCount: number | null; durationText: string;
+    transcript?: string;
   }): string {
     return [
       'You are an elite YouTube growth strategist performing a COMPETITOR BREAKDOWN.',
@@ -681,6 +682,7 @@ export class TelegramBotService {
       `Views: ${spy.viewCount ?? 'hidden'} | Likes: ${spy.likeCount ?? 'hidden'} | Duration: ${spy.durationText || 'unknown'}`,
       `Hidden SEO Tags: ${spy.tags.length ? spy.tags.join(', ') : 'none exposed by the API'}`,
       `Description (first 600 chars): ${String(spy.description || 'empty').slice(0, 600)}`,
+      ...(spy.transcript ? [`Transcript (first 2500 chars):`, `${String(spy.transcript).slice(0, 2500)}`] : []),
     ].join('\n');
   }
 
@@ -740,8 +742,14 @@ export class TelegramBotService {
         );
         return;
       }
+      const videoTranscript = await TelegramBotService.fetchYouTubeTranscript(videoId);
+      const spyPrompt = TelegramBotService.buildYtSpyPrompt(
+        videoTranscript.trim()
+          ? { ...spy, transcript: videoTranscript.trim().slice(0, 2500) }
+          : spy,
+      );
       const aiText = await TelegramBotService.aiGenerator(
-        TelegramBotService.buildYtSpyPrompt(spy),
+        spyPrompt,
         effectiveConfig?.modelName || undefined,
       );
       const aiBody = String(aiText || '').trim() || '⚠️ The AI cascade returned an empty breakdown — please try again in a moment.';
@@ -1281,6 +1289,154 @@ export class TelegramBotService {
     }
   }
 
+  // ==========================================
+  // PHASE 8: AUTO LINK PARSING, YOUTUBE TRANSCRIPT EXTRACTOR
+  //          & VIRAL SEO CHANNEL STRATEGIST
+  // Messages containing a YouTube link are auto-enriched with metadata + transcript
+  // and routed through a specialized Viral-SEO system prompt (hook audit, High-CTR
+  // SEO suite, next-video blueprint). Other http(s) links are scraped to clean main
+  // text. Every network call below fails open — it can never crash the bot.
+  // ==========================================
+
+  private static extractFirstHttpLink(text: string): string {
+    const match = String(text || '').match(/https?:\/\/[^\s]+/i);
+    return match ? match[0].replace(/[.,;:!?)\]}>'\"]+$/g, '') : '';
+  }
+
+  /** Best-effort metadata (title/channel) via the keyless YouTube oEmbed endpoint. */
+  private static async fetchYouTubeVideoMetadata(videoId: string): Promise<{ videoId: string; title: string; channelTitle: string; description: string; views: string; tags: string }> {
+    const meta = { videoId: String(videoId || ''), title: '', channelTitle: '', description: '', views: '', tags: '' };
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&format=json`;
+      const oembedResponse = await fetch(oembedUrl, { signal: AbortSignal.timeout(12000) });
+      if (oembedResponse.ok) {
+        const payload = await oembedResponse.json().catch(() => ({})) as Record<string, unknown>;
+        meta.title = String(payload?.title || '');
+        meta.channelTitle = String(payload?.author_name || '');
+      }
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Phase 8 oEmbed metadata failed:', error?.message || error);
+    }
+    return meta;
+  }
+
+  /** Decodes the common HTML entities found in transcript/scrape text. */
+  private static decodeHtmlEntities(value: string): string {
+    return String(value || '')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+      .replace(/&nbsp;/g, ' ');
+  }
+
+  /**
+   * Transcript via the watch-page `captionTracks` blob (identical technique to the
+   * `youtube-transcript` npm package — no external service, no API key). Prefers
+   * manually-authored English/Bengali captions, then auto-generated (asr) ones.
+   * Returns '' when transcripts are unavailable (caller falls back to metadata).
+   */
+  private static async fetchYouTubeTranscript(videoId: string): Promise<string> {
+    try {
+      const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(String(videoId || ''))}`;
+      const response = await fetch(watchUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NaxoraAIBot/1.0)' },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!response.ok) return '';
+      const watchHtml = await response.text();
+      let match = watchHtml.match(/"captionTracks":\s*(\[[\s\S]*?\])\s*,\s*"audioTracks"/);
+      if (!match) match = watchHtml.match(/"captionTracks":\s*(\[[\s\S]*?\])\s*}/);
+      if (!match) return '';
+      let tracks: any[] = [];
+      try {
+        tracks = JSON.parse(match[1]);
+      } catch {
+        return '';
+      }
+      if (!Array.isArray(tracks) || !tracks.length) return '';
+      const isWantedLang = (track: any): boolean => /^(en|en-US|en-GB|bn|bn-BD|hi)/i.test(String(track?.languageCode || ''));
+      const chosen = tracks.find((t: any) => !t?.kind && isWantedLang(t))
+        || tracks.find((t: any) => t?.kind === 'asr' && isWantedLang(t))
+        || tracks[0];
+      const baseUrl = String(chosen?.baseUrl || '');
+      if (!baseUrl) return '';
+      const xmlResponse = await fetch(baseUrl, { signal: AbortSignal.timeout(15000) });
+      if (!xmlResponse.ok) return '';
+      const xml = await xmlResponse.text();
+      const texts: string[] = [];
+      for (const entry of xml.matchAll(/<text[^>]*>(.*?)<\/text>/gs)) {
+        const segment = String(entry?.[1] || '').trim();
+        if (segment) texts.push(segment);
+      }
+      return TelegramBotService.decodeHtmlEntities(texts.join(' ')).trim();
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Phase 8 transcript fetch failed:', error?.message || error);
+      return '';
+    }
+  }
+
+  /** Fetches a non-YouTube page and strips it to clean main text (fetch + regex). */
+  private static async scrapeWebpageText(url: string): Promise<{ url: string; title: string; text: string }> {
+    const result = { url: String(url || ''), title: '', text: '' };
+    let body = '';
+    try {
+      const response = await fetch(result.url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NaxoraAIBot/1.0; +https://naxora.ai)' },
+        signal: AbortSignal.timeout(18000),
+        redirect: 'follow',
+      });
+      if (!response.ok) return result;
+      const contentType = String(response.headers.get('content-type') || '');
+      if (/text|html|json/i.test(contentType)) body = await response.text();
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Phase 8 page fetch failed:', error?.message || error);
+      return result;
+    }
+    if (!body) return result;
+    try {
+      body = body.replace(/(?is)<script[^>]*>.*?<\/script>/g, ' ')
+        .replace(/(?is)<style[^>]*>.*?<\/style>/g, ' ')
+        .replace(/(?is)<(nav|header|footer|noscript|svg)[^>]*>.*?<\/\1>/g, ' ');
+      const titleMatch = body.match(/(?is)<title[^>]*>(.*?)<\/title>/);
+      if (titleMatch) result.title = titleMatch[1].trim();
+      let rawText = body.replace(/(?s)<[^>]+>/g, ' ');
+      rawText = rawText.replace(/[ \t\r\f\v]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+      result.text = TelegramBotService.decodeHtmlEntities(rawText).slice(0, 6000);
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Phase 8 page parse failed:', error?.message || error);
+    }
+    return result;
+  }
+
+  /** Phase 8: specialized Viral SEO Channel Strategist system prompt fed to the AI pool. */
+  private static buildViralSeoStrategyPrompt(
+    metadata: { title: string; channelTitle: string; description: string; views: string; tags: string },
+    transcript: string,
+    notice = '',
+  ): string {
+    const title = String(metadata?.title || 'Untitled video');
+    const channel = String(metadata?.channelTitle || 'Unknown channel');
+    const description = String(metadata?.description || '');
+    const views = String(metadata?.views || '');
+    const tags = String(metadata?.tags || '');
+    const transcriptBlock = transcript ? String(transcript).slice(0, 4000) : '[No transcript available]';
+    const noticeBlock = notice ? ` ${notice}` : '';
+    return [
+      'You are an elite Viral SEO Channel Strategist. A user shared a YouTube video to be reverse-engineered into a growth blueprint.',
+      'Analyze the metadata and transcript below and return a concise strategy with EXACTLY these sections:',
+      '🚀 Viral Hook & Script Audit — judge the first 5-10 second hook, retention flaws, and script pacing (what keeps or bores viewers).',
+      '🎯 High-CTR SEO Suite — 3 click-worthy titles (aiming for 10%+ CTR), high-volume SEO tags (comma-separated, easy to copy), and one optimized meta description.',
+      '🔥 Next Video Blueprint (80-90% Viral Potential) — analyze the channel\'s niche and this video\'s context, then propose 3 specific next-video topics including for each: exact title, hook angle, target audience psychology, and why it has a high viral probability.',
+      '',
+      `VIDEO TITLE: ${title}`,
+      `CHANNEL: ${channel}`,
+      ...(views ? [`VIEWS: ${views}`] : []),
+      ...(tags ? [`TAGS: ${tags}`] : []),
+      ...(description ? [`DESCRIPTION: ${description.slice(0, 600)}`] : []),
+      `TRANSCRIPT${noticeBlock}:`,
+      transcriptBlock,
+    ].join('\n');
+  }
+
   /** Telegram requires pre-checkout queries to be answered within 10 seconds. */
   private static async answerPreCheckoutQuery(token: string, preCheckoutQueryId: string, ok: boolean, errorMessage?: string): Promise<void> {
     try {
@@ -1798,7 +1954,7 @@ export class TelegramBotService {
       const preCheckoutQuery = update?.pre_checkout_query || null;
       const successfulPayment = message?.successful_payment || null;
       const chatId = message?.chat?.id;
-      const text = typeof message?.text === 'string' ? message.text.trim() : '';
+      let text = typeof message?.text === 'string' ? message.text.trim() : '';
       if (!chatId && !preCheckoutQuery) return { ok: true, ignored: true };
 
       TelegramBotService.processedUpdates++;
@@ -2108,6 +2264,54 @@ export class TelegramBotService {
       if (keyboardAction) {
         await TelegramBotService.handlePersistentKeyboardAction(token, chatId, keyboardAction, effectiveConfig);
         return { ok: true };
+      }
+
+      // Phase 8: auto link parsing — YouTube links are transcribed & run through the
+      // Viral SEO Channel Strategist; other http(s) links are scraped for context.
+      const youTubeVideoId = TelegramBotService.extractYouTubeVideoId(text);
+      if (youTubeVideoId) {
+        await TelegramBotService.sendMessage(token, chatId, '🔎 **Analyzing this video…** Grabbing metadata & transcript, then cooking the viral blueprint! 🔥');
+        const videoMeta = await TelegramBotService.fetchYouTubeVideoMetadata(youTubeVideoId);
+        const videoTranscript = await TelegramBotService.fetchYouTubeTranscript(youTubeVideoId);
+        const transcriptNotice = videoTranscript.trim() ? '' : '(Transcript unavailable; analyzed using video metadata)';
+        const strategyPrompt = TelegramBotService.buildViralSeoStrategyPrompt(videoMeta, videoTranscript, transcriptNotice);
+        let strategyReply = '⚠️ The AI strategist could not be reached right now. Please try again in a moment.';
+        if (TelegramBotService.aiGenerator) {
+          try {
+            const ai = await TelegramBotService.aiGenerator(strategyPrompt, effectiveConfig?.modelName || undefined);
+            if (ai?.trim()) strategyReply = ai.trim();
+          } catch (error: any) {
+            console.warn('[TelegramBotService] Phase 8 strategy AI failed:', error?.message || error);
+          }
+        }
+        const header = [
+          '🧠 **Viral SEO Channel Strategist**',
+          '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+          videoMeta.title ? `📺 **${TelegramBotService.escapeHtml(videoMeta.title.slice(0, 120))}**` : '',
+          transcriptNotice ? `ℹ️ ${transcriptNotice}` : '',
+        ].filter((line) => line !== '').join('\n');
+        await TelegramBotService.sendTelegramMessage(
+          chatId,
+          await TelegramBotService.appendReferralFooter(`${header}\n\n${strategyReply}`, token, message?.from?.id ?? chatId),
+          token,
+        );
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      const sharedLink = TelegramBotService.extractFirstHttpLink(text);
+      if (sharedLink) {
+        await TelegramBotService.sendMessage(token, chatId, '🌐 **Fetching that page…** Extracting the content for the AI to analyze! 🔎');
+        const page = await TelegramBotService.scrapeWebpageText(sharedLink);
+        if (page.text.trim()) {
+          text = [
+            'The user shared a web page. Summarize it and answer their implied question. If they explicitly asked something, answer that with page evidence.',
+            '',
+            `PAGE URL: ${page.url}`,
+            `PAGE TITLE: ${page.title}`,
+            '',
+            `PAGE CONTENT:\n${page.text.slice(0, 4000)}`,
+          ].join('\n');
+        }
       }
 
       void TelegramBotService.sendChatAction(token, chatId).catch((error: any) => {
