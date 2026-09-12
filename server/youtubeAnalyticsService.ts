@@ -87,6 +87,22 @@ export interface LatestVideoInfo {
   commentCount: number | null;
 }
 
+/** Phase 5 Competitor Video Spy: a public rival video fetched via the Data API v3
+ *  `videos` endpoint (snippet + statistics + contentDetails) for /yt_spy analysis. */
+export interface CompetitorVideoSpy {
+  videoId: string;
+  title: string;
+  description: string;
+  channelTitle: string;
+  tags: string[];
+  publishedAt: string;
+  duration: string;
+  durationText: string;
+  viewCount: number | null;
+  likeCount: number | null;
+  commentCount: number | null;
+}
+
 export interface ChannelSeoContext {
   channelId: string;
   title: string;
@@ -363,6 +379,65 @@ function buildChannelAudit(resource: ChannelResource): ChannelAudit {
 // ==========================================
 // PUBLIC FETCHER 1 â€” CHANNEL STATS & AUDIT
 // ==========================================
+
+// ==========================================
+// PUBLIC FETCHER — PHASE 5 COMPETITOR VIDEO SPY (/yt_spy)
+// ==========================================
+
+/**
+ * Phase 5: fetches a rival video's public Data API v3 resource (snippet, tags,
+ * statistics, contentDetails) for the /yt_spy competitor analysis. Uses the same
+ * tenant OAuth credential chain as the other fetchers. Returns null when the video
+ * does not exist or is private/deleted (404-shaped, not an authorization failure).
+ */
+export async function getCompetitorVideoSpy(
+  credentials: YouTubeCredentials | string,
+  videoId: string,
+): Promise<CompetitorVideoSpy | null> {
+  const cleanVideoId = String(videoId || '').trim();
+  if (!cleanVideoId || !/^[\w-]{5,30}$/.test(cleanVideoId)) return null;
+  const normalized = normalizeCredentials(credentials);
+  const accessToken = await resolveAccessToken(normalized);
+  const { status, ok, data } = await googleApiGetJson(
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${encodeURIComponent(cleanVideoId)}`,
+    accessToken,
+  );
+  if (!ok) {
+    // A missing/private rival video is a benign miss — surface it as null, not an auth error.
+    if (status === 404 || /notfound|videoNotFound|forbidden|private/i.test(String(data?.error?.errors?.[0]?.reason || data?.error?.message || ''))) {
+      return null;
+    }
+    const reason = String(data?.error?.errors?.[0]?.reason || data?.error?.message || `HTTP ${status}`);
+    console.error('[YouTubeAnalyticsService] Competitor video lookup failed:', JSON.stringify(data?.error || { status }));
+    const classification = classifyGoogleError(status, reason, String(data?.error?.errors?.[0]?.reason || ''));
+    throw new YouTubeAnalyticsError(
+      `Competitor video lookup failed: ${reason}`,
+      classification.authorizationIssue,
+      classification.code,
+    );
+  }
+  const item: any = (Array.isArray(data?.items) ? data.items : [])[0];
+  if (!item) return null;
+  const snippet = item.snippet || {};
+  const statistics = item.statistics || {};
+  const contentDetails = item.contentDetails || {};
+  const durationIso = String(contentDetails.duration || '');
+  return {
+    videoId: String(item.id || cleanVideoId),
+    title: String(snippet.title || 'Untitled video'),
+    description: String(snippet.description || ''),
+    channelTitle: String(snippet.channelTitle || ''),
+    tags: (Array.isArray(snippet.tags) ? snippet.tags : [])
+      .map((tag: any) => String(tag || '').trim())
+      .filter(Boolean),
+    publishedAt: String(snippet.publishedAt || ''),
+    duration: durationIso,
+    durationText: formatDuration(durationIso),
+    viewCount: statistics.viewCount !== undefined && statistics.viewCount !== null ? toNumber(statistics.viewCount) : null,
+    likeCount: statistics.likeCount !== undefined && statistics.likeCount !== null ? toNumber(statistics.likeCount) : null,
+    commentCount: statistics.commentCount !== undefined && statistics.commentCount !== null ? toNumber(statistics.commentCount) : null,
+  };
+}
 
 /**
  * Fetches the tenant's channel statistics plus a status/audit report:

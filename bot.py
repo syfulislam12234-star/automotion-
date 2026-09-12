@@ -10,6 +10,13 @@ Key Capabilities:
 4. Telegram Markdown Chunking (up to 4000 chars) with automatic plain-text fallback for parse errors
 5. Async HTTP server (aiohttp) for /health and /webhook endpoints
 6. Phase 1 Viral Shorts Studio: /viral_shorts <topic|YouTube URL> -> AI hook, script, hashtags & thumbnail prompt
+7. Phase 2 Freemium & Payments: 3 free AI generations/day per Telegram user + Telegram Stars top-ups (paywall + auto-credit)
+8. Phase 4 Free AI Thumbnail Generator: /thumbnail <prompt> -> 1280×720 Flux render via Pollinations.ai (sendPhoto buffer + regenerate/copy actions)
+9. Phase 5 Competitor Video Spy: /yt_spy <YouTube URL> -> real rival metrics,
+   hidden SEO tags & Gemini "How to Beat This Video" takedown plan
+10. Phase 6 AI Voiceover Generator: /tts <text> -> free Microsoft Edge neural TTS
+    (.mp3, no API key) with Bengali auto-detect + "🔊 Generate Voiceover" button
+    on every /viral_shorts script
 """
 
 import os
@@ -20,9 +27,10 @@ import html
 import logging
 import asyncio
 import hashlib
+import tempfile
 import time
-from datetime import datetime, timedelta
-from urllib.parse import unquote
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, unquote
 from typing import Dict, List, Any, Optional
 
 import aiohttp
@@ -298,13 +306,14 @@ def is_feature_enabled(feature: str) -> bool:
 
 # Lazy-loaded python-telegram-bot modules
 try:
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Update
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, Update
     from telegram.constants import ParseMode, ChatAction
     from telegram.ext import (
         Application,
         CallbackQueryHandler,
         CommandHandler,
         MessageHandler,
+        PreCheckoutQueryHandler,
         ContextTypes,
         filters,
     )
@@ -749,6 +758,10 @@ def yt_viral_keyboard() -> InlineKeyboardMarkup:
 # the inline "🔄 Regenerate" / "📋 Copy Script" buttons can act without re-prompting.
 viral_shorts_state: Dict[int, Dict[str, str]] = {}
 
+# Phase 4: per-chat memory of the last AI thumbnail prompt so the inline
+# "🔄 Regenerate Thumbnail" / "📜 Copy Prompt" buttons can act without re-typing.
+thumbnail_state: Dict[int, Dict[str, str]] = {}
+
 # Canonical section markers the AI is instructed to emit. The hashtag marker is
 # searched WITHOUT its variation selector so "🏷" and "🏷️" both match.
 _VIRAL_SHORTS_SECTION_MARKERS: List[str] = ["🪝", "📜", "🏷", "🎨"]
@@ -815,6 +828,9 @@ def viral_shorts_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 Copy Script", callback_data="vs:copy_script"),
         ],
         [
+            InlineKeyboardButton("🔊 Generate Voiceover", callback_data="vs:tts"),
+        ],
+        [
             InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
         ],
     ])
@@ -825,6 +841,650 @@ async def generate_viral_shorts_package(chat_id: int, topic: str) -> str:
     ai_text = await generate_ai_reply(chat_id, build_viral_shorts_prompt(topic))
     viral_shorts_state[chat_id] = {"topic": topic, "text": ai_text}
     return ai_text
+
+
+# ==========================================
+# PHASE 6: AI VOICEOVER GENERATOR (/tts)
+# Free Microsoft Edge neural TTS (no API key, no cost): Bengali text is
+# auto-detected (Bangla unicode) and read with a bn-BD voice; anything else
+# uses a natural English voice. The .mp3 is synthesized to a temp file,
+# delivered via send_audio, then immediately deleted from disk.
+# ==========================================
+
+TTS_MAX_CHARS = 4000
+
+_EDGE_TTS_VOICES: Dict[str, List[str]] = {
+    "bn": ["bn-BD-NabanitaNeural", "bn-BD-PradeepNeural"],
+    "en": ["en-US-AvaNeural", "en-US-ChristopherNeural"],
+}
+
+# Bangla unicode block U+0980–U+09FF — quick language auto-detection.
+_BENGALI_TTS_RE = re.compile(r"[\u0980-\u09FF]+")
+
+
+def _pick_tts_voice(text: str) -> str:
+    """Auto-detect Bengali (Bangla unicode) -> bn-BD voice; default -> en-US voice.
+    Deterministic per text length so identical input yields the same voice."""
+    lang = "bn" if _BENGALI_TTS_RE.search(text or "") else "en"
+    return _EDGE_TTS_VOICES[lang][len(text or "") % len(_EDGE_TTS_VOICES[lang])]
+
+
+async def generate_tts_audio(text: str) -> str:
+    """Synthesize speech with Microsoft Edge TTS (free, no API key) into a temp .mp3.
+    Returns the absolute path of the audio file — the caller MUST delete it."""
+    # Lazy import so the bot still boots when edge-tts is not yet installed.
+    try:
+        from edge_tts import Communicate
+    except Exception:
+        raise RuntimeError(
+            "edge-tts is not installed — run `py -3 -m pip install -r requirements.txt` "
+            "(or `py -3 -m pip install edge-tts`) and restart the bot."
+        )
+    clean_text = (text or "").strip()[:TTS_MAX_CHARS] or "Hello from Naxora AI."
+    voice = _pick_tts_voice(clean_text)
+    fd, out_path = tempfile.mkstemp(prefix="naxora_tts_", suffix=".mp3")
+    os.close(fd)
+    try:
+        await Communicate(clean_text, voice).save(out_path)
+        if not os.path.exists(out_path) or os.path.getsize(out_path) <= 0:
+            raise RuntimeError("Edge TTS returned an empty audio file.")
+        return out_path
+    except Exception:
+        try:
+            os.remove(out_path)
+        except Exception:
+            pass
+        raise
+
+
+async def send_tts_audio(
+    bot: Any,
+    chat_id: int,
+    text: str,
+    caption: str,
+    reply_markup: Optional[Any] = None,
+) -> None:
+    """Generate an Edge TTS .mp3, deliver it as Telegram audio, then delete the temp file."""
+    out_path = ""
+    try:
+        out_path = await generate_tts_audio(text)
+        with open(out_path, "rb") as handle:
+            audio_bytes = handle.read()
+        await bot.send_audio(
+            chat_id=chat_id,
+            audio=audio_bytes,
+            title="Naxora AI Voiceover",
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
+    finally:
+        if out_path:
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+
+
+async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /tts <text> — free Edge neural voiceover (.mp3). Bengali auto-detect."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    text = " ".join(context.args) if context.args else ""
+    if not text:
+        await safe_reply(
+            update,
+            "🎙️ <b>AI Voiceover Generator</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Send me <b>any text</b> and I'll turn it into a natural neural <b>voiceover (.mp3)</b> — 100% free through Microsoft Edge TTS.\n"
+            "• 🇧🇩 <b>Bengali auto-detected</b> → bn-BD neural voice\n"
+            "• 🌎 Default → natural English voice\n\n"
+            "Example: <code>/tts Welcome to Naxora AI — your viral script starts now!</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+        return
+    if await telegram_ai_quota_gate(update, context, "AI Voiceover (/tts)"):
+        return
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
+    except Exception:
+        pass
+    await safe_reply(
+        update,
+        "🎙️ <b>Synthesizing your voiceover…</b> The neural voice is warming up! 🔥",
+        parse_mode=ParseMode.HTML,
+    )
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
+    try:
+        caption = append_free_tier_footer(
+            "🎙️ <b>AI Voiceover</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 <i>{html.escape(text[:120])}{'…' if len(text) > 120 else ''}</i>\n"
+            "✨ <i>Microsoft Edge neural voice · 100% free</i>",
+            tg_user_id,
+        )
+        await send_tts_audio(context.bot, chat_id, text, caption)
+    except Exception as err:
+        logger.warning("⚠️ /tts failed: %s", err)
+        await safe_reply(
+            update,
+            "⚠️ <b>Voiceover generation failed.</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Edge TTS may be busy, or the <code>edge-tts</code> package isn't installed. Please try again in a moment.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+# ==========================================
+# PHASE 4: FREE AI THUMBNAIL GENERATOR (/thumbnail)
+# 100% free image engine (Pollinations.ai — no API key, no cost): renders a
+# click-ready 1280×720 thumbnail with the Flux model and delivers it as a real
+# Telegram photo (in-memory buffer, no temp files).
+# ==========================================
+
+def thumbnail_image_url(prompt: str) -> str:
+    """Phase 4: Pollinations.ai free image engine — 1280×720 thumbnail, Flux model."""
+    return f"https://pollinations.ai/p/{quote(str(prompt or '').strip())}?width=1280&height=720&model=flux"
+
+
+def thumbnail_keyboard() -> InlineKeyboardMarkup:
+    """Inline actions attached to every generated AI thumbnail."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Regenerate Thumbnail", callback_data="th:regenerate"),
+            InlineKeyboardButton("📜 Copy Prompt", callback_data="th:copy_prompt"),
+        ],
+    ])
+
+
+async def send_ai_thumbnail(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, prompt: str) -> None:
+    """Download the Pollinations render and deliver it via send_photo (image buffer,
+    never a URL stub). Falls back to the direct link when the engine is unreachable."""
+    clean_prompt = str(prompt or "").strip()
+    image_url = thumbnail_image_url(clean_prompt)
+    image_bytes = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                if resp.status == 200 and str(resp.content_type or "").startswith("image"):
+                    image_bytes = await resp.read()
+                else:
+                    raise RuntimeError(f"thumbnail engine HTTP {resp.status}")
+    except Exception as err:
+        logger.warning("Pollinations thumbnail download failed: %s", err)
+        await safe_reply(
+            update,
+            "⚠️ <b>Could not render your thumbnail right now.</b> The image engine is busy or unreachable.\n\n"
+            f"🔗 <b>Direct link (try again in a moment):</b> {html.escape(image_url)}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+        return
+
+    caption = (
+        "🎨 <b>AI Thumbnail</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Prompt:</b> <i>{html.escape(clean_prompt)}</i>\n"
+        "✨ <i>1280×720 HD · Flux engine · 100% free</i>"
+    )
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
+    caption = append_free_tier_footer(caption, tg_user_id)
+    thumbnail_state[chat_id] = {"prompt": clean_prompt}
+    send_kwargs = {
+        "caption": caption,
+        "parse_mode": ParseMode.HTML,
+        "reply_markup": thumbnail_keyboard(),
+    }
+    try:
+        if update.effective_message:
+            await update.effective_message.reply_photo(photo=image_bytes, **send_kwargs)
+        else:
+            await context.bot.send_photo(chat_id=chat_id, photo=image_bytes, **send_kwargs)
+    except Exception as err:
+        logger.warning("AI thumbnail reply_photo failed, retrying via bot.send_photo: %s", err)
+        try:
+            await context.bot.send_photo(chat_id=chat_id, photo=image_bytes, **send_kwargs)
+        except Exception as err2:
+            logger.error("AI thumbnail delivery failed entirely: %s", err2)
+            await safe_reply(
+                update,
+                f"⚠️ <b>Thumbnail rendered but delivery failed.</b>\n🔗 Direct link: {html.escape(image_url)}",
+                parse_mode=ParseMode.HTML,
+            )
+
+
+async def thumbnail_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /thumbnail <prompt> — free AI YouTube-thumbnail generator (1280×720 Flux)."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    prompt = " ".join(context.args or []).strip()
+    if not prompt:
+        await safe_reply(
+            update,
+            "🎨 <b>AI Thumbnail Generator</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Send a <b>short visual description</b> and I'll render a click-ready <b>1280×720</b> thumbnail "
+            "with the free Flux image engine — no API key, no cost.\n\n"
+            "✨ <b>Tip:</b> describe the subject, mood and any text overlay.\n"
+            "Example: <code>/thumbnail Gaming setup with purple neon glow, bold text: TOP 10</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+        return
+    if await telegram_ai_quota_gate(update, context, "AI Thumbnail (/thumbnail)"):
+        return
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+    except Exception:
+        pass
+    await safe_reply(update, "🎨 <b>Rendering your thumbnail…</b> Flux engine is painting 1280×720 pixels. One moment!", parse_mode=ParseMode.HTML)
+    await send_ai_thumbnail(update, context, chat_id, prompt)
+
+
+# ==========================================
+# PHASE 2: TELEGRAM FREEMIUM QUOTA + STARS PAYMENTS
+# Every Telegram user gets 3 free AI generations (SEO, Shorts, Analytics, ...) per
+# UTC day. Beyond that they can top up with Telegram Stars: 50 Stars -> 20 extra
+# credits (never expire) or 100 Stars -> Pro Creator (unlimited for 30 days).
+# Consumption order: Pro (unlimited) -> free daily quota -> paid extra credits.
+#
+# The Node.js server owns data_store.json and this worker only READS it (see the
+# Phase 4 note above), so the per-user usage ledger lives in its own sidecar file
+# (telegram_usage.json) with the same schema the Node ServerDatabase persists.
+# Every accounting failure fails OPEN so the freemium layer can never take a
+# working bot down.
+# ==========================================
+
+TELEGRAM_FREE_AI_DAILY_LIMIT = 3
+TELEGRAM_PRO_CREATOR_DAYS = 30
+TELEGRAM_EXTRA_CREDITS_PER_INVOICE = 20
+TELEGRAM_REFERRAL_BONUS_CREDITS = 10
+TELEGRAM_USAGE_STORE_FILE = os.path.join(os.getcwd(), "telegram_usage.json")
+_TELEGRAM_USAGE_LOCK = asyncio.Lock()
+_TG_BOT_USERNAME_CACHE = ""
+
+STARS_PRODUCTS: Dict[str, Dict[str, Any]] = {
+    "buy_credits": {
+        "title": "20 Extra AI Credits",
+        "description": "50 Stars -> 20 extra AI generations (SEO, Shorts, Analytics). Credits never expire.",
+        "payload": "tg_stars:extra_credits_20",
+        "stars": 50,
+        "button": "⭐️ 50 Stars → 20 Extra Credits",
+    },
+    "buy_pro": {
+        "title": "Pro Creator (30 Days)",
+        "description": "100 Stars -> Unlimited AI generations (SEO, Shorts, Analytics & more) for 30 days.",
+        "payload": "tg_stars:pro_creator_30d",
+        "stars": 100,
+        "button": "⭐️ 100 Stars → Pro Creator (Unlimited)",
+    },
+}
+
+
+def _tg_usage_today() -> str:
+    """UTC calendar day (YYYY-MM-DD) — the free counter resets automatically on change."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _load_telegram_usage_store() -> Dict[str, Any]:
+    try:
+        if os.path.exists(TELEGRAM_USAGE_STORE_FILE):
+            with open(TELEGRAM_USAGE_STORE_FILE, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+                if isinstance(data, dict):
+                    data.setdefault("users", {})
+                    data.setdefault("payments", [])
+                    return data
+    except Exception as err:
+        logger.debug("telegram_usage store read failed (fail-open): %s", err)
+    return {"users": {}, "payments": []}
+
+
+def _save_telegram_usage_store(data: Dict[str, Any]) -> None:
+    """Atomic write (tmp + os.replace) so a crash can never corrupt the ledger."""
+    try:
+        tmp_path = TELEGRAM_USAGE_STORE_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, TELEGRAM_USAGE_STORE_FILE)
+    except Exception as err:
+        logger.warning("telegram_usage store write failed (fail-open): %s", err)
+
+
+def _normalize_tg_usage_entry(raw: Any) -> Dict[str, Any]:
+    today = _tg_usage_today()
+    entry = raw if isinstance(raw, dict) else {}
+    normalized = {
+        "date": str(entry.get("date") or today),
+        "used": max(0, int(entry.get("used") or 0)),
+        "extraCredits": max(0, int(entry.get("extraCredits") or 0)),
+        "proUntil": str(entry.get("proUntil") or ""),
+        "totalPaidStars": max(0, int(entry.get("totalPaidStars") or 0)),
+        "referredBy": str(entry.get("referredBy") or ""),
+        "referralCount": max(0, int(entry.get("referralCount") or 0)),
+        "referralCredits": max(0, int(entry.get("referralCredits") or 0)),
+    }
+    if normalized["date"] != today:
+        normalized["date"] = today  # roll the ledger forward so the reset persists
+        normalized["used"] = 0  # daily reset — new UTC day, free quota starts fresh
+    return normalized
+
+
+def _get_tg_usage_entry(telegram_user_id: Any) -> Dict[str, Any]:
+    try:
+        store = _load_telegram_usage_store()
+        return _normalize_tg_usage_entry(store["users"].get(str(telegram_user_id or "").strip()))
+    except Exception:
+        return _normalize_tg_usage_entry(None)
+
+
+def _is_tg_pro_active(entry: Dict[str, Any]) -> bool:
+    pro_until = str(entry.get("proUntil") or "")
+    if not pro_until:
+        return False
+    try:
+        return datetime.fromisoformat(pro_until.replace("Z", "+00:00")).timestamp() > time.time()
+    except Exception:
+        return False
+
+
+async def consume_telegram_ai_quota(telegram_user_id: Any) -> Dict[str, Any]:
+    """Consume one AI generation: Pro (unlimited) -> free daily 3 -> paid extra credits.
+    Returns {allowed, used, limit, extraCredits, proActive} reflecting the state AFTER
+    consumption. Fails open on errors."""
+    key = str(telegram_user_id or "").strip()
+    if not key:
+        return {"allowed": True, "used": 0, "limit": TELEGRAM_FREE_AI_DAILY_LIMIT, "extraCredits": 0, "proActive": False}
+    async with _TELEGRAM_USAGE_LOCK:
+        try:
+            store = _load_telegram_usage_store()
+            entry = _normalize_tg_usage_entry(store["users"].get(key))
+            today = _tg_usage_today()
+            if _is_tg_pro_active(entry):
+                if entry["date"] != today:
+                    store["users"][key] = entry
+                    _save_telegram_usage_store(store)
+                return {"allowed": True, "used": entry["used"], "limit": TELEGRAM_FREE_AI_DAILY_LIMIT,
+                        "extraCredits": entry["extraCredits"], "proActive": True}
+            allowed = False
+            if entry["used"] < TELEGRAM_FREE_AI_DAILY_LIMIT:
+                entry["used"] += 1  # free daily quota
+                allowed = True
+            elif entry["extraCredits"] > 0:
+                entry["extraCredits"] -= 1  # paid Stars credit (only after free runs out)
+                allowed = True
+            entry["date"] = today
+            store["users"][key] = entry
+            _save_telegram_usage_store(store)
+            return {"allowed": allowed, "used": entry["used"], "limit": TELEGRAM_FREE_AI_DAILY_LIMIT,
+                    "extraCredits": entry["extraCredits"], "proActive": False}
+        except Exception as err:
+            logger.warning("telegram AI quota check failed open: %s", err)
+            return {"allowed": True, "used": 0, "limit": TELEGRAM_FREE_AI_DAILY_LIMIT, "extraCredits": 0, "proActive": False}
+
+
+def build_telegram_paywall_text(used: int, limit: int) -> str:
+    """The Stars paywall shown when the daily free AI quota is exhausted."""
+    used_today = max(0, min(limit, int(used or 0)))
+    return (
+        f"⚠️ <b>Daily Free Limit Reached ({used_today}/{limit} used). Upgrade with Telegram Stars to continue instantly!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Every account gets <b>{limit} free AI generations</b> every 24 hours (SEO, Shorts, Analytics).\n\n"
+        "Tap a button below to pay with ⭐️ Telegram Stars — credits apply instantly:\n"
+        "• ⭐️ 50 Stars → <b>20 Extra AI Credits</b>\n"
+        "• ⭐️ 100 Stars → <b>Pro Creator — unlimited AI for 30 days</b>"
+    )
+
+
+def telegram_stars_paywall_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons that open the two Telegram Stars invoices."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(STARS_PRODUCTS["buy_credits"]["button"], callback_data="stars:buy_credits")],
+        [InlineKeyboardButton(STARS_PRODUCTS["buy_pro"]["button"], callback_data="stars:buy_pro")],
+    ])
+
+
+async def telegram_ai_quota_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, feature_label: str = "AI generation") -> bool:
+    """True (and the Stars paywall sent) when this Telegram user is out of free credits."""
+    if not update.effective_chat:
+        return False
+    user = update.effective_user
+    tg_id = (user.id if user else None) or update.effective_chat.id
+    try:
+        quota = await consume_telegram_ai_quota(tg_id)
+    except Exception as err:
+        logger.warning("telegram AI quota gate failed open: %s", err)
+        return False
+    if quota.get("allowed"):
+        logger.info(
+            "🚦 [Quota] %s allowed for Telegram user %s (free %s/%s, extra %s, pro %s)",
+            feature_label, tg_id, quota.get("used"), quota.get("limit"), quota.get("extraCredits"), quota.get("proActive"),
+        )
+        return False
+    try:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=build_telegram_paywall_text(int(quota.get("used", 0)), int(quota.get("limit", TELEGRAM_FREE_AI_DAILY_LIMIT))),
+            parse_mode=ParseMode.HTML,
+            reply_markup=telegram_stars_paywall_keyboard(),
+        )
+    except Exception as err:
+        logger.warning("paywall delivery failed: %s", err)
+    return True
+
+
+async def send_stars_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE, product_key: str) -> None:
+    """Open a Telegram Stars payment sheet for the selected product (XTR currency)."""
+    if not update.effective_chat:
+        return
+    product = STARS_PRODUCTS.get(product_key)
+    if not product:
+        return
+    try:
+        await context.bot.send_invoice(
+            chat_id=update.effective_chat.id,
+            title=product["title"],
+            description=product["description"],
+            payload=product["payload"],
+            currency="XTR",
+            prices=[LabeledPrice(product["title"], product["stars"])],
+        )
+    except Exception as err:
+        logger.warning("send_invoice(%s) failed: %s", product_key, err)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ Could not open the payment sheet right now — please try again in a moment.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+async def apply_telegram_stars_payment(telegram_user_id: Any, invoice_payload: str, stars: int, charge_id: str = "") -> tuple:
+    """Apply a settled Stars payment (idempotent per Telegram charge id): credit + audit log.
+    Returns (product, entry). Products: extra_credits_20 / pro_creator_30d / duplicate_ignored."""
+    payload = (invoice_payload or "").strip()
+    stars_paid = max(0, int(stars or 0))
+    charge_id = (charge_id or "").strip()
+    async with _TELEGRAM_USAGE_LOCK:
+        store = _load_telegram_usage_store()
+        payments = store.setdefault("payments", [])
+        if charge_id and any(p.get("telegramPaymentChargeId") == charge_id for p in payments):
+            return "duplicate_ignored", _get_tg_usage_entry(telegram_user_id)
+        key = str(telegram_user_id or "").strip()
+        entry = _normalize_tg_usage_entry(store["users"].get(key))
+        product = "unknown"
+        if "pro_creator" in payload:
+            product = "pro_creator_30d"
+            # Extend from the current expiry when the plan is still active, else start now.
+            base = time.time()
+            if _is_tg_pro_active(entry):
+                try:
+                    base = datetime.fromisoformat(entry["proUntil"].replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    base = time.time()
+            entry["proUntil"] = datetime.fromtimestamp(base + TELEGRAM_PRO_CREATOR_DAYS * 86400, tz=timezone.utc).isoformat()
+        elif "extra_credits" in payload:
+            product = "extra_credits_20"
+            entry["extraCredits"] += TELEGRAM_EXTRA_CREDITS_PER_INVOICE
+        entry["totalPaidStars"] += stars_paid
+        entry["date"] = _tg_usage_today()
+        store["users"][key] = entry
+        payments.append({
+            "telegramUserId": key,
+            "stars": stars_paid,
+            "invoicePayload": payload,
+            "product": product,
+            "telegramPaymentChargeId": charge_id,
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        del payments[:-500]  # keep the most recent 500 payment records
+        _save_telegram_usage_store(store)
+        return product, entry
+
+
+# ==========================================
+# PHASE 3: REFERRAL SYSTEM + FREE-TIER PROMO FOOTER
+# ==========================================
+
+def remember_bot_username(context: Any) -> str:
+    """Cache the bot's @username (from getMe, fetched at initialize) for t.me links."""
+    global _TG_BOT_USERNAME_CACHE
+    try:
+        username = str(getattr(getattr(context, "bot", None), "username", "") or "").strip().lstrip("@")
+        if username:
+            _TG_BOT_USERNAME_CACHE = username
+    except Exception:
+        pass
+    return _TG_BOT_USERNAME_CACHE
+
+
+def referral_bot_username() -> str:
+    """The @username used in invite links (cached getMe -> env -> safe default)."""
+    return _TG_BOT_USERNAME_CACHE or os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@") or "NaxoraAI_bot"
+
+
+def build_referral_link(telegram_user_id: Any) -> str:
+    """Invite deep-link that credits `telegram_user_id` when a new user joins through it."""
+    return f"https://t.me/{referral_bot_username()}?start=ref_{telegram_user_id}"
+
+
+def append_free_tier_footer(text: str, telegram_user_id: Any) -> str:
+    """Phase 3: promotional invite footer appended to AI-generated output for FREE tier
+    users only — omitted entirely for paid Pro (Stars) users and empty ids. The footer
+    carries each user's own invite link so every share recruits organically."""
+    body = str(text or "")
+    key = str(telegram_user_id or "").strip()
+    if not key:
+        return body
+    try:
+        if _is_tg_pro_active(_get_tg_usage_entry(key)):
+            return body
+    except Exception:
+        pass  # fail-open: never break a working reply over the footer
+    footer = f"\n\n⚡ Generated via Naxora AI — Get your viral scripts: {build_referral_link(key)}"
+    return body if f"?start=ref_{key}" in body else body + footer
+
+
+async def apply_telegram_referral(referrer_id: Any, referred_id: Any) -> Dict[str, Any]:
+    """Phase 3: a brand-new user joining via `?start=ref_<userId>` grants the referrer
+    +10 bonus credits (never expire). Idempotent — a user can only be attributed to one
+    referrer, only users with no prior ledger entry count as "new", and self-invites are
+    ignored. Fails open (never blocks the join)."""
+    result = {"applied": False, "reason": "invalid", "extraCredits": 0, "referralCount": 0, "referralCredits": 0}
+    referrer_key = str(referrer_id or "").strip()
+    referred_key = str(referred_id or "").strip()
+    if not referrer_key or not referred_key or referrer_key == referred_key:
+        return result
+    async with _TELEGRAM_USAGE_LOCK:
+        try:
+            store = _load_telegram_usage_store()
+            referred_raw = store["users"].get(referred_key)
+            if referred_raw is not None:
+                # Known user — only genuinely new joins count as a referral.
+                existing = _normalize_tg_usage_entry(referred_raw)
+                result["reason"] = "already_attributed" if existing.get("referredBy") else "not_new_user"
+                return result
+            referrer_entry = _normalize_tg_usage_entry(store["users"].get(referrer_key))
+            referrer_entry["extraCredits"] += TELEGRAM_REFERRAL_BONUS_CREDITS
+            referrer_entry["referralCount"] += 1
+            referrer_entry["referralCredits"] += TELEGRAM_REFERRAL_BONUS_CREDITS
+            store["users"][referrer_key] = referrer_entry
+
+            referred_entry = _normalize_tg_usage_entry(None)
+            referred_entry["referredBy"] = referrer_key
+            store["users"][referred_key] = referred_entry
+
+            _save_telegram_usage_store(store)
+            result.update({
+                "applied": True,
+                "reason": "granted",
+                "extraCredits": referrer_entry["extraCredits"],
+                "referralCount": referrer_entry["referralCount"],
+                "referralCredits": referrer_entry["referralCredits"],
+            })
+        except Exception as err:
+            logger.warning("telegram referral grant skipped (fail-open): %s", err)
+    return result
+
+
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer Telegram Stars pre-checkout queries (Telegram requires this within 10s)."""
+    query = update.pre_checkout_query
+    if not query:
+        return
+    payload = (query.invoice_payload or "").strip()
+    try:
+        if payload.startswith("tg_stars:"):
+            await query.answer(ok=True)
+        else:
+            await query.answer(ok=False, error_message="This offer is no longer available. Please start the payment again.")
+    except Exception as err:
+        logger.warning("pre_checkout answer failed: %s", err)
+
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Credit the buyer's account the moment a Telegram Stars payment settles."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    payment = update.effective_message.successful_payment
+    if not payment:
+        return
+    user = update.effective_user
+    tg_id = (user.id if user else None) or update.effective_chat.id
+    stars = int(getattr(payment, "total_amount", 0) or 0)
+    payload = (getattr(payment, "invoice_payload", "") or "").strip()
+    charge_id = str(getattr(payment, "telegram_payment_charge_id", "") or "")
+    try:
+        product, _entry = await apply_telegram_stars_payment(tg_id, payload, stars, charge_id=charge_id)
+    except Exception as err:
+        logger.warning("Stars payment crediting failed: %s", err)
+        await safe_reply(update, "⚠️ Payment received, but crediting failed. Please contact support with your charge ID.", parse_mode=ParseMode.HTML)
+        return
+    if product == "duplicate_ignored":
+        await safe_reply(update, "✅ This payment was already credited — nothing else to do.", parse_mode=ParseMode.HTML)
+        return
+    entry = _get_tg_usage_entry(tg_id)
+    if product == "pro_creator_30d":
+        until = str(entry.get("proUntil") or "")[:10]
+        msg = (
+            "⭐️ <b>Payment received — Pro Creator activated!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "• Unlimited AI generations (SEO, Shorts, Analytics &amp; more)\n"
+            f"• Active until: <b>{until}</b>\n"
+            f"• Lifetime Stars spent: <b>{entry.get('totalPaidStars', 0)}</b>\n\n"
+            "Enjoy — run /yt_seo, /viral_shorts or /yt_check anytime! 🚀"
+        )
+    else:
+        msg = (
+            "⭐️ <b>Payment received — credits added!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• +<b>{TELEGRAM_EXTRA_CREDITS_PER_INVOICE} extra AI credits</b> banked\n"
+            f"• Extra credits left: <b>{entry.get('extraCredits', 0)}</b>\n"
+            f"• Free today: <b>{entry.get('used', 0)}/{TELEGRAM_FREE_AI_DAILY_LIMIT}</b>\n\n"
+            "Extra credits are used automatically once your free daily generations run out."
+        )
+    await safe_reply(update, msg, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 
 # ==========================================
@@ -1159,7 +1819,7 @@ def _format_iso_duration(iso8601: str) -> str:
     seconds = int(match.group(3) or 0)
     if hours > 0:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
-        return f"{minutes}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
 
 
 async def fetch_recent_video_history(limit: int = 10) -> List[Dict[str, object]]:
@@ -1258,9 +1918,29 @@ def welcome_menu_text() -> str:
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command."""
+    """Handle /start command (including referral deep-links ?start=ref_<userId>)."""
     user = update.effective_user
     username = user.first_name if user else "User"
+    remember_bot_username(context)
+
+    # Phase 3 referral deep-link: /start ref_<userId> credits the inviter (+10 bonus
+    # credits) the moment a brand-new user joins, and notifies them in Telegram.
+    if update.effective_message and update.effective_chat:
+        text_parts = (update.effective_message.text or "").strip().split()
+        if len(text_parts) > 1:
+            referral_match = re.match(r"ref_(\d{2,20})$", text_parts[1], re.IGNORECASE)
+            if referral_match:
+                tg_id = str((user.id if user else update.effective_chat.id) or "").strip()
+                outcome = await apply_telegram_referral(referral_match.group(1), tg_id)
+                if outcome.get("applied"):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=int(referral_match.group(1)),
+                            text="🎉 Someone joined using your link! You received +10 bonus credits.",
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception as err:
+                        logger.debug("Referral notification delivery failed: %s", err)
 
     welcome_msg = (
         f"🤖 <b>Naxora AI — Multi-Provider AI Bot Platform</b>\n"
@@ -1276,7 +1956,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• 🌤️ <b>Live Weather Lookup:</b> <code>/weather &lt;city&gt;</code>\n"
         f"• 🔍 <b>Web Search:</b> <code>/search &lt;query&gt;</code>\n"
         f"• 💻 <b>Code Generator:</b> <code>/code &lt;specification&gt;</code>\n"
-        f"• ⏰ <b>Reminders:</b> <code>/remind &lt;minutes&gt; &lt;task&gt;</code>\n\n"
+        f"• ⏰ <b>Reminders:</b> <code>/remind &lt;minutes&gt; &lt;task&gt;</code>\n"
+        f"• 🔗 <b>Invite &amp; Earn:</b> <code>/referral</code> — share your link, get +10 bonus credits per friend\n\n"
         f"💬 <i>Send any message to chat with the AI, or type <code>/help</code> for the full command list!</i>"
     )
     # Show both the inline menu (buttons inside the message) and the persistent
@@ -1291,6 +1972,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 # ==========================================
+# PHASE 3: /referral — PERSONAL INVITE LINK (ORGANIC GROWTH)
+# ==========================================
+
+async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /referral (alias /ref) — share your invite link, earn +10 bonus credits
+    per new user who joins through it. Bonus credits never expire."""
+    if not update.effective_message or not update.effective_chat:
+        return
+    remember_bot_username(context)
+    user = update.effective_user
+    tg_id = str((user.id if user else update.effective_chat.id) or "").strip()
+    entry = _get_tg_usage_entry(tg_id)
+    link = build_referral_link(tg_id)
+    referral_msg = (
+        "🔗 <b>Your Invite Link</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{link}\n\n"
+        "Share this link — every friend who joins Naxora AI through it gives you:\n"
+        f"⭐️ <b>+{TELEGRAM_REFERRAL_BONUS_CREDITS} bonus AI credits</b> (never expire)\n\n"
+        f"📊 <b>Your referrals:</b> {entry.get('referralCount', 0)}\n"
+        f"⭐️ <b>Bonus credits earned:</b> {entry.get('referralCredits', 0)}\n"
+        f"⚡ <b>Credits available right now:</b> {entry.get('extraCredits', 0)}\n\n"
+        "💡 <i>Pro members get a clean, footer-free experience — upgrade with Telegram Stars anytime.</i>"
+    )
+    await safe_reply(update, referral_msg, parse_mode=ParseMode.HTML)
+
+
+# ==========================================
 # PERSISTENT REPLY KEYBOARD (bottom menu)
 # ==========================================
 
@@ -1301,7 +2010,8 @@ def persistent_reply_keyboard() -> ReplyKeyboardMarkup:
         [
             [KeyboardButton("📊 Channel Status"), KeyboardButton("🔗 YouTube OAuth")],
             [KeyboardButton("🚀 AI SEO / Tools"), KeyboardButton("⚙️ Settings")],
-            [KeyboardButton("🔥 Viral Shorts")],
+            [KeyboardButton("🔥 Viral Shorts"), KeyboardButton("🎨 AI Thumbnail")],
+            [KeyboardButton("🕵️ Competitor Spy")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -1316,6 +2026,9 @@ PERSISTENT_KEYBOARD_ACTIONS = {
     "🚀 ai seo / tools": "seo",
     "⚙️ settings": "settings",
     "🔥 viral shorts": "viral_shorts",
+    "🎨 ai thumbnail": "thumbnail",
+    "🕵️ competitor spy": "yt_spy",
+    "competitor spy": "yt_spy",
 }
 
 
@@ -1346,6 +2059,25 @@ async def handle_persistent_keyboard_tap(update: Update, context: ContextTypes.D
             parse_mode=ParseMode.HTML,
             reply_markup=persistent_reply_keyboard(),
         )
+    elif action == "thumbnail":
+        # Phase 4: same entry point as /thumbnail (free AI thumbnail generator).
+        await thumbnail_command(update, context)
+    elif action == "yt_spy":
+        # Phase 5: same entry point as /yt_spy (competitor video spy & tag extractor).
+        # Plain tap -> usage intro; tap with a pasted link/ID -> run the spy directly.
+        pasted_id = extract_youtube_video_id((update.effective_message.text or "").strip())
+        if not pasted_id:
+            await safe_reply(
+                update,
+                "🕵️ <b>Competitor Video Spy</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "Send a <b>YouTube video link</b> and I'll pull its real Data API metrics — views, likes, hidden SEO tags, duration — then the AI cascade dissects the hook & title strategy and hands you a <b>\"How to Beat This Video\"</b> angle.\n\n"
+                "Example: <code>/yt_spy https://www.youtube.com/watch?v=dQw4w9WgXcQ</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=persistent_reply_keyboard(),
+            )
+            return
+        context.args = [pasted_id]
+        await yt_spy_command(update, context)
     elif action == "settings":
         await safe_reply(
             update,
@@ -1481,6 +2213,191 @@ def _format_yt_check_report(stats: dict, analytics: dict) -> str:
     return "\n".join(lines)
 
 
+# ==========================================
+# PHASE 5: COMPETITOR VIDEO SPY & TAG EXTRACTOR (/yt_spy)
+# Real rival-video metrics via YouTube Data API v3 `videos` endpoint, then the
+# multi-tier AI cascade (Gemini included) dissects the hook/title strategy and
+# hands the user a concrete "How to Beat This Video" takedown plan.
+# ==========================================
+
+_YT_VIDEO_ID_PATTERNS = [
+    re.compile(r"(?:youtube\.com|youtube-nocookie\.com)/(?:watch\?(?:.*&)?v=|embed/|shorts/|live/|v/)([\w-]{11})", re.IGNORECASE),
+    re.compile(r"youtu\.be/([\w-]{11})", re.IGNORECASE),
+]
+
+
+def extract_youtube_video_id(raw: str) -> str:
+    """Extracts an 11-char YouTube video id from any common link shape (or bare id)."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    for pattern in _YT_VIDEO_ID_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    return text if re.fullmatch(r"[\w-]{11}", text) else ""
+
+
+def yt_spy_keyboard() -> InlineKeyboardMarkup:
+    """Quick actions attached to the /yt_spy competitor breakdown."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔥 AI SEO Boost", callback_data="yt:seo"),
+            InlineKeyboardButton("🔮 Viral Ideas", callback_data="yt:viral"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+def build_yt_spy_prompt(spy: dict) -> str:
+    """Phase 5: deterministic competitor-breakdown prompt for the AI cascade."""
+    return (
+        "You are an elite YouTube growth strategist performing a COMPETITOR BREAKDOWN.\n"
+        "A rival video's real YouTube Data API metrics are provided below.\n"
+        "Analyze WHY it performed well and how the user can beat it.\n\n"
+        "STRICT FORMAT — reply with EXACTLY these two labelled sections, in this order, "
+        "using these exact emoji markers as section headers and no extra top-level sections:\n"
+        "💡 Hook & Title Strategy Analysis\n"
+        "🚀 How to Beat This Video\n\n"
+        "Rules: in the first section explain the psychological hook, the title/keyword strategy "
+        "and the packaging choices that made it perform; in the second section give a concrete "
+        "better angle plus a ready-to-film script outline (hook line, 3-5 beats, CTA) targeting "
+        "the same audience with sharper positioning.\n\n"
+        "RIVAL VIDEO DATA:\n"
+        f"Title: {spy.get('title', '')}\n"
+        f"Channel: {spy.get('channelTitle', '')}\n"
+        f"Views: {spy.get('viewCount') or 'hidden'} | Likes: {spy.get('likeCount') or 'hidden'} | Duration: {spy.get('durationText') or 'unknown'}\n"
+        f"Hidden SEO Tags: {', '.join(spy.get('tags') or []) or 'none exposed by the API'}\n"
+        f"Description (first 600 chars): {str(spy.get('description') or 'empty')[:600]}"
+    )
+
+
+async def fetch_competitor_video_spy(video_id: str) -> Optional[dict]:
+    """Phase 5: rival video via Data API v3 `videos` (snippet/tags/stats/details)."""
+    clean_id = str(video_id or "").strip()
+    if not clean_id or not re.fullmatch(r"[\w-]{11}", clean_id):
+        return None
+    token = await _youtube_access_token()
+    url = (
+        "https://www.googleapis.com/youtube/v3/videos"
+        f"?part=snippet,statistics,contentDetails&id={clean_id}"
+    )
+    try:
+        data = await _yt_get_json(url, token)
+    except Exception as err:
+        low = str(err).lower()
+        if any(m in low for m in ("notfound", "videonotfound", "forbidden", "private")):
+            return None
+        raise
+    items = (data.get("items") or []) if isinstance(data, dict) else []
+    if not items:
+        return None
+    item = items[0] or {}
+    snippet = item.get("snippet", {}) or {}
+    statistics = item.get("statistics", {}) or {}
+    content_details = item.get("contentDetails", {}) or {}
+
+    def _to_int(value: object) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            return int(float(str(value)))
+        except (TypeError, ValueError):
+            return None
+
+    duration_iso = str(content_details.get("duration") or "")
+    tags = [str(t).strip() for t in (snippet.get("tags") or []) if str(t).strip()]
+    return {
+        "videoId": str(item.get("id") or clean_id),
+        "title": str(snippet.get("title") or "Untitled video"),
+        "description": str(snippet.get("description") or ""),
+        "channelTitle": str(snippet.get("channelTitle") or ""),
+        "tags": tags,
+        "publishedAt": str(snippet.get("publishedAt") or ""),
+        "duration": duration_iso,
+        "durationText": _format_iso_duration(duration_iso),
+        "viewCount": _to_int(statistics.get("viewCount")),
+        "likeCount": _to_int(statistics.get("likeCount")),
+        "commentCount": _to_int(statistics.get("commentCount")),
+    }
+
+
+async def yt_spy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /yt_spy (alias /spy) — rival metrics + AI takedown plan."""
+    if is_maintenance_mode():
+        await safe_reply(update, get_maintenance_message(), parse_mode=ParseMode.HTML)
+        return
+    if not is_feature_enabled("ytCheck"):
+        await safe_reply(update, "🚫 Competitor Spy (/yt_spy) is currently disabled by the platform admin.", parse_mode=ParseMode.HTML)
+        return
+    if not update.effective_message or not update.effective_chat:
+        return
+    target = " ".join(context.args or []).strip() if context.args else ""
+    if not target:
+        await safe_reply(
+            update,
+            "🕵️ <b>Competitor Video Spy</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Send a <b>YouTube video link</b> for real metrics + AI breakdown.\n\n"
+            "Example: <code>/yt_spy https://www.youtube.com/watch?v=dQw4w9WgXcQ</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=persistent_reply_keyboard(),
+        )
+        return
+    video_id = extract_youtube_video_id(target)
+    if not video_id:
+        await safe_reply(update, "🔍 <b>No video ID found</b> — paste a watch/Shorts/youtu.be link or 11-char ID.", parse_mode=ParseMode.HTML)
+        return
+    if not _youtube_connected():
+        await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
+        return
+    if await telegram_ai_quota_gate(update, context, "Competitor Spy (/yt_spy)"):
+        return
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    await safe_reply(update, "🕵️ <b>Spying on the rival video…</b> Pulling hidden tags!", parse_mode=ParseMode.HTML)
+    try:
+        spy = await fetch_competitor_video_spy(video_id)
+        if not spy:
+            await safe_reply(update, "🔍 <b>Video not found.</b> It may be private/deleted — check the URL.", parse_mode=ParseMode.HTML)
+            return
+        ai_text = await generate_ai_reply(chat_id, build_yt_spy_prompt(spy))
+        ai_body = (ai_text or "").strip() or "⚠️ Empty AI breakdown — try again."
+        views = spy.get("viewCount")
+        likes = spy.get("likeCount")
+        comments = spy.get("commentCount")
+        published = str(spy.get("publishedAt") or "")[:10] or "unknown"
+        duration_text = str(spy.get("durationText") or "") or "unknown"
+        tags = spy.get("tags") or []
+        lines = [
+            "🕵️ <b>Competitor Video Breakdown</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📺 <b>{html.escape(str(spy.get('title') or 'Untitled'))}</b>",
+            "📊 <b>Video Performance Metrics</b>",
+            f"• 👁 Views: {_fmt_compact(views) if views is not None else 'hidden'}",
+            f"• 👍 Likes: {_fmt_compact(likes) if likes is not None else 'hidden'}",
+            f"• 💬 Comments: {_fmt_compact(comments) if comments is not None else 'hidden'}",
+            f"• ⏱ Duration: {html.escape(duration_text)}",
+            f"• 📅 Published: {html.escape(published)}",
+            "🏷️ <b>Hidden SEO Tags</b> (copy-ready)",
+        ]
+        if tags:
+            lines.append(f"<code>{html.escape(', '.join(tags))}</code>")
+        else:
+            lines.append("<code>(none exposed by the API)</code>")
+        lines.append("")
+        lines.append(format_telegram_html(ai_body))
+        tg_user_id = (update.effective_user.id if update.effective_user else chat_id)
+        await safe_reply(update, append_free_tier_footer("\n".join(lines), tg_user_id), parse_mode=ParseMode.HTML, reply_markup=yt_spy_keyboard())
+    except Exception as err:
+        logger.warning("⚠️ /yt_spy failed: %s", err)
+        await safe_reply(update, "⚠️ <b>Competitor breakdown failed.</b>\n" + _yt_friendly_error(err), parse_mode=ParseMode.HTML)
+
+
 async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /yt_check (alias /analytics) — live channel stats, impressions, CTR and audit."""
     if is_maintenance_mode():
@@ -1493,6 +2410,8 @@ async def yt_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not _youtube_connected():
         await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
+        return
+    if await telegram_ai_quota_gate(update, context, "Channel Analytics (/yt_check)"):
         return
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -1523,6 +2442,8 @@ async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if not _youtube_connected():
         await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
+        return
+    if await telegram_ai_quota_gate(update, context, "AI Channel SEO (/yt_seo)"):
         return
     chat_id = update.effective_chat.id
     try:
@@ -1616,7 +2537,8 @@ async def yt_seo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if offline:
             lines.append("\n<i>(AI cascade engines were offline — built from live channel context only.)</i>")
     lines.append(f"\n⚡ Built for <b>{context_title}</b> — quick actions below.")
-    await safe_reply(update, "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=yt_seo_keyboard())
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
+    await safe_reply(update, append_free_tier_footer("\n".join(lines), tg_user_id), parse_mode=ParseMode.HTML, reply_markup=yt_seo_keyboard())
 
 
 async def fetch_viral_video_predictions() -> List[Dict[str, object]]:
@@ -1742,6 +2664,8 @@ async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not _youtube_connected():
         await safe_reply(update, _yt_not_connected_text(), parse_mode=ParseMode.HTML, reply_markup=_yt_connect_keyboard(update.effective_chat.id))
         return
+    if await telegram_ai_quota_gate(update, context, "AI Viral Predictor (/yt_viral)"):
+        return
     chat_id = update.effective_chat.id
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
@@ -1759,9 +2683,10 @@ async def yt_viral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 parse_mode=ParseMode.HTML,
             )
             return
+        tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
         await safe_reply(
             update,
-            _format_viral_report(stats.get("title", "your channel"), predictions, len(video_history)),
+            append_free_tier_footer(_format_viral_report(stats.get("title", "your channel"), predictions, len(video_history)), tg_user_id),
             parse_mode=ParseMode.HTML,
             reply_markup=yt_viral_keyboard(),
         )
@@ -1793,6 +2718,8 @@ async def viral_shorts_command(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=persistent_reply_keyboard(),
         )
         return
+    if await telegram_ai_quota_gate(update, context, "AI Viral Shorts (/viral_shorts)"):
+        return
     chat_id = update.effective_chat.id
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
@@ -1805,9 +2732,10 @@ async def viral_shorts_command(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     try:
         ai_text = await generate_viral_shorts_package(chat_id, topic)
+        tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
         await safe_reply(
             update,
-            format_viral_shorts_message(ai_text, topic),
+            append_free_tier_footer(format_viral_shorts_message(ai_text, topic), tg_user_id),
             parse_mode=ParseMode.HTML,
             reply_markup=viral_shorts_keyboard(),
         )
@@ -1887,6 +2815,8 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=persistent_reply_keyboard(),
             )
             return
+        if await telegram_ai_quota_gate(update, context, "AI Viral Shorts (regenerate)"):
+            return
         try:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         except Exception:
@@ -1896,7 +2826,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             ai_text = await generate_viral_shorts_package(chat_id, topic)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=format_viral_shorts_message(ai_text, topic),
+                text=append_free_tier_footer(format_viral_shorts_message(ai_text, topic), chat_id),
                 parse_mode=ParseMode.HTML,
                 reply_markup=viral_shorts_keyboard(),
             )
@@ -1924,6 +2854,83 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode=ParseMode.HTML,
                 reply_markup=persistent_reply_keyboard(),
             )
+    elif data == "vs:tts":
+        state = viral_shorts_state.get(chat_id) or {}
+        script = extract_viral_shorts_section(str(state.get("text") or ""), "📜")
+        if not script:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ No cached script yet — generate one first with <code>/viral_shorts &lt;topic&gt;</code>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=persistent_reply_keyboard(),
+            )
+            return
+        if await telegram_ai_quota_gate(update, context, "AI Voiceover (viral shorts)"):
+            return
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🎙️ <b>Generating your voiceover…</b> Edge neural voice at work! 🔥",
+            parse_mode=ParseMode.HTML,
+        )
+        try:
+            caption = append_free_tier_footer(
+                "🎙️ <b>AI Voiceover</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "✨ <i>Microsoft Edge neural voice · 100% free</i>",
+                chat_id,
+            )
+            await send_tts_audio(context.bot, chat_id, script, caption)
+        except Exception as err:
+            logger.warning("⚠️ /viral_shorts voiceover failed: %s", err)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ <b>Voiceover generation failed.</b> Edge TTS is busy or unavailable — please try again in a moment.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard(),
+            )
+    elif data == "th:regenerate":
+        state = thumbnail_state.get(chat_id) or {}
+        prompt = str(state.get("prompt") or "").strip()
+        if not prompt:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🎨 No cached prompt yet — generate one first with <code>/thumbnail &lt;prompt&gt;</code>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=persistent_reply_keyboard(),
+            )
+            return
+        if await telegram_ai_quota_gate(update, context, "AI Thumbnail (regenerate)"):
+            return
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=chat_id, text="🔄 <b>Regenerating your thumbnail…</b> 🔥", parse_mode=ParseMode.HTML)
+        await send_ai_thumbnail(update, context, chat_id, prompt)
+    elif data == "th:copy_prompt":
+        state = thumbnail_state.get(chat_id) or {}
+        prompt = str(state.get("prompt") or "").strip()
+        if prompt:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"📜 <b>Copy-ready Thumbnail Prompt</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n<code>{html.escape(prompt)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ No cached prompt yet — generate one first with <code>/thumbnail &lt;prompt&gt;</code>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=persistent_reply_keyboard(),
+            )
+    elif data == "stars:buy_credits":
+        await send_stars_invoice(update, context, "buy_credits")
+    elif data == "stars:buy_pro":
+        await send_stars_invoice(update, context, "buy_pro")
     else:  # menu:home and any unknown payload
         await context.bot.send_message(chat_id=chat_id, text=welcome_menu_text(), parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
@@ -1951,7 +2958,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• <code>/yt_check</code> or <code>/analytics</code> - Live channel analytics & health audit\n"
                 "• <code>/yt_seo</code> - AI channel keywords, viral bio, tags & SEO plan\n"
         "• <code>/yt_viral</code> - AI-powered viral video concept predictions\n"
+        "• <code>/yt_spy &lt;YouTube URL&gt;</code> - Spy a rival video: real metrics, hidden tags & AI takedown plan\n"
         "• <code>/viral_shorts &lt;topic&gt;</code> - AI Shorts hook, script, hashtags &amp; thumbnail\n"
+        "• <code>/thumbnail &lt;prompt&gt;</code> - Free AI thumbnail render (1280×720) with regenerate buttons\n"
+        "• <code>/tts &lt;text&gt;</code> - Free AI voiceover (.mp3) via Edge neural voices — Bengali auto-detect\n"
+        "• <code>/referral</code> - Your invite link: +10 bonus credits per friend who joins\n"
+        "• <i>⭐️ Free plan: 3 AI generations every 24h — top up instantly with Telegram Stars</i>\n"
         "• <code>/upload</code> - Publish a video with viral AI SEO\n\n"
         "💡 <i>Tip: Reply to any message with <code>/summarize</code> or <code>/translate Spanish</code>!</i>"
     )
@@ -2100,9 +3112,10 @@ async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         pass
 
     reply = await generate_ai_reply(update.effective_chat.id, prompt)
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
     await safe_reply(
         update,
-        f"🌐 <b>Polyglot Translation Result:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{reply}",
+        append_free_tier_footer(f"🌐 <b>Polyglot Translation Result:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{reply}", tg_user_id),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -2140,9 +3153,10 @@ async def summarize_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         pass
 
     summary = await generate_ai_reply(update.effective_chat.id, prompt)
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
     await safe_reply(
         update,
-        f"📝 <b>Executive Summary & Key Takeaways:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{summary}",
+        append_free_tier_footer(f"📝 <b>Executive Summary & Key Takeaways:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{summary}", tg_user_id),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -2167,18 +3181,19 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         pass
 
     image_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?width=1024&height=1024&nologo=true&seed={int(asyncio.get_event_loop().time())}&model=flux"
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
 
     try:
         await update.effective_message.reply_photo(
             photo=image_url,
-            caption=f"🎨 <b>Prompt:</b> <i>{prompt}</i>\n✨ <i>Synthesized via Flux / SDXL</i>",
+            caption=append_free_tier_footer(f"🎨 <b>Prompt:</b> <i>{prompt}</i>\n✨ <i>Synthesized via Flux / SDXL</i>", tg_user_id),
             parse_mode=ParseMode.HTML,
         )
     except Exception as err:
         logger.warning(f"Direct photo send failed: {err}. Falling back to URL.")
         await safe_reply(
             update,
-            f"🎨 <b>AI Image Synthesized:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n• <b>Prompt:</b> <i>\"{prompt}\"</i>\n• <b>Direct HD Link:</b> {image_url}",
+            append_free_tier_footer(f"🎨 <b>AI Image Synthesized:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n• <b>Prompt:</b> <i>\"{prompt}\"</i>\n• <b>Direct HD Link:</b> {image_url}", tg_user_id),
             parse_mode=ParseMode.HTML,
         )
 
@@ -2280,9 +3295,10 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     search_result = await generate_ai_reply(update.effective_chat.id, prompt)
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
     await safe_reply(
         update,
-        f"🔍 <b>Web Intelligence Synthesis:</b> <i>\"{query}\"</i>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{search_result}",
+        append_free_tier_footer(f"🔍 <b>Web Intelligence Synthesis:</b> <i>\"{query}\"</i>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{search_result}", tg_user_id),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -2308,9 +3324,10 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     prompt = f"You are an expert software engineer. Provide a clean, robust, well-commented code solution for:\n\n\"{req}\"\n\nFollow up with bulleted explanation points."
     code_res = await generate_ai_reply(update.effective_chat.id, prompt)
+    tg_user_id = (update.effective_user.id if update.effective_user else update.effective_chat.id)
     await safe_reply(
         update,
-        format_telegram_html(f"💻 <b>Code Solution:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{code_res}"),
+        append_free_tier_footer(format_telegram_html(f"💻 <b>Code Solution:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{code_res}"), tg_user_id),
         parse_mode=ParseMode.HTML,
     )
 
@@ -2401,7 +3418,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Send formatted response safely — escape raw HTML and convert any
     # Markdown styling from the AI into proper HTML tags so <b> etc. render.
-    await safe_reply(update, format_telegram_html(reply_text), parse_mode=ParseMode.HTML)
+    tg_user_id = (user.id if user else chat_id)
+    await safe_reply(update, append_free_tier_footer(format_telegram_html(reply_text), tg_user_id), parse_mode=ParseMode.HTML)
 
 
 # ==========================================
@@ -2708,6 +3726,7 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     # Register Command Handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler(["referral", "ref"], referral_command))
     app.add_handler(CommandHandler(["ping", "health"], ping_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("id", id_command))
@@ -2721,6 +3740,8 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("remind", remind_command))
     app.add_handler(CommandHandler(["viral_shorts", "viralshorts"], viral_shorts_command))
+    app.add_handler(CommandHandler(["thumbnail", "thumb"], thumbnail_command))
+    app.add_handler(CommandHandler(["tts", "voiceover"], tts_command))
 
     # Register Slash Commands for Upload / YouTube / Settings + Interactive Menus
     app.add_handler(CommandHandler("upload", upload_command))
@@ -2728,8 +3749,13 @@ def build_telegram_application(token: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler(["yt_check", "analytics"], yt_check_command))
     app.add_handler(CommandHandler("yt_seo", yt_seo_command))
     app.add_handler(CommandHandler("yt_viral", yt_viral_command))
+    app.add_handler(CommandHandler(["yt_spy", "spy"], yt_spy_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CallbackQueryHandler(menu_callback_handler))
+    # Phase 2: Telegram Stars payments — answer pre-checkout queries within 10s and
+    # credit the buyer automatically the moment a payment settles.
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
 
     # Register General Text Message Handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))

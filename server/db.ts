@@ -22,6 +22,10 @@ interface StoredDb {
   /** Global YouTube OAuth credentials — shared fallback so Telegram bots (Python + TS)
    *  and the web app all report the same "Connected" status after any user runs OAuth. */
   youtubeCredentials: Record<string, { refreshToken: string; clientId: string; clientSecret: string; updatedAt: string }>;
+  /** Phase 6 freemium: per-Telegram-user daily AI quota + Stars purchases, keyed by Telegram user id. */
+  telegramUsage: Record<string, TelegramUsageEntry>;
+  /** Phase 6: append-only Telegram Stars payment audit log (capped to the most recent 500). */
+  telegramPayments: TelegramStarsPayment[];
 }
 
 /** Zero-break defaults: everything enabled exactly like the pre-Phase-4 behaviour. */
@@ -53,6 +57,53 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
 
 const DB_FILE = path.join(process.cwd(), 'data_store.json');
 
+// ==========================================
+// PHASE 6: TELEGRAM FREEMIUM (DAILY AI QUOTA + STARS TOP-UPS)
+// Every Telegram user gets 3 free AI generations (SEO, Shorts, Analytics, …) per
+// UTC day. Beyond that they can top up with Telegram Stars: 50 ⭐️ → 20 extra
+// credits (never expire) or 100 ⭐️ → Pro Creator (unlimited for 30 days).
+// Consumption order: Pro (unlimited) → free daily quota → paid extra credits.
+// ==========================================
+
+/** Free AI generations per Telegram user per UTC day. */
+export const TELEGRAM_FREE_AI_DAILY_LIMIT = 3;
+/** Pro Creator plan length granted by the 100 ⭐️ Stars invoice. */
+export const TELEGRAM_PRO_CREATOR_DAYS = 30;
+/** Extra AI generations granted by the 50 ⭐️ Stars invoice (never expire). */
+export const TELEGRAM_EXTRA_CREDITS_PER_INVOICE = 20;
+/** Bonus credits granted to the referrer for every new user who joins via their link. */
+export const TELEGRAM_REFERRAL_BONUS_CREDITS = 10;
+
+export interface TelegramUsageEntry {
+  /** UTC 'YYYY-MM-DD' of the day the free counter last advanced (daily reset marker). */
+  date: string;
+  /** Free AI generations already used on `date`. */
+  used: number;
+  /** Stars-purchased extra generations (never expire, consumed after the free quota). */
+  extraCredits: number;
+  /** ISO timestamp when the Pro Creator plan expires ('' = not subscribed). */
+  proUntil: string;
+  /** Lifetime Telegram Stars paid by this user. */
+  totalPaidStars: number;
+  /** Referral: id of the inviter this user joined through ('' = direct join). */
+  referredBy: string;
+  /** Referral: number of new users who joined via this user's invite link. */
+  referralCount: number;
+  /** Referral: lifetime bonus credits earned from referrals. */
+  referralCredits: number;
+  updatedAt: string;
+}
+
+export interface TelegramStarsPayment {
+  telegramUserId: string;
+  stars: number;
+  invoicePayload: string;
+  product: string;
+  telegramPaymentChargeId: string;
+  providerPaymentChargeId: string;
+  at: string;
+}
+
 export class ServerDatabase {
   private static db: StoredDb = {
     users: [],
@@ -69,6 +120,8 @@ export class ServerDatabase {
     auditLogs: [],
     supportTickets: [],
     youtubeCredentials: {},
+    telegramUsage: {},
+    telegramPayments: [],
   };
 
   public static init() {
@@ -854,6 +907,188 @@ export class ServerDatabase {
     } catch (e) {
       console.warn('[ServerDB] Free trial grant skipped:', e);
     }
+  }
+
+  // ==========================================
+  // PHASE 6: TELEGRAM FREEMIUM (DAILY AI QUOTA + STARS TOP-UPS)
+  // ==========================================
+
+  private static telegramToday(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /** Normalizes a raw stored entry and auto-resets the free counter on a new UTC day. */
+  private static normalizeTelegramUsageEntry(raw: unknown): TelegramUsageEntry {
+    const today = ServerDatabase.telegramToday();
+    const entry = (raw && typeof raw === 'object' ? raw : {}) as Partial<TelegramUsageEntry>;
+    const normalized: TelegramUsageEntry = {
+      date: String(entry.date || today),
+      used: Math.max(0, Math.round(Number(entry.used) || 0)),
+      extraCredits: Math.max(0, Math.round(Number(entry.extraCredits) || 0)),
+      proUntil: String(entry.proUntil || ''),
+      totalPaidStars: Math.max(0, Math.round(Number(entry.totalPaidStars) || 0)),
+      referredBy: String(entry.referredBy || ''),
+      referralCount: Math.max(0, Math.round(Number(entry.referralCount) || 0)),
+      referralCredits: Math.max(0, Math.round(Number(entry.referralCredits) || 0)),
+      updatedAt: String(entry.updatedAt || ''),
+    };
+    if (normalized.date !== today) {
+      normalized.date = today; // roll the ledger forward so the reset persists
+      normalized.used = 0;
+    }
+    return normalized;
+  }
+
+  /** Read-only usage snapshot for a Telegram user (resets today's counter if a new UTC day). */
+  public static getTelegramUsage(telegramUserId: string | number): TelegramUsageEntry {
+    const key = String(telegramUserId || '').trim();
+    const raw = key ? ServerDatabase.db.telegramUsage?.[key] : undefined;
+    return ServerDatabase.normalizeTelegramUsageEntry(raw);
+  }
+
+  private static putTelegramUsage(telegramUserId: string | number, entry: TelegramUsageEntry): void {
+    const key = String(telegramUserId || '').trim();
+    if (!key) return;
+    entry.updatedAt = new Date().toISOString();
+    ServerDatabase.db.telegramUsage[key] = entry;
+    ServerDatabase.save();
+  }
+
+  /** True while the Pro Creator Stars plan is active for this Telegram user. */
+  public static isTelegramProActive(telegramUserId: string | number): boolean {
+    const proUntil = ServerDatabase.getTelegramUsage(telegramUserId).proUntil;
+    if (!proUntil) return false;
+    const until = Date.parse(proUntil);
+    return Number.isFinite(until) && until > Date.now();
+  }
+
+  /**
+   * Phase 3 referral: a brand-new user joining via `?start=ref_<userId>` grants the
+   * referrer +10 bonus credits (never expire). Idempotent — each user can only be
+   * attributed to one referrer, and only users with no prior ledger entry count as
+   * "new". Self-invites are ignored. Never throws (fail-open).
+   */
+  public static applyTelegramReferral(referrerId: string | number, referredId: string | number): {
+    applied: boolean; reason: string; extraCredits: number; referralCount: number; referralCredits: number;
+  } {
+    const referrerKey = String(referrerId || '').trim();
+    const referredKey = String(referredId || '').trim();
+    const noStats = ServerDatabase.getTelegramUsage(referrerKey);
+    const none = { applied: false, reason: 'invalid', extraCredits: noStats.extraCredits, referralCount: noStats.referralCount, referralCredits: noStats.referralCredits };
+    if (!referrerKey || !referredKey || referrerKey === referredKey) return none;
+    try {
+      const usage = ServerDatabase.db.telegramUsage || (ServerDatabase.db.telegramUsage = {});
+      const referredRaw = usage[referredKey];
+      if (referredRaw) {
+        // Known user — only genuinely new joins count as a referral.
+        const existing = ServerDatabase.getTelegramUsage(referredKey);
+        const reason = existing.referredBy ? 'already_attributed' : 'not_new_user';
+        return { applied: false, reason, extraCredits: noStats.extraCredits, referralCount: noStats.referralCount, referralCredits: noStats.referralCredits };
+      }
+      const referrerEntry = ServerDatabase.getTelegramUsage(referrerKey);
+      referrerEntry.extraCredits += TELEGRAM_REFERRAL_BONUS_CREDITS;
+      referrerEntry.referralCount += 1;
+      referrerEntry.referralCredits += TELEGRAM_REFERRAL_BONUS_CREDITS;
+      ServerDatabase.putTelegramUsage(referrerKey, referrerEntry);
+
+      const referredEntry = ServerDatabase.getTelegramUsage(referredKey);
+      referredEntry.referredBy = referrerKey;
+      ServerDatabase.putTelegramUsage(referredKey, referredEntry);
+
+      return { applied: true, reason: 'granted', extraCredits: referrerEntry.extraCredits, referralCount: referrerEntry.referralCount, referralCredits: referrerEntry.referralCredits };
+    } catch (error: any) {
+      console.warn('[ServerDB] Telegram referral grant skipped (fail-open):', error?.message || error);
+      return none;
+    }
+  }
+
+  public static getTelegramFreeAiLimit(): number {
+    return TELEGRAM_FREE_AI_DAILY_LIMIT;
+  }
+
+  /**
+   * Consumes one AI generation for a Telegram user: Pro Creator (unlimited) first,
+   * then the 3/day free quota, then paid extra credits. Returns whether the request
+   * may proceed plus a usage snapshot for paywall/UX messages. Persisted in
+   * data_store.json so the limit survives restarts and resets daily, automatically.
+   */
+  public static consumeTelegramAiQuota(telegramUserId: string | number): {
+    allowed: boolean; used: number; limit: number; extraCredits: number; proActive: boolean;
+  } {
+    const key = String(telegramUserId || '').trim();
+    const snapshot = { allowed: true, used: 0, limit: TELEGRAM_FREE_AI_DAILY_LIMIT, extraCredits: 0, proActive: false };
+    if (!key) return snapshot; // cannot attribute the user → never block
+    const entry = ServerDatabase.getTelegramUsage(key);
+    const today = ServerDatabase.telegramToday();
+
+    if (ServerDatabase.isTelegramProActive(key)) {
+      if (entry.date !== today) ServerDatabase.putTelegramUsage(key, entry); // persist the daily reset
+      return { ...snapshot, used: entry.used, extraCredits: entry.extraCredits, proActive: true };
+    }
+    if (entry.used < TELEGRAM_FREE_AI_DAILY_LIMIT) {
+      entry.used += 1;
+      entry.date = today;
+      ServerDatabase.putTelegramUsage(key, entry);
+      return { ...snapshot, used: entry.used, extraCredits: entry.extraCredits };
+    }
+    if (entry.extraCredits > 0) {
+      entry.extraCredits -= 1;
+      entry.date = today;
+      ServerDatabase.putTelegramUsage(key, entry);
+      return { ...snapshot, used: entry.used, extraCredits: entry.extraCredits };
+    }
+    if (entry.date !== today) ServerDatabase.putTelegramUsage(key, entry); // persist the daily reset even when blocked
+    return { ...snapshot, allowed: false, used: entry.used };
+  }
+
+  /**
+   * Applies a settled Telegram Stars payment to the user's account (idempotent per
+   * Telegram charge id) and appends an audit record. Returns the product applied.
+   */
+  public static applyTelegramStarsPayment(
+    telegramUserId: string | number,
+    invoicePayload: string,
+    stars: number,
+    chargeIds: { telegram?: string; provider?: string } = {},
+  ): { product: string; extraCredits: number; proUntil: string; totalPaidStars: number } {
+    const key = String(telegramUserId || '').trim();
+    const payload = String(invoicePayload || '').trim();
+    const starsPaid = Math.max(0, Math.round(Number(stars) || 0));
+    const tgCharge = String(chargeIds.telegram || '').trim();
+    const payments = ServerDatabase.db.telegramPayments || (ServerDatabase.db.telegramPayments = []);
+    if (tgCharge && payments.some((p) => p.telegramPaymentChargeId === tgCharge)) {
+      const existing = ServerDatabase.getTelegramUsage(key);
+      return { product: 'duplicate_ignored', extraCredits: existing.extraCredits, proUntil: existing.proUntil, totalPaidStars: existing.totalPaidStars };
+    }
+
+    const entry = ServerDatabase.getTelegramUsage(key);
+    let product = 'unknown';
+    if (payload.includes('pro_creator')) {
+      product = 'pro_creator_30d';
+      // Extend from the current expiry when the plan is still active, otherwise start now.
+      const base = ServerDatabase.isTelegramProActive(key) ? Date.parse(entry.proUntil) : Date.now();
+      const until = new Date((Number.isFinite(base) ? base : Date.now()) + TELEGRAM_PRO_CREATOR_DAYS * 24 * 60 * 60 * 1000);
+      entry.proUntil = until.toISOString();
+    } else if (payload.includes('extra_credits')) {
+      product = 'extra_credits_20';
+      entry.extraCredits += TELEGRAM_EXTRA_CREDITS_PER_INVOICE;
+    }
+    entry.totalPaidStars += starsPaid;
+    entry.date = ServerDatabase.telegramToday();
+    ServerDatabase.putTelegramUsage(key, entry);
+
+    payments.push({
+      telegramUserId: key,
+      stars: starsPaid,
+      invoicePayload: payload,
+      product,
+      telegramPaymentChargeId: tgCharge,
+      providerPaymentChargeId: String(chargeIds.provider || '').trim(),
+      at: new Date().toISOString(),
+    });
+    if (payments.length > 500) payments.splice(0, payments.length - 500);
+    ServerDatabase.save();
+    return { product, extraCredits: entry.extraCredits, proUntil: entry.proUntil, totalPaidStars: entry.totalPaidStars };
   }
 
   // ==========================================

@@ -6,6 +6,7 @@ import {
   getChannelSeoContext,
   getRecentVideoHistory,
   getViralVideoPredictions,
+  getCompetitorVideoSpy,
   type ViralVideoPrediction,
   extractYouTubeCredentials,
   YouTubeAnalyticsError,
@@ -15,7 +16,10 @@ import {
 import { GlobalApiKeyStore } from './keyStore';
 import { FailoverEngine } from './aiFailoverEngine';
 import { StoreKnowledgeEngine } from './aiKnowledgeEngine';
-import { ServerDatabase } from './db';
+import { ServerDatabase, TELEGRAM_EXTRA_CREDITS_PER_INVOICE, TELEGRAM_FREE_AI_DAILY_LIMIT, TELEGRAM_REFERRAL_BONUS_CREDITS } from './db';
+import { EdgeTTS } from 'node-edge-tts';
+import fs from 'fs';
+import path from 'path';
 
 interface TelegramUploadState {
   step: 'file' | 'privacy' | 'kids';
@@ -46,10 +50,14 @@ export class TelegramBotService {
    *  so the inline "🔄 Regenerate" / "📋 Copy Script" buttons can act without re-prompting. */
   private static viralShortsLastTopic = new Map<string, string>();
   private static viralShortsLastResult = new Map<string, string>();
+  /** Phase 4: per-chat memory of the last AI thumbnail prompt (regenerate/copy actions). */
+  private static thumbnailLastPrompt = new Map<string, string>();
   /** Per-owner registry: ownerId → bot config holding that user's exact Telegram token. */
   private static userBotRegistry = new Map<string, BotConfig>();
   /** Owner ids whose per-user webhook is currently registered with Telegram. */
   private static userWebhooks = new Set<string>();
+  /** Phase 3 referral: cached per-token getMe usernames for `t.me` invite links. */
+  private static botUsernameCache = new Map<string, string>();
 
   private static ensureYouTubeLink(reply: string, userQuery: string): string {
     const videoIntentKeywords = ['video', 'tutorial', 'youtube', 'ভিডিও', 'টিউটোরিয়াল', 'লিংক', 'link'];
@@ -185,7 +193,8 @@ export class TelegramBotService {
       keyboard: [
         [{ text: '📊 Channel Status' }, { text: '🔗 YouTube OAuth' }],
         [{ text: '🚀 AI SEO / Tools' }, { text: '⚙️ Settings' }],
-        [{ text: '🔥 Viral Shorts' }],
+        [{ text: '🔥 Viral Shorts' }, { text: '🎨 AI Thumbnail' }],
+        [{ text: '🕵️ Competitor Spy' }],
       ],
       resize_keyboard: true,
       one_time_keyboard: false,
@@ -212,6 +221,8 @@ export class TelegramBotService {
     if (t === '🚀 ai seo / tools' || t === 'ai seo' || t === 'seo') return 'seo';
     if (t === '⚙️ settings' || t === 'settings') return 'settings';
     if (t === '🔥 viral shorts' || t === 'viral shorts') return 'viral_shorts';
+    if (t === '🎨 ai thumbnail' || t === 'ai thumbnail' || t === 'thumbnail') return 'thumbnail';
+    if (t === '🕵️ competitor spy' || t === 'competitor spy' || t === 'yt spy' || t === 'spy') return 'yt_spy';
     return null;
   }
 
@@ -247,6 +258,24 @@ export class TelegramBotService {
           token,
           chatId,
           '🎬 **AI Viral Shorts Generator**\n\nSend me a **topic, keyword or YouTube URL** and the AI cascade returns a ready-to-film Shorts package: 🪝 hook, 📜 15-60s voiceover script, 🏷️ hashtags & caption, 🎨 thumbnail prompt.\n\nExample: `/viral_shorts AI side hustles for students`',
+          TelegramBotService.buildPersistentReplyKeyboard(),
+        );
+        break;
+      case 'thumbnail':
+        // Phase 4: same entry point as /thumbnail (free AI thumbnail generator).
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '🎨 **AI Thumbnail Generator**\n\nSend a **short visual description** and I\'ll render a click-ready **1280×720** thumbnail with the free Flux image engine — no API key, no cost.\n\n✨ **Tip:** describe the subject, mood and any text overlay.\nExample: `/thumbnail Gaming setup with purple neon glow, bold text: TOP 10`',
+          TelegramBotService.buildPersistentReplyKeyboard(),
+        );
+        break;
+      case 'yt_spy':
+        // Phase 5: same entry point as /yt_spy (competitor video spy & tag extractor).
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '🕵️ **Competitor Video Spy**\n\nSend a **YouTube video link** and I\'ll pull its real Data API metrics — views, likes, hidden SEO tags, duration — then the AI cascade dissects the hook & title strategy and hands you a **"How to Beat This Video"** angle.\n\nExample: `/yt_spy https://www.youtube.com/watch?v=dQw4w9WgXcQ`',
           TelegramBotService.buildPersistentReplyKeyboard(),
         );
         break;
@@ -574,7 +603,7 @@ export class TelegramBotService {
     }
   }
 
-  private static async handleYtCheckCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
+  private static async handleYtCheckCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null, telegramUserId?: string | number): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
@@ -583,6 +612,7 @@ export class TelegramBotService {
     const ytCheckCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytCheck', 'Channel Analytics (/yt_check)');
     if (ytCheckCreditBlock) return;
     if (await TelegramBotService.platformFeatureGuard(token, chatId, 'ytCheck', 'Channel Analytics')) return;
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'Channel Analytics (/yt_check)')) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '📊 লাইভ YouTube অ্যানালিটিক্স আনা হচ্ছে... এক মুহূর্ত!');
     try {
@@ -595,6 +625,63 @@ export class TelegramBotService {
       const message = `⚠️ **আনালিটিক্স আনা ব্যর্থ হয়েছে।**\n${TelegramBotService.formatYtError(error)}`;
       await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
     }
+  }
+
+  // ==========================================
+  // PHASE 5: COMPETITOR VIDEO SPY & TAG EXTRACTOR (/yt_spy)
+  // ==========================================
+
+  /** Extracts an 11-char YouTube video id from any common link shape (or bare id). */
+  private static extractYouTubeVideoId(raw: string): string {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+    const patterns = [
+      /(?:youtube\.com|youtube-nocookie\.com)\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)([\w-]{11})/i,
+      /youtu\.be\/([\w-]{11})/i,
+    ];
+    for (const pattern of patterns) {
+      const match = pattern.exec(text);
+      if (match) return match[1];
+    }
+    return /^[\w-]{11}$/.test(text) ? text : '';
+  }
+
+  /** Inline keyboard for the /yt_spy competitor report. */
+  private static buildYtSpyKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '🔥 AI SEO Boost', callback_data: 'yt:seo' },
+          { text: '🔮 Viral Ideas', callback_data: 'yt:viral' },
+        ],
+        [{ text: '⬅️ Main Menu', callback_data: 'menu:home' }],
+      ],
+    };
+  }
+
+  /** Phase 5: deterministic Gemini analysis prompt for the spied rival video. */
+  private static buildYtSpyPrompt(spy: {
+    title: string; description: string; channelTitle: string; tags: string[];
+    viewCount: number | null; likeCount: number | null; durationText: string;
+  }): string {
+    return [
+      'You are an elite YouTube growth strategist performing a COMPETITOR BREAKDOWN.',
+      'A rival video\'s real YouTube Data API metrics are provided below.',
+      'Analyze WHY it performed well and how the user can beat it.',
+      '',
+      'STRICT FORMAT — reply with EXACTLY these two labelled sections, in this order, using these exact emoji markers as section headers and no extra top-level sections:',
+      '💡 Hook & Title Strategy Analysis',
+      '🚀 How to Beat This Video',
+      '',
+      'Rules: in the first section explain the psychological hook, the title/keyword strategy and the packaging choices that made it perform; in the second section give a concrete better angle plus a ready-to-film script outline (hook line, 3-5 beats, CTA) targeting the same audience with sharper positioning.',
+      '',
+      'RIVAL VIDEO DATA:',
+      `Title: ${spy.title}`,
+      `Channel: ${spy.channelTitle}`,
+      `Views: ${spy.viewCount ?? 'hidden'} | Likes: ${spy.likeCount ?? 'hidden'} | Duration: ${spy.durationText || 'unknown'}`,
+      `Hidden SEO Tags: ${spy.tags.length ? spy.tags.join(', ') : 'none exposed by the API'}`,
+      `Description (first 600 chars): ${String(spy.description || 'empty').slice(0, 600)}`,
+    ].join('\n');
   }
 
   /** Tolerant JSON extraction from an AI response (strips fences / prose). */
@@ -613,8 +700,86 @@ export class TelegramBotService {
     }
   }
 
+  /** /yt_spy — competitor video spy: real Data API metrics + AI "how to beat it" breakdown. */
+  private static async handleYtSpyCommand(
+    token: string,
+    chatId: string | number,
+    effectiveConfig: BotConfig | null,
+    telegramUserId: string | number,
+    rawUrlOrId: string,
+  ): Promise<void> {
+    const videoId = TelegramBotService.extractYouTubeVideoId(rawUrlOrId);
+    if (!videoId) {
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        '🕵️ **Competitor Video Spy**\n\nSend a **YouTube video link** and I\'ll pull its real Data API metrics — views, likes, hidden SEO tags, duration — then the AI cascade dissects the hook & title strategy and hands you a **"How to Beat This Video"** angle.\n\nExample: `/yt_spy https://www.youtube.com/watch?v=dQw4w9WgXcQ`',
+        TelegramBotService.buildPersistentReplyKeyboard(),
+      );
+      return;
+    }
+    const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
+    if (!credentials) {
+      await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
+      return;
+    }
+    const spyCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytCheck', 'Competitor Spy (/yt_spy)');
+    if (spyCreditBlock) return;
+    if (await TelegramBotService.platformFeatureGuard(token, chatId, 'ytCheck', 'Competitor Spy')) return;
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'Competitor Spy (/yt_spy)')) return;
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '🕵️ **Spying on the rival video…** Pulling hidden tags and cooking the takedown plan!');
+    try {
+      const spy = await getCompetitorVideoSpy(credentials, videoId);
+      if (!spy) {
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          '🔍 **Video not found.** It may be private, deleted, or the link is wrong — double-check the URL and try again.',
+          TelegramBotService.buildPersistentReplyKeyboard(),
+        );
+        return;
+      }
+      const aiText = await TelegramBotService.aiGenerator(
+        TelegramBotService.buildYtSpyPrompt(spy),
+        effectiveConfig?.modelName || undefined,
+      );
+      const aiBody = String(aiText || '').trim() || '⚠️ The AI cascade returned an empty breakdown — please try again in a moment.';
+      const report = [
+        '🕵️ **Competitor Video Breakdown**',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        `📺 **${TelegramBotService.escapeHtml(spy.title)}**`,
+        spy.channelTitle ? `🎥 Channel: **${TelegramBotService.escapeHtml(spy.channelTitle)}**` : '',
+        '',
+        '📊 **Video Performance Metrics**',
+        `• 👁️ Views: **${formatCompactNumber(spy.viewCount)}**`,
+        `• 👍 Likes: **${spy.likeCount === null ? 'hidden' : formatCompactNumber(spy.likeCount)}**`,
+        `• 💬 Comments: **${spy.commentCount === null ? 'hidden' : formatCompactNumber(spy.commentCount)}**`,
+        `• ⏱️ Duration: **${spy.durationText || 'unknown'}**`,
+        `• 📅 Published: **${spy.publishedAt ? spy.publishedAt.slice(0, 10) : 'unknown'}**`,
+        '',
+        '🏷️ **Hidden SEO Tags** (copy-ready)',
+        spy.tags.length ? `\`${TelegramBotService.escapeHtml(spy.tags.join(', '))}\`` : '`(none exposed by the API)`',
+        '',
+        TelegramBotService.ensureYouTubeLink(aiBody, spy.title),
+        '',
+        `🔗 **Watch the rival video:** https://www.youtube.com/watch?v=${spy.videoId}`,
+      ].filter((line) => line !== '').join('\n');
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        await TelegramBotService.appendReferralFooter(report, token, telegramUserId),
+        TelegramBotService.buildYtSpyKeyboard(),
+      );
+      TelegramBotService.lastError = null;
+    } catch (error: any) {
+      const message = `⚠️ **Competitor breakdown failed.**\n${TelegramBotService.formatYtError(error)}`;
+      await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
+    }
+  }
+
   /** /yt_seo — AI channel SEO audit: keywords, viral bio, tags and structural recommendations. */
-  private static async handleYtSeoCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
+  private static async handleYtSeoCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null, telegramUserId?: string | number): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
@@ -627,6 +792,7 @@ export class TelegramBotService {
       await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /yt_seo again.');
       return;
     }
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'AI Channel SEO (/yt_seo)')) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '🔥 AI SEO অডিট চলছে... চ্যানেল স্নিপেট ও সর্বশেষ ভিডিও বিশ্লেষণ করা হচ্ছে!');
     try {
@@ -676,7 +842,12 @@ export class TelegramBotService {
         lines.push('', TelegramBotService.escapeHtml(aiText.slice(0, 2500)));
       }
       lines.push('', '⚡ Quick actions below — upload with this SEO or view your analytics.');
-      await TelegramBotService.sendMessage(token, chatId, lines.join('\n'), TelegramBotService.buildSeoActionsKeyboard());
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        await TelegramBotService.appendReferralFooter(lines.join('\n'), token, telegramUserId),
+        TelegramBotService.buildSeoActionsKeyboard(),
+      );
     } catch (error: any) {
       const message = `⚠️ **AI SEO তৈরি করতে ব্যর্থ।**\n${TelegramBotService.formatYtError(error)}`;
       await TelegramBotService.sendMessage(token, chatId, message, TelegramBotService.buildMainMenuKeyboard());
@@ -761,6 +932,7 @@ export class TelegramBotService {
           { text: '🔄 Regenerate', callback_data: 'vs:regenerate' },
           { text: '📋 Copy Script', callback_data: 'vs:copy_script' },
         ],
+        [{ text: '🔊 Generate Voiceover', callback_data: 'vs:tts' }],
         [{ text: '⬅️ Main Menu', callback_data: 'menu:home' }],
       ],
     };
@@ -783,6 +955,440 @@ export class TelegramBotService {
     TelegramBotService.viralShortsLastTopic.set(String(chatId), topic);
     TelegramBotService.viralShortsLastResult.set(String(chatId), text);
     return text;
+  }
+
+  // ==========================================
+  // PHASE 4: FREE AI THUMBNAIL GENERATOR (/thumbnail)
+  // 100% free image engine (Pollinations.ai — no API key, no cost): renders a
+  // click-ready 1280×720 thumbnail with the Flux model and delivers it as a real
+  // Telegram photo (multipart in-memory buffer, no temp files).
+  // ==========================================
+
+  /** Pollinations.ai free image engine — 1280×720 thumbnail, Flux model. */
+  private static buildThumbnailImageUrl(prompt: string): string {
+    return `https://pollinations.ai/p/${encodeURIComponent(String(prompt || '').trim())}?width=1280&height=720&model=flux`;
+  }
+
+  /** Inline actions attached to every generated AI thumbnail. */
+  private static buildThumbnailKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [
+          { text: '🔄 Regenerate Thumbnail', callback_data: 'th:regenerate' },
+          { text: '📜 Copy Prompt', callback_data: 'th:copy_prompt' },
+        ],
+      ],
+    };
+  }
+
+  /** Downloads the rendered image and delivers it via Telegram sendPhoto (multipart buffer). */
+  private static async sendThumbnailPhoto(
+    token: string,
+    chatId: string | number,
+    caption: string,
+    prompt: string,
+    replyMarkup?: Record<string, any>,
+  ): Promise<void> {
+    const imageUrl = TelegramBotService.buildThumbnailImageUrl(prompt);
+    const imageResponse = await fetch(imageUrl, { signal: AbortSignal.timeout(90000) });
+    if (!imageResponse.ok) throw new Error(`Thumbnail image engine HTTP ${imageResponse.status}`);
+    const contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+    const buffer = Buffer.from(await imageResponse.arrayBuffer());
+    if (!buffer.length) throw new Error('Thumbnail engine returned an empty image.');
+    if (!contentType.startsWith('image')) throw new Error(`Thumbnail engine returned an invalid content type: ${contentType}`);
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('photo', new Blob([new Uint8Array(buffer)], { type: contentType }), 'thumbnail.jpg');
+    form.append('caption', caption);
+    form.append('parse_mode', 'HTML');
+    if (replyMarkup) form.append('reply_markup', JSON.stringify(replyMarkup));
+    const apiResponse = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendPhoto`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(60000),
+    });
+    const data = await apiResponse.json().catch(() => ({}) as any) as any;
+    if (!data?.ok) throw new Error(String(data?.description || 'Telegram sendPhoto failed'));
+  }
+
+  /** Renders + delivers the thumbnail with an HTML caption (free-tier footer included). */
+  private static async deliverAiThumbnail(
+    token: string,
+    chatId: string | number,
+    telegramUserId: string | number | undefined,
+    prompt: string,
+  ): Promise<void> {
+    const cleanPrompt = String(prompt || '').trim();
+    if (!cleanPrompt) throw new Error('Thumbnail prompt is empty.');
+    const captionBase = [
+      '🎨 <b>AI Thumbnail</b>',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `• <b>Prompt:</b> <i>${TelegramBotService.escapeHtml(cleanPrompt)}</i>`,
+      '✨ <i>1280×720 HD · Flux engine · 100% free</i>',
+    ].join('\n');
+    const caption = await TelegramBotService.appendReferralFooter(captionBase, token, telegramUserId);
+    await TelegramBotService.sendThumbnailPhoto(token, chatId, caption, cleanPrompt, TelegramBotService.buildThumbnailKeyboard());
+    TelegramBotService.thumbnailLastPrompt.set(String(chatId), cleanPrompt);
+  }
+
+  /** /thumbnail — free AI thumbnail generator (Pollinations 1280×720 Flux, no API key). */
+  private static async handleThumbnailCommand(
+    token: string,
+    chatId: string | number,
+    telegramUserId: string | number,
+    prompt: string,
+  ): Promise<void> {
+    const cleanPrompt = String(prompt || '').trim();
+    if (!cleanPrompt) {
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        '🎨 **AI Thumbnail Generator**\n\nSend a **short visual description** and I\'ll render a click-ready **1280×720** thumbnail with the free Flux image engine — no API key, no cost.\n\n✨ **Tip:** describe the subject, mood and any text overlay.\nExample: `/thumbnail Gaming setup with purple neon glow, bold text: TOP 10`',
+        TelegramBotService.buildPersistentReplyKeyboard(),
+      );
+      return;
+    }
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'AI Thumbnail (/thumbnail)')) return;
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '🎨 **Rendering your thumbnail…** Flux engine is painting 1280×720 pixels. One moment!');
+    try {
+      await TelegramBotService.deliverAiThumbnail(token, chatId, telegramUserId, cleanPrompt);
+      TelegramBotService.lastError = null;
+    } catch (error: any) {
+      console.warn('[TelegramBotService] /thumbnail failed:', error?.message || error);
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        `⚠️ **Could not render your thumbnail right now.** The image engine is busy or unreachable.\n\n🔗 **Direct link (try again in a moment):** ${TelegramBotService.buildThumbnailImageUrl(cleanPrompt)}`,
+        TelegramBotService.buildPersistentReplyKeyboard(),
+      );
+    }
+  }
+
+  // ==========================================
+  // PHASE 6: AI VOICEOVER GENERATOR (/tts)
+  // Free Microsoft Edge neural TTS (no API key, no cost): Bengali text is
+  // auto-detected (Bangla unicode) and read with a bn-BD voice; anything else
+  // uses a natural English voice. The .mp3 is synthesized to a temp file,
+  // delivered via sendAudio, then immediately deleted from disk.
+  // ==========================================
+
+  private static readonly TTS_MAX_CHARS = 4000;
+
+  /** Auto-detect Bengali (Bangla unicode block) for a bn-BD voice; default en-US otherwise. */
+  private static pickTtsVoice(text: string): string {
+    const clean = String(text || '');
+    const pool = /[\u0980-\u09FF]/.test(clean)
+      ? ['bn-BD-NabanitaNeural', 'bn-BD-PradeepNeural']
+      : ['en-US-AvaNeural', 'en-US-ChristopherNeural'];
+    return pool[clean.length % pool.length];
+  }
+
+  /** Synthesizes an Edge neural TTS .mp3, delivers it via Telegram sendAudio and deletes the temp file. */
+  private static async sendTtsAudio(
+    token: string,
+    chatId: string | number,
+    text: string,
+    caption: string,
+    replyMarkup?: Record<string, any>,
+  ): Promise<void> {
+    const cleanText = String(text || '').trim().slice(0, TelegramBotService.TTS_MAX_CHARS);
+    if (!cleanText) throw new Error('Voiceover text is empty.');
+    const voice = TelegramBotService.pickTtsVoice(cleanText);
+    const outputPath = path.join(process.cwd(), `.tts-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+    try {
+      const tts = new EdgeTTS({ voice, outputFormat: 'audio-24khz-48kbitrate-mono-mp3' });
+      await tts.ttsPromise(cleanText, outputPath);
+      const buffer = Buffer.from(await fs.promises.readFile(outputPath));
+      if (!buffer.length) throw new Error('Edge TTS returned an empty audio file.');
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append('audio', new Blob([new Uint8Array(buffer)], { type: 'audio/mpeg' }), 'naxora_voiceover.mp3');
+      form.append('title', 'Naxora AI Voiceover');
+      if (caption) form.append('caption', caption);
+      form.append('parse_mode', 'HTML');
+      if (replyMarkup) form.append('reply_markup', JSON.stringify(replyMarkup));
+      const apiResponse = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendAudio`, {
+        method: 'POST',
+        body: form,
+        signal: AbortSignal.timeout(60000),
+      });
+      const data = await apiResponse.json().catch(() => ({}) as any) as any;
+      if (!data?.ok) throw new Error(String(data?.description || 'Telegram sendAudio failed'));
+    } finally {
+      await fs.promises.unlink(outputPath).catch(() => {});
+    }
+  }
+
+  /** /tts — free AI voiceover generator via Microsoft Edge TTS (no API key). */
+  private static async handleTtsCommand(
+    token: string,
+    chatId: string | number,
+    telegramUserId: string | number,
+    text: string,
+  ): Promise<void> {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) {
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        '🎙️ **AI Voiceover Generator**\n\nSend me **any text** and I\'ll turn it into a natural neural **voiceover (.mp3)** — 100% free through Microsoft Edge TTS.\n• 🇧🇩 **Bengali auto-detected** → bn-BD neural voice\n• 🌎 Default → natural English voice\n\nExample: `/tts Welcome to Naxora AI — your viral script starts now!`',
+        TelegramBotService.buildPersistentReplyKeyboard(),
+      );
+      return;
+    }
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'AI Voiceover (/tts)')) return;
+    await TelegramBotService.sendChatAction(token, chatId);
+    await TelegramBotService.sendMessage(token, chatId, '🎙️ **Synthesizing your voiceover…** The neural voice is warming up! 🔥');
+    try {
+      const snippet = `${TelegramBotService.escapeHtml(cleanText.slice(0, 120))}${cleanText.length > 120 ? '…' : ''}`;
+      const caption = await TelegramBotService.appendReferralFooter(
+        `🎙️ <b>AI Voiceover</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n📝 <i>${snippet}</i>\n✨ <i>Microsoft Edge neural voice · 100% free</i>`,
+        token,
+        telegramUserId,
+      );
+      await TelegramBotService.sendTtsAudio(token, chatId, cleanText, caption);
+      TelegramBotService.lastError = null;
+    } catch (error: any) {
+      console.warn('[TelegramBotService] /tts failed:', error?.message || error);
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        '⚠️ **Voiceover generation failed.**\n\nEdge TTS may be busy or unavailable — please try again in a moment. (For self-hosting: make sure `node-edge-tts` is installed.)',
+        TelegramBotService.buildMainMenuKeyboard(),
+      );
+    }
+  }
+
+  // ==========================================
+  // PHASE 3: REFERRAL SYSTEM + FREE-TIER PROMO FOOTER
+  // ==========================================
+
+  /** Resolves the bot's @username (getMe, cached per token) for t.me invite links. */
+  private static async resolveBotUsername(token: string): Promise<string> {
+    const key = String(token || '').trim();
+    const cached = TelegramBotService.botUsernameCache.get(key);
+    if (cached) return cached;
+    const fallback = String(process.env.TELEGRAM_BOT_USERNAME || '').trim().replace(/^@/, '') || 'NaxoraAI_bot';
+    if (!key) return fallback;
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(key)}/getMe`, { signal: AbortSignal.timeout(5000) });
+      const data = await response.json().catch(() => ({}) as any) as any;
+      const username = String(data?.result?.username || '').trim();
+      if (username) {
+        TelegramBotService.botUsernameCache.set(key, username);
+        return username;
+      }
+    } catch (error: any) {
+      console.warn('[TelegramBotService] getMe failed for referral link (fallback username used):', error?.message || error);
+    }
+    return fallback;
+  }
+
+  /** Invite deep-link that credits `telegramUserId` when a new user joins through it. */
+  private static buildReferralLink(username: string, telegramUserId: string | number): string {
+    return `https://t.me/${username}?start=ref_${telegramUserId}`;
+  }
+
+  /**
+   * Phase 3: appends the promotional invite footer to AI-generated output for FREE
+   * tier users only — omitted entirely for paid Pro (Stars) users and empty ids.
+   */
+  private static async appendReferralFooter(text: string, token: string, telegramUserId?: string | number): Promise<string> {
+    const body = String(text || '');
+    const key = String(telegramUserId ?? '').trim();
+    if (!key || ServerDatabase.isTelegramProActive(key)) return body;
+    try {
+      const username = await TelegramBotService.resolveBotUsername(token);
+      const link = TelegramBotService.buildReferralLink(username, key);
+      const footer = `\n\n⚡ Generated via Naxora AI — Get your viral scripts: ${link}`;
+      return body.includes(`?start=ref_${key}`) ? body : body + footer;
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Referral footer skipped (fail-open):', error?.message || error);
+      return body;
+    }
+  }
+
+  // ==========================================
+  // PHASE 6: TELEGRAM FREEMIUM (3 FREE AI GENERATIONS/DAY + STARS PAYWALL)
+  // ==========================================
+
+  /** The two Telegram Stars offers surfaced by the paywall. XTR currency: the invoice
+   *  amount is the Star count and no provider token is required. */
+  private static readonly STARS_PRODUCTS: Record<string, { title: string; description: string; payload: string; stars: number }> = {
+    buy_credits: {
+      title: '20 Extra AI Credits',
+      description: '⭐️ 50 Stars → 20 extra AI generations (SEO, Shorts, Analytics). Credits never expire.',
+      payload: 'tg_stars:extra_credits_20',
+      stars: 50,
+    },
+    buy_pro: {
+      title: 'Pro Creator (30 Days)',
+      description: '⭐️ 100 Stars → Unlimited AI generations (SEO, Shorts, Analytics & more) for 30 days.',
+      payload: 'tg_stars:pro_creator_30d',
+      stars: 100,
+    },
+  };
+
+  /** Paywall message shown when the daily free AI quota is exhausted. */
+  private static buildTelegramPaywallMessage(used: number, limit: number): string {
+    const usedToday = Math.max(0, Math.min(limit, Math.round(Number(used) || 0)));
+    return [
+      `⚠️ **Daily Free Limit Reached (${usedToday}/${limit} used). Upgrade with Telegram Stars to continue instantly!**`,
+      '',
+      'Every account gets **3 free AI generations** every 24 hours (SEO, Shorts, Analytics).',
+      'Tap a button below to pay with ⭐️ Telegram Stars — credits apply instantly:',
+      '• ⭐️ 50 Stars → **20 Extra AI Credits**',
+      '• ⭐️ 100 Stars → **Pro Creator — unlimited AI for 30 days**',
+    ].join('\n');
+  }
+
+  /** Inline buttons that open the two Telegram Stars invoices. */
+  private static buildTelegramStarsPaywallKeyboard(): Record<string, any> {
+    return {
+      inline_keyboard: [
+        [{ text: '⭐️ 50 Stars → 20 Extra Credits', callback_data: 'stars:buy_credits' }],
+        [{ text: '⭐️ 100 Stars → Pro Creator (Unlimited)', callback_data: 'stars:buy_pro' }],
+      ],
+    };
+  }
+
+  /** Sends a Telegram Stars invoice for the selected product (currency XTR). */
+  private static async sendTelegramStarsInvoice(token: string, chatId: string | number, productKey: string): Promise<void> {
+    const product = TelegramBotService.STARS_PRODUCTS[productKey];
+    if (!product) return;
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendInvoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          title: product.title,
+          description: product.description,
+          payload: product.payload,
+          // Telegram Stars: XTR currency, empty provider token, amount = Star count.
+          currency: 'XTR',
+          prices: [{ label: product.title, amount: product.stars }],
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        console.warn(`[TelegramBotService] sendInvoice(${productKey}) failed:`, (data as any)?.description || response.status);
+      }
+    } catch (error: any) {
+      console.warn(`[TelegramBotService] sendInvoice(${productKey}) error:`, error?.message || error);
+    }
+  }
+
+  /** Telegram requires pre-checkout queries to be answered within 10 seconds. */
+  private static async answerPreCheckoutQuery(token: string, preCheckoutQueryId: string, ok: boolean, errorMessage?: string): Promise<void> {
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/answerPreCheckoutQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pre_checkout_query_id: preCheckoutQueryId,
+          ok,
+          ...(ok ? {} : { error_message: String(errorMessage || 'This offer is no longer available. Please start the payment again.') }),
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (error: any) {
+      console.warn('[TelegramBotService] answerPreCheckoutQuery failed:', error?.message || error);
+    }
+  }
+
+  /** Credits the buyer the moment a Telegram Stars payment settles (successful_payment). */
+  private static async handleSuccessfulStarsPayment(
+    token: string,
+    chatId: string | number,
+    telegramUserId: string | number,
+    payment: any,
+  ): Promise<void> {
+    try {
+      const stars = Number(payment?.total_amount) || 0;
+      const payload = String(payment?.invoice_payload || '');
+      const applied = ServerDatabase.applyTelegramStarsPayment(telegramUserId, payload, stars, {
+        telegram: payment?.telegram_payment_charge_id,
+        provider: payment?.provider_payment_charge_id,
+      });
+      if (applied.product === 'duplicate_ignored') {
+        await TelegramBotService.sendMessage(token, chatId, '✅ This payment was already credited — nothing else to do.');
+        return;
+      }
+      if (applied.product === 'pro_creator_30d') {
+        const untilDate = applied.proUntil ? applied.proUntil.slice(0, 10) : '';
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          [
+            '⭐️ **Payment received — Pro Creator activated!**',
+            '',
+            '• Unlimited AI generations (SEO, Shorts, Analytics & more)',
+            `• Active until: **${untilDate}**`,
+            `• Lifetime Stars spent: **${applied.totalPaidStars}**`,
+            '',
+            'Enjoy — run /yt_seo, /viral_shorts or /yt_check anytime! 🚀',
+          ].join('\n'),
+          TelegramBotService.buildMainMenuKeyboard(),
+        );
+        return;
+      }
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        [
+          '⭐️ **Payment received — credits added!**',
+          '',
+          `• +**${TELEGRAM_EXTRA_CREDITS_PER_INVOICE} extra AI credits** banked`,
+          `• Extra credits left: **${applied.extraCredits}**`,
+          `• Free today: **${ServerDatabase.getTelegramUsage(telegramUserId).used}/${TELEGRAM_FREE_AI_DAILY_LIMIT}**`,
+          '',
+          'Extra credits are used automatically once your free daily generations run out.',
+        ].join('\n'),
+        TelegramBotService.buildMainMenuKeyboard(),
+      );
+    } catch (error: any) {
+      console.warn('[TelegramBotService] successful_payment handling failed:', error?.message || error);
+      try {
+        await TelegramBotService.sendMessage(token, chatId, '⚠️ Payment received, but crediting failed. Please contact support with your charge ID.');
+      } catch {
+        // best-effort notice only
+      }
+    }
+  }
+
+  /**
+   * Phase 6 freemium gate: consumes one AI generation for this Telegram user when the
+   * daily free quota / extra credits / Pro plan allow it; otherwise sends the Stars
+   * paywall and returns true (the caller must stop). Fails open on accounting errors
+   * so the freemium layer can never take a working bot down.
+   */
+  private static async telegramAiQuotaGate(
+    token: string,
+    chatId: string | number,
+    telegramUserId: string | number | undefined,
+    featureLabel: string,
+  ): Promise<boolean> {
+    try {
+      const key = telegramUserId === undefined || telegramUserId === null ? chatId : telegramUserId;
+      const quota = ServerDatabase.consumeTelegramAiQuota(key);
+      if (quota.allowed) {
+        console.log(`🚦 [Quota] ${featureLabel} allowed for Telegram user ${key} (free ${quota.used}/${quota.limit}, extra ${quota.extraCredits}, pro ${quota.proActive})`);
+        return false;
+      }
+      await TelegramBotService.sendMessage(
+        token,
+        chatId,
+        TelegramBotService.buildTelegramPaywallMessage(quota.used, quota.limit),
+        TelegramBotService.buildTelegramStarsPaywallKeyboard(),
+      );
+      return true;
+    } catch (error: any) {
+      console.warn('[TelegramBotService] Telegram AI quota gate failed open:', error?.message || error);
+      return false;
+    }
   }
 
   /** Formats the AI viral video prediction report for /yt_viral. */
@@ -813,7 +1419,7 @@ export class TelegramBotService {
   }
 
   /** /yt_viral — AI-powered viral video concept predictions for the channel. */
-  private static async handleYtViralCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null): Promise<void> {
+  private static async handleYtViralCommand(token: string, chatId: string | number, effectiveConfig: BotConfig | null, telegramUserId?: string | number): Promise<void> {
     const credentials = TelegramBotService.resolveTenantYouTubeCredentials(effectiveConfig);
     if (!credentials) {
       await TelegramBotService.sendMessage(token, chatId, TelegramBotService.buildYtConnectGuide(), TelegramBotService.buildYtConnectKeyboard(chatId));
@@ -826,6 +1432,7 @@ export class TelegramBotService {
     const ytViralCreditBlock = await TelegramBotService.chargeFeatureCredits(token, chatId, 'ytViral', 'AI Viral Predictor (/yt_viral)');
     if (ytViralCreditBlock) return;
     if (await TelegramBotService.platformFeatureGuard(token, chatId, 'ytViral', 'AI Viral Predictor')) return;
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'AI Viral Predictor (/yt_viral)')) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '🔮 AI ভিরাল ভিডিও ধারণা বিশ্লেষণ করা হচ্ছে... এক মুহূর্ত!');
     try {
@@ -850,7 +1457,11 @@ export class TelegramBotService {
       await TelegramBotService.sendMessage(
         token,
         chatId,
-        TelegramBotService.formatYtViralReport(stats.title, predictions, videoHistory.length),
+        await TelegramBotService.appendReferralFooter(
+          TelegramBotService.formatYtViralReport(stats.title, predictions, videoHistory.length),
+          token,
+          telegramUserId,
+        ),
         TelegramBotService.buildYtViralKeyboard(),
       );
     } catch (error: any) {
@@ -866,6 +1477,7 @@ export class TelegramBotService {
     chatId: string | number,
     effectiveConfig: BotConfig | null,
     topic: string,
+    telegramUserId?: string | number,
   ): Promise<void> {
     const cleanTopic = String(topic || '').trim();
     if (!cleanTopic) {
@@ -881,6 +1493,7 @@ export class TelegramBotService {
       await TelegramBotService.sendMessage(token, chatId, '⚠️ AI engine is not connected yet. Add an AI API key (Web App → 1-Click API Portal) and try /viral_shorts again.');
       return;
     }
+    if (await TelegramBotService.telegramAiQuotaGate(token, chatId, telegramUserId, 'AI Viral Shorts (/viral_shorts)')) return;
     await TelegramBotService.sendChatAction(token, chatId);
     await TelegramBotService.sendMessage(token, chatId, '🎬 **Cooking your viral Shorts package…** Hook, script, hashtags & thumbnail on the way! 🔥');
     try {
@@ -888,7 +1501,11 @@ export class TelegramBotService {
       await TelegramBotService.sendMessage(
         token,
         chatId,
-        TelegramBotService.formatViralShortsMessage(aiText, cleanTopic),
+        await TelegramBotService.appendReferralFooter(
+          TelegramBotService.formatViralShortsMessage(aiText, cleanTopic),
+          token,
+          telegramUserId,
+        ),
         TelegramBotService.buildViralShortsKeyboard(),
       );
     } catch (error: any) {
@@ -950,13 +1567,13 @@ export class TelegramBotService {
         await TelegramBotService.sendMessage(token, chatId, '⚙️ **Settings**\n\nTap the toggle to change it:', TelegramBotService.buildSettingsKeyboard(effectiveConfig));
         return;
       case 'yt:analytics':
-        await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig);
+        await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig, callbackQuery?.from?.id ?? chatId);
         return;
             case 'yt:seo':
-        await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig);
+        await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig, callbackQuery?.from?.id ?? chatId);
         return;
       case 'yt:viral':
-        await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig);
+        await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig, callbackQuery?.from?.id ?? chatId);
         return;
       case 'vs:regenerate': {
         const cachedTopic = (TelegramBotService.viralShortsLastTopic.get(String(chatId)) || '').trim();
@@ -969,13 +1586,18 @@ export class TelegramBotService {
           );
           return;
         }
+        if (await TelegramBotService.telegramAiQuotaGate(token, chatId, callbackQuery?.from?.id ?? chatId, 'AI Viral Shorts (regenerate)')) return;
         await TelegramBotService.sendMessage(token, chatId, '🔄 **Regenerating your viral Shorts package…** 🔥');
         try {
           const aiText = await TelegramBotService.generateViralShortsPackage(token, chatId, cachedTopic, effectiveConfig);
           await TelegramBotService.sendMessage(
             token,
             chatId,
-            TelegramBotService.formatViralShortsMessage(aiText, cachedTopic),
+            await TelegramBotService.appendReferralFooter(
+              TelegramBotService.formatViralShortsMessage(aiText, cachedTopic),
+              token,
+              callbackQuery?.from?.id ?? chatId,
+            ),
             TelegramBotService.buildViralShortsKeyboard(),
           );
         } catch (error: any) {
@@ -1006,6 +1628,90 @@ export class TelegramBotService {
         }
         return;
       }
+      case 'vs:tts': {
+        const script = TelegramBotService.extractViralShortsSection(
+          TelegramBotService.viralShortsLastResult.get(String(chatId)) || '',
+          '📜',
+        );
+        if (!script) {
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '⚠️ No cached script yet — generate one first with `/viral_shorts <topic>`.',
+            TelegramBotService.buildPersistentReplyKeyboard(),
+          );
+          return;
+        }
+        if (await TelegramBotService.telegramAiQuotaGate(token, chatId, callbackQuery?.from?.id ?? chatId, 'AI Voiceover (viral shorts)')) return;
+        await TelegramBotService.sendChatAction(token, chatId);
+        await TelegramBotService.sendMessage(token, chatId, '🎙️ **Generating your voiceover…** Edge neural voice at work! 🔥');
+        try {
+          const caption = await TelegramBotService.appendReferralFooter(
+            '🎙️ <b>AI Voiceover</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n✨ <i>Microsoft Edge neural voice · 100% free</i>',
+            token,
+            callbackQuery?.from?.id ?? chatId,
+          );
+          await TelegramBotService.sendTtsAudio(token, chatId, script, caption);
+          TelegramBotService.lastError = null;
+        } catch (error: any) {
+          console.warn('[TelegramBotService] viral shorts voiceover failed:', error?.message || error);
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '⚠️ **Voiceover generation failed.** Edge TTS is busy or unavailable — please try again in a moment.',
+            TelegramBotService.buildMainMenuKeyboard(),
+          );
+        }
+        return;
+      }
+      case 'th:regenerate': {
+        const cachedThumbPrompt = (TelegramBotService.thumbnailLastPrompt.get(String(chatId)) || '').trim();
+        if (!cachedThumbPrompt) {
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '🎨 No cached prompt yet — generate one first with `/thumbnail <prompt>`.',
+            TelegramBotService.buildPersistentReplyKeyboard(),
+          );
+          return;
+        }
+        if (await TelegramBotService.telegramAiQuotaGate(token, chatId, callbackQuery?.from?.id ?? chatId, 'AI Thumbnail (regenerate)')) return;
+        await TelegramBotService.sendChatAction(token, chatId);
+        await TelegramBotService.sendMessage(token, chatId, '🔄 **Regenerating your thumbnail…** 🔥');
+        try {
+          await TelegramBotService.deliverAiThumbnail(token, chatId, callbackQuery?.from?.id ?? chatId, cachedThumbPrompt);
+          TelegramBotService.lastError = null;
+        } catch (error: any) {
+          console.warn('[TelegramBotService] /thumbnail regenerate failed:', error?.message || error);
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '⚠️ **Regeneration failed.** The image engine is busy — please try again in a moment.',
+            TelegramBotService.buildMainMenuKeyboard(),
+          );
+        }
+        return;
+      }
+      case 'th:copy_prompt': {
+        const cachedThumbPrompt = (TelegramBotService.thumbnailLastPrompt.get(String(chatId)) || '').trim();
+        if (cachedThumbPrompt) {
+          await TelegramBotService.sendMessage(token, chatId, `📜 **Copy-ready Thumbnail Prompt**\n\n\`${cachedThumbPrompt}\``);
+        } else {
+          await TelegramBotService.sendMessage(
+            token,
+            chatId,
+            '⚠️ No cached prompt yet — generate one first with `/thumbnail <prompt>`.',
+            TelegramBotService.buildPersistentReplyKeyboard(),
+          );
+        }
+        return;
+      }
+      case 'stars:buy_credits':
+        await TelegramBotService.sendTelegramStarsInvoice(token, chatId, 'buy_credits');
+        return;
+      case 'stars:buy_pro':
+        await TelegramBotService.sendTelegramStarsInvoice(token, chatId, 'buy_pro');
+        return;
       case 'settings:toggle_autoupload': {
         if (effectiveConfig && typeof effectiveConfig === 'object') {
           effectiveConfig.enableYtAutoUploadQueue = !(effectiveConfig.enableYtAutoUploadQueue !== false);
@@ -1087,9 +1793,13 @@ export class TelegramBotService {
     try {
       const callbackQuery = update?.callback_query || null;
       const message = update?.message || update?.edited_message || update?.channel_post || callbackQuery?.message || null;
+      // Phase 6: Telegram Stars — pre-checkout queries carry no chat id and must reach
+      // the payment flow, so they are exempt from the chat-less update drop below.
+      const preCheckoutQuery = update?.pre_checkout_query || null;
+      const successfulPayment = message?.successful_payment || null;
       const chatId = message?.chat?.id;
       const text = typeof message?.text === 'string' ? message.text.trim() : '';
-      if (!chatId) return { ok: true, ignored: true };
+      if (!chatId && !preCheckoutQuery) return { ok: true, ignored: true };
 
       TelegramBotService.processedUpdates++;
 
@@ -1127,6 +1837,20 @@ export class TelegramBotService {
         console.warn('[TelegramBotService] Telegram token missing; update skipped safely.');
         return { ok: true, skipped: true };
       }
+      // Phase 6: Telegram Stars — pre-checkout queries MUST be answered within 10
+      // seconds or Telegram cancels the payment, so they are answered first.
+      if (preCheckoutQuery) {
+        const payload = String(preCheckoutQuery.invoice_payload || '');
+        await TelegramBotService.answerPreCheckoutQuery(token, String(preCheckoutQuery.id || ''), payload.startsWith('tg_stars:'));
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // Phase 6: Telegram Stars — credit the buyer the moment the payment settles.
+      if (successfulPayment) {
+        await TelegramBotService.handleSuccessfulStarsPayment(token, chatId, message?.from?.id ?? chatId, successfulPayment);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
       // Interactive inline-keyboard callback queries (main menu / settings buttons).
       if (callbackQuery) {
         await TelegramBotService.handleCallbackQuery(callbackQuery, token, chatId, effectiveConfig || null);
@@ -1154,9 +1878,50 @@ export class TelegramBotService {
         await TelegramBotService.sendMessage(token, chatId, 'Access Denied: You do not have authorization for administrative operations.');
         return { ok: true, denied: true };
       }
-      // /start — welcome message with the interactive inline main menu.
+      // /start — referral deep-links (`?start=ref_<userId>`) credit the inviter,
+      // then the interactive inline main menu is shown.
       if (command === '/start') {
+        const startPayload = commandSource.slice('/start'.length).trim();
+        const referralMatch = /^ref_(\d{2,20})$/i.exec(startPayload);
+        if (referralMatch) {
+          const telegramUserId = message?.from?.id ?? chatId;
+          const outcome = ServerDatabase.applyTelegramReferral(referralMatch[1], telegramUserId);
+          if (outcome.applied) {
+            await TelegramBotService.sendMessage(
+              token,
+              referralMatch[1],
+              '🎉 Someone joined using your link! You received +10 bonus credits.',
+            );
+          }
+        }
         await TelegramBotService.sendMainMenu(token, chatId);
+        return { ok: true };
+      }
+      // /referral — personal invite link + referral earnings (organic growth).
+      if (command === '/referral' || command === '/ref') {
+        const telegramUserId = message?.from?.id ?? chatId;
+        const usage = ServerDatabase.getTelegramUsage(telegramUserId);
+        const username = await TelegramBotService.resolveBotUsername(token);
+        const link = TelegramBotService.buildReferralLink(username, telegramUserId);
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          [
+            '**🔗 Your Invite Link**',
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+            link,
+            '',
+            'Share this link — every friend who joins Naxora AI through it gives you:',
+            `⭐️ **+${TELEGRAM_REFERRAL_BONUS_CREDITS} bonus AI credits** (never expire)`,
+            '',
+            `📊 **Your referrals:** ${usage.referralCount}`,
+            `⭐️ **Bonus credits earned:** ${usage.referralCredits}`,
+            `⚡ **Credits available right now:** ${usage.extraCredits}`,
+            '',
+            '_💡 Pro members get a clean, footer-free experience — upgrade with Telegram Stars anytime._',
+          ].join('\n'),
+        );
+        TelegramBotService.lastError = null;
         return { ok: true };
       }
       const asksForHelp = ['help', 'assistance', 'what can you do', 'setup', 'api setup', 'guide'].includes(normalizedText);
@@ -1171,7 +1936,12 @@ export class TelegramBotService {
           '/yt_check or /analytics — Live channel views, impressions, CTR, watch time & health audit\n' +
           '/yt_seo — AI-generated channel keywords, viral bio, tags & SEO recommendations\n' +
           '/yt_viral — AI-powered viral video concept predictions for your channel\n' +
+          '/yt_spy <YouTube URL> — Spy on a rival video: real metrics, hidden tags & AI takedown plan\n' +
           '/viral_shorts <topic|YouTube URL> — AI Shorts hook, script, hashtags & thumbnail prompt\n' +
+          '/thumbnail <prompt> — Free AI thumbnail render (1280×720 Flux) with regenerate buttons\n' +
+          '/tts <text> — Free AI voiceover (.mp3) with Microsoft Edge neural voices (Bengali auto-detect)\n' +
+          '/referral — Get your invite link: +10 bonus AI credits per friend who joins\n' +
+          '⭐️ Free plan: 3 AI generations every 24h — top up instantly with Telegram Stars\n' +
           'Send any text — Chat with the multi-model AI brain (instant failover)\n\n' +
           '**🔑 STEP 1 — ADD AI API KEYS (unlocks AI replies)**\n' +
           '1️⃣ Google Gemini (FREE): open https://aistudio.google.com/app/apikey → sign in → Create API key → copy\n' +
@@ -1216,26 +1986,47 @@ export class TelegramBotService {
       }
       // /yt_check (alias /analytics) — live channel stats, impressions, CTR and security audit.
       if (command === '/yt_check' || command === '/analytics') {
-        await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig || null);
+        await TelegramBotService.handleYtCheckCommand(token, chatId, effectiveConfig || null, message?.from?.id ?? chatId);
         TelegramBotService.lastError = null;
         return { ok: true };
       }
       // /yt_seo — AI channel SEO audit through the failover AI cascade.
       if (command === '/yt_seo') {
-        await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig || null);
+        await TelegramBotService.handleYtSeoCommand(token, chatId, effectiveConfig || null, message?.from?.id ?? chatId);
         TelegramBotService.lastError = null;
         return { ok: true };
       }
       // /yt_viral — AI-powered viral video concept predictions for the channel.
       if (command === '/yt_viral') {
-        await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig || null);
+        await TelegramBotService.handleYtViralCommand(token, chatId, effectiveConfig || null, message?.from?.id ?? chatId);
         TelegramBotService.lastError = null;
         return { ok: true };
       }
       // /viral_shorts — AI-powered viral Shorts script generator (topic, keyword or YouTube URL).
       if (command === '/viral_shorts' || command === '/viralshorts') {
         const shortsTopic = (commandSource || '').replace(/^\/viral_?shorts(\@\S+)?\s*/i, '').trim();
-        await TelegramBotService.handleViralShortsCommand(token, chatId, effectiveConfig || null, shortsTopic);
+        await TelegramBotService.handleViralShortsCommand(token, chatId, effectiveConfig || null, shortsTopic, message?.from?.id ?? chatId);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // /yt_spy — Phase 5 competitor video spy & tag extractor (real Data API + AI breakdown).
+      if (command === '/yt_spy' || command === '/spy') {
+        const spyTarget = (commandSource || '').replace(/^\/yt_?spy(\@\S+)?\s*/i, '').trim();
+        await TelegramBotService.handleYtSpyCommand(token, chatId, effectiveConfig || null, message?.from?.id ?? chatId, spyTarget);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // /thumbnail — free AI thumbnail generator (Pollinations 1280×720 Flux, no API key).
+      if (command === '/thumbnail' || command === '/thumb') {
+        const thumbPrompt = (commandSource || '').replace(/^\/thumb(nail)?(\@\S+)?\s*/i, '').trim();
+        await TelegramBotService.handleThumbnailCommand(token, chatId, message?.from?.id ?? chatId, thumbPrompt);
+        TelegramBotService.lastError = null;
+        return { ok: true };
+      }
+      // /tts — free AI voiceover generator (Microsoft Edge neural TTS, Bengali auto-detect).
+      if (command === '/tts') {
+        const ttsText = (commandSource || '').replace(/^\/tts(\@\S+)?\s*/i, '').trim();
+        await TelegramBotService.handleTtsCommand(token, chatId, message?.from?.id ?? chatId, ttsText);
         TelegramBotService.lastError = null;
         return { ok: true };
       }
@@ -1346,7 +2137,12 @@ export class TelegramBotService {
       }
       // Explicit per-bot dispatch: the reply is always sent via the exact bot token
       // instance that received this update (per-user token or global fallback).
-      await TelegramBotService.sendTelegramMessage(chatId, TelegramBotService.ensureYouTubeLink(reply.trim(), text), token);
+      const replyBody = TelegramBotService.ensureYouTubeLink(reply.trim(), text);
+      await TelegramBotService.sendTelegramMessage(
+        chatId,
+        await TelegramBotService.appendReferralFooter(replyBody, token, message?.from?.id ?? chatId),
+        token,
+      );
       TelegramBotService.lastError = null;
       console.log('🤖 [TelegramBotService] Replied to update:', update?.update_id);
       return { ok: true };
