@@ -370,6 +370,74 @@ export class TelegramBotService {
   }
 
   /**
+   * Builds the user's Telegram account profile view: badge, credits/pro days, and
+   * priority-processing status. Pro members see `⭐ PRO VIP Member` plus remaining
+   * pro days/credits; free users see their daily usage and upgrade options.
+   */
+  private static buildProfileText(telegramUserId: string | number): string {
+    const key = String(telegramUserId || '').trim();
+    if (!key) {
+      return [
+        '**👤 Your Telegram Profile**',
+        '',
+        'Telegram ID: **unknown**',
+        'Telegram Stars account: **unlinked**',
+      ].join('\n');
+    }
+
+    const usage = ServerDatabase.getTelegramUsage(telegramUserId);
+    const used = usage.used;
+    const limit = TELEGRAM_FREE_AI_DAILY_LIMIT;
+    const extra = usage.extraCredits;
+    const totalStars = usage.totalPaidStars;
+    const proUntil = ServerDatabase.getTelegramProExpiresAt(telegramUserId);
+    const proDays = ServerDatabase.getTelegramProDaysRemaining(telegramUserId);
+    const proActive = ServerDatabase.isTelegramProActive(telegramUserId);
+
+    const lines = [
+      '**👤 Your Telegram Profile**',
+      '',
+      `Telegram ID: **${TelegramBotService.escapeHtml(String(key))}**`,
+      '',
+    ];
+
+    if (proActive) {
+      const untilDate = proUntil ? proUntil.slice(0, 10) : '—';
+      lines.push(
+        '⭐ **PRO VIP Member** — unlimited generations + priority processing',
+        `• Pro plan expires: **${untilDate}** (${proDays}d remaining)`,
+        `• Lifetime Stars spent: **${totalStars}**`,
+      );
+    } else {
+      lines.push(`• Free credits today: **${used}/${limit}**`);
+      if (extra > 0) {
+        lines.push(
+          `• Paid generation credits left: **${extra}**`,
+          '• Free today: **' + `${used}/${limit}` + '**',
+          '• Next free slot: **reset in 24h**',
+        );
+      } else {
+        lines.push(
+          `• Paid generation credits: **0** (Pro unlocks unlimited)`,
+          '• Upgrade with Telegram Stars to continue instantly',
+        );
+      }
+      if (totalStars > 0) {
+        lines.push(`• Lifetime Stars spent: **${totalStars}**`);
+      }
+    }
+
+    lines.push(
+      '',
+      '_Priority processing:_ active for ⭐ PRO VIP members and users with paid generation credits.',
+    );
+
+    return lines.join('\n');
+  }
+
+
+
+  /**
    * Multi-tenant YouTube credential resolution: reads ONLY this user's saved OAuth
    * credentials (never another tenant's). Returns null when the user has not
    * connected a channel yet.
@@ -1221,20 +1289,20 @@ export class TelegramBotService {
   // PHASE 6: TELEGRAM FREEMIUM (3 FREE AI GENERATIONS/DAY + STARS PAYWALL)
   // ==========================================
 
-  /** The two Telegram Stars offers surfaced by the paywall. XTR currency: the invoice
+  /** The two Telegram Stars offers surfaced by the dynamic paywall. XTR currency: the invoice
    *  amount is the Star count and no provider token is required. */
   private static readonly STARS_PRODUCTS: Record<string, { title: string; description: string; payload: string; stars: number }> = {
     buy_credits: {
-      title: '20 Extra AI Credits',
-      description: '⭐️ 50 Stars → 20 extra AI generations (SEO, Shorts, Analytics). Credits never expire.',
-      payload: 'tg_stars:extra_credits_20',
+      title: 'Starter Pack — 100 Generation Credits',
+      description: '⚡ 50 Telegram Stars → 100 Generation Credits. Credits never expire.',
+      payload: 'tg_stars:extra_credits_100',
       stars: 50,
     },
     buy_pro: {
-      title: 'Pro Creator (30 Days)',
-      description: '⭐️ 100 Stars → Unlimited AI generations (SEO, Shorts, Analytics & more) for 30 days.',
+      title: 'Pro Creator — 30-Day Unlimited Pass',
+      description: '⭐ 150 Telegram Stars → 30-Day Unlimited Pro Pass. Unlimited AI generations for 30 days.',
       payload: 'tg_stars:pro_creator_30d',
-      stars: 100,
+      stars: 150,
     },
   };
 
@@ -1244,19 +1312,21 @@ export class TelegramBotService {
     return [
       `⚠️ **Daily Free Limit Reached (${usedToday}/${limit} used). Upgrade with Telegram Stars to continue instantly!**`,
       '',
-      'Every account gets **3 free AI generations** every 24 hours (SEO, Shorts, Analytics).',
-      'Tap a button below to pay with ⭐️ Telegram Stars — credits apply instantly:',
-      '• ⭐️ 50 Stars → **20 Extra AI Credits**',
-      '• ⭐️ 100 Stars → **Pro Creator — unlimited AI for 30 days**',
+      'Every account gets **200 free AI generation credits every 24 hours** (SEO, Shorts, Analytics, Voiceover, Thumbnails & more).',
+      'When your free credits run out, choose one of these Telegram Stars packs to keep creating:',
+      '• ⚡ **50 Telegram Stars → 100 Generation Credits** — Starter Pack, top up instantly',
+      '• ⭐ **150 Telegram Stars → 30-Day Unlimited Pro Pass** — Pro Creator, unlimited generations for 30 days',
+      '',
+      'Tap a button below to pay with ⭐️ Telegram Stars — credits/Pro apply instantly:',
     ].join('\n');
   }
 
-  /** Inline buttons that open the two Telegram Stars invoices. */
+  /** Inline buttons that open the two Telegram Stars invoices shown on the dynamic paywall. */
   private static buildTelegramStarsPaywallKeyboard(): Record<string, any> {
     return {
       inline_keyboard: [
-        [{ text: '⭐️ 50 Stars → 20 Extra Credits', callback_data: 'stars:buy_credits' }],
-        [{ text: '⭐️ 100 Stars → Pro Creator (Unlimited)', callback_data: 'stars:buy_pro' }],
+        [{ text: '⚡ 50 Telegram Stars → 100 Generation Credits (Starter Pack)', callback_data: 'stars:buy_credits' }],
+        [{ text: '⭐ 150 Telegram Stars → 30-Day Unlimited Pro Pass (Pro Creator)', callback_data: 'stars:buy_pro' }],
       ],
     };
   }
@@ -1393,12 +1463,12 @@ export class TelegramBotService {
     }
     if (!body) return result;
     try {
-      body = body.replace(/(?is)<script[^>]*>.*?<\/script>/g, ' ')
-        .replace(/(?is)<style[^>]*>.*?<\/style>/g, ' ')
-        .replace(/(?is)<(nav|header|footer|noscript|svg)[^>]*>.*?<\/\1>/g, ' ');
-      const titleMatch = body.match(/(?is)<title[^>]*>(.*?)<\/title>/);
+      body = body.replace(new RegExp('<script[^>]*>.*?<\/script>', 'gis'), ' ')
+        .replace(new RegExp('<style[^>]*>.*?<\/style>', 'gis'), ' ')
+        .replace(new RegExp('<(nav|header|footer|noscript|svg)[^>]*>.*?<\\/\\1>', 'gis'), ' ');
+      const titleMatch = body.match(new RegExp('<title[^>]*>(.*?)<\/title>', 'gis'));
       if (titleMatch) result.title = titleMatch[1].trim();
-      let rawText = body.replace(/(?s)<[^>]+>/g, ' ');
+      let rawText = body.replace(new RegExp('<[^>]+>', 'gs'), ' ');
       rawText = rawText.replace(/[ \t\r\f\v]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
       result.text = TelegramBotService.decodeHtmlEntities(rawText).slice(0, 6000);
     } catch (error: any) {
@@ -2087,6 +2157,7 @@ export class TelegramBotService {
           '**📜 COMMANDS**\n' +
           '/start — Activate the AI assistant\n' +
           '/help or /setup — Show this master guide\n' +
+          '/profile — Your Telegram account profile: badge, credits/pro days & priority processing\n' +
           '/status — Live AI engine, provider pool and key status\n' +
           '/upload or /yt_upload — Upload a video to YouTube with Viral AI SEO\n' +
           '/connect_youtube — 1-click link your YouTube channel with Google OAuth\n' +
@@ -2134,6 +2205,18 @@ export class TelegramBotService {
           `Mode: <b>${status.mode}</b>\n` +
           `Updates processed: <b>${status.totalUpdatesProcessed}</b>\n` +
           `Primary route: <b>${TelegramBotService.escapeHtml(status.aiCascade.primary)}</b>`);
+        return { ok: true };
+      }
+      // /profile — user status: badge, credits/pro days, priority processing.
+      if (command === '/profile') {
+        const telegramUserId = message?.from?.id ?? chatId;
+        await TelegramBotService.sendMessage(
+          token,
+          chatId,
+          TelegramBotService.buildProfileText(telegramUserId),
+          TelegramBotService.buildMainMenuKeyboard(),
+        );
+        TelegramBotService.lastError = null;
         return { ok: true };
       }
       // /youtube — report the user's connected YouTube OAuth token status (DB-backed config).

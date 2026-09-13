@@ -63,18 +63,18 @@ const DB_FILE = path.join(process.cwd(), 'data_store.json');
 
 // ==========================================
 // PHASE 6: TELEGRAM FREEMIUM (DAILY AI QUOTA + STARS TOP-UPS)
-// Every Telegram user gets 3 free AI generations (SEO, Shorts, Analytics, …) per
-// UTC day. Beyond that they can top up with Telegram Stars: 50 ⭐️ → 20 extra
-// credits (never expire) or 100 ⭐️ → Pro Creator (unlimited for 30 days).
+// Every Telegram user gets 3 free AI generation credits (SEO, Shorts, Analytics, …) per
+// UTC day. Beyond that they can top up with Telegram Stars: 50 ⭐️ → 100 generation
+// credits (Starter Pack, never expire) or 150 ⭐️ → Pro Creator (unlimited for 30 days).
 // Consumption order: Pro (unlimited) → free daily quota → paid extra credits.
 // ==========================================
 
-/** Free AI generations per Telegram user per UTC day. */
+/** Free AI generation credits per Telegram user per UTC day. */
 export const TELEGRAM_FREE_AI_DAILY_LIMIT = 3;
-/** Pro Creator plan length granted by the 100 ⭐️ Stars invoice. */
+/** Pro Creator plan length granted by the 150 ⭐️ Stars invoice. */
 export const TELEGRAM_PRO_CREATOR_DAYS = 30;
-/** Extra AI generations granted by the 50 ⭐️ Stars invoice (never expire). */
-export const TELEGRAM_EXTRA_CREDITS_PER_INVOICE = 20;
+/** Generation credits granted by the 50 ⭐️ Stars "Starter Pack" invoice (never expire). */
+export const TELEGRAM_EXTRA_CREDITS_PER_INVOICE = 100;
 /** Bonus credits granted to the referrer for every new user who joins via their link. */
 export const TELEGRAM_REFERRAL_BONUS_CREDITS = 10;
 
@@ -971,10 +971,40 @@ export class ServerDatabase {
 
   /** True while the Pro Creator Stars plan is active for this Telegram user. */
   public static isTelegramProActive(telegramUserId: string | number): boolean {
-    const proUntil = ServerDatabase.getTelegramUsage(telegramUserId).proUntil;
-    if (!proUntil) return false;
-    const until = Date.parse(proUntil);
-    return Number.isFinite(until) && until > Date.now();
+    const key = String(telegramUserId || '').trim();
+    if (!key) return false;
+    const entry = ServerDatabase.getTelegramUsage(key);
+    return !!ServerDatabase.parseProUntil(entry.proUntil);
+  }
+
+  /**
+   * Pro Creator expiry as an ISO timestamp ('' when not subscribed).
+   * This is the `proExpiresAt` view of the underlying `proUntil` field.
+   */
+  public static getTelegramProExpiresAt(telegramUserId: string | number): string {
+    const key = String(telegramUserId || '').trim();
+    if (!key) return '';
+    const entry = ServerDatabase.getTelegramUsage(key);
+    const parsed = ServerDatabase.parseProUntil(entry.proUntil);
+    return parsed ? entry.proUntil : '';
+  }
+
+  /** Full days remaining on the Pro Creator plan (0 when not active). */
+  public static getTelegramProDaysRemaining(telegramUserId: string | number): number {
+    const key = String(telegramUserId || '').trim();
+    if (!key) return 0;
+    const entry = ServerDatabase.getTelegramUsage(key);
+    const parsed = ServerDatabase.parseProUntil(entry.proUntil);
+    if (!parsed) return 0;
+    const remaining = Math.ceil((parsed - Date.now()) / (24 * 60 * 60 * 1000));
+    return Math.max(0, remaining);
+  }
+
+  /** Parse `proUntil` into a millisecond timestamp when valid, otherwise null. */
+  public static parseProUntil(value: string | undefined | null): number | null {
+    if (!value) return null;
+    const ts = Date.parse(String(value));
+    return Number.isFinite(ts) ? ts : null;
   }
 
   /**
@@ -1081,11 +1111,11 @@ export class ServerDatabase {
     if (payload.includes('pro_creator')) {
       product = 'pro_creator_30d';
       // Extend from the current expiry when the plan is still active, otherwise start now.
-      const base = ServerDatabase.isTelegramProActive(key) ? Date.parse(entry.proUntil) : Date.now();
+      const base = ServerDatabase.parseProUntil(entry.proUntil) ?? Date.now();
       const until = new Date((Number.isFinite(base) ? base : Date.now()) + TELEGRAM_PRO_CREATOR_DAYS * 24 * 60 * 60 * 1000);
       entry.proUntil = until.toISOString();
     } else if (payload.includes('extra_credits')) {
-      product = 'extra_credits_20';
+      product = 'extra_credits_100';
       entry.extraCredits += TELEGRAM_EXTRA_CREDITS_PER_INVOICE;
     }
     entry.totalPaidStars += starsPaid;

@@ -1085,9 +1085,9 @@ async def thumbnail_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 # ==========================================
 # PHASE 2: TELEGRAM FREEMIUM QUOTA + STARS PAYMENTS
-# Every Telegram user gets 3 free AI generations (SEO, Shorts, Analytics, ...) per
-# UTC day. Beyond that they can top up with Telegram Stars: 50 Stars -> 20 extra
-# credits (never expire) or 100 Stars -> Pro Creator (unlimited for 30 days).
+# Every Telegram user gets 3 free AI generation credits (SEO, Shorts, Analytics, ...) per
+# UTC day. Beyond that they can top up with Telegram Stars: 50 Stars -> 100 generation
+# credits (Starter Pack, never expire) or 150 Stars -> Pro Creator (unlimited for 30 days).
 # Consumption order: Pro (unlimited) -> free daily quota -> paid extra credits.
 #
 # The Node.js server owns data_store.json and this worker only READS it (see the
@@ -1099,7 +1099,7 @@ async def thumbnail_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 TELEGRAM_FREE_AI_DAILY_LIMIT = 3
 TELEGRAM_PRO_CREATOR_DAYS = 30
-TELEGRAM_EXTRA_CREDITS_PER_INVOICE = 20
+TELEGRAM_EXTRA_CREDITS_PER_INVOICE = 100
 TELEGRAM_REFERRAL_BONUS_CREDITS = 10
 TELEGRAM_USAGE_STORE_FILE = os.path.join(os.getcwd(), "telegram_usage.json")
 _TELEGRAM_USAGE_LOCK = asyncio.Lock()
@@ -1107,18 +1107,18 @@ _TG_BOT_USERNAME_CACHE = ""
 
 STARS_PRODUCTS: Dict[str, Dict[str, Any]] = {
     "buy_credits": {
-        "title": "20 Extra AI Credits",
-        "description": "50 Stars -> 20 extra AI generations (SEO, Shorts, Analytics). Credits never expire.",
-        "payload": "tg_stars:extra_credits_20",
+        "title": "Starter Pack — 100 Generation Credits",
+        "description": "50 Stars -> 100 Generation Credits (SEO, Shorts, Analytics, Voiceover, Thumbnails & more). Credits never expire.",
+        "payload": "tg_stars:extra_credits_100",
         "stars": 50,
-        "button": "⭐️ 50 Stars → 20 Extra Credits",
+        "button": "⚡ 50 Telegram Stars → 100 Generation Credits (Starter Pack)",
     },
     "buy_pro": {
-        "title": "Pro Creator (30 Days)",
-        "description": "100 Stars -> Unlimited AI generations (SEO, Shorts, Analytics & more) for 30 days.",
+        "title": "Pro Creator — 30-Day Unlimited Pass",
+        "description": "150 Stars -> 30-Day Unlimited Pro Pass. Unlimited AI generations for 30 days.",
         "payload": "tg_stars:pro_creator_30d",
-        "stars": 100,
-        "button": "⭐️ 100 Stars → Pro Creator (Unlimited)",
+        "stars": 150,
+        "button": "⭐ 150 Telegram Stars → 30-Day Unlimited Pro Pass (Pro Creator)",
     },
 }
 
@@ -1226,20 +1226,21 @@ async def consume_telegram_ai_quota(telegram_user_id: Any) -> Dict[str, Any]:
 
 
 def build_telegram_paywall_text(used: int, limit: int) -> str:
-    """The Stars paywall shown when the daily free AI quota is exhausted."""
+    """The dynamic Stars paywall shown when the daily free AI quota is exhausted."""
     used_today = max(0, min(limit, int(used or 0)))
     return (
         f"⚠️ <b>Daily Free Limit Reached ({used_today}/{limit} used). Upgrade with Telegram Stars to continue instantly!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Every account gets <b>{limit} free AI generations</b> every 24 hours (SEO, Shorts, Analytics).\n\n"
-        "Tap a button below to pay with ⭐️ Telegram Stars — credits apply instantly:\n"
-        "• ⭐️ 50 Stars → <b>20 Extra AI Credits</b>\n"
-        "• ⭐️ 100 Stars → <b>Pro Creator — unlimited AI for 30 days</b>"
+        f"Every account gets <b>{limit} free AI generation credits</b> every 24 hours (SEO, Shorts, Analytics, Voiceover, Thumbnails & more).\n\n"
+        "When your free credits run out, choose one of these Telegram Stars packs to keep creating:\n"
+        "• ⚡ <b>50 Telegram Stars → 100 Generation Credits</b> — Starter Pack, top up instantly\n"
+        "• ⭐ <b>150 Telegram Stars → 30-Day Unlimited Pro Pass</b> — Pro Creator, unlimited generations for 30 days\n\n"
+        "Tap a button below to pay with ⭐️ Telegram Stars — credits/Pro apply instantly:"
     )
 
 
 def telegram_stars_paywall_keyboard() -> InlineKeyboardMarkup:
-    """Inline buttons that open the two Telegram Stars invoices."""
+    """Dynamic inline buttons that open the two Telegram Stars invoices."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(STARS_PRODUCTS["buy_credits"]["button"], callback_data="stars:buy_credits")],
         [InlineKeyboardButton(STARS_PRODUCTS["buy_pro"]["button"], callback_data="stars:buy_pro")],
@@ -1302,7 +1303,7 @@ async def send_stars_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 async def apply_telegram_stars_payment(telegram_user_id: Any, invoice_payload: str, stars: int, charge_id: str = "") -> tuple:
     """Apply a settled Stars payment (idempotent per Telegram charge id): credit + audit log.
-    Returns (product, entry). Products: extra_credits_20 / pro_creator_30d / duplicate_ignored."""
+    Returns (product, entry). Products: extra_credits_100 / pro_creator_30d / duplicate_ignored."""
     payload = (invoice_payload or "").strip()
     stars_paid = max(0, int(stars or 0))
     charge_id = (charge_id or "").strip()
@@ -1325,7 +1326,7 @@ async def apply_telegram_stars_payment(telegram_user_id: Any, invoice_payload: s
                     base = time.time()
             entry["proUntil"] = datetime.fromtimestamp(base + TELEGRAM_PRO_CREATOR_DAYS * 86400, tz=timezone.utc).isoformat()
         elif "extra_credits" in payload:
-            product = "extra_credits_20"
+            product = "extra_credits_100"
             entry["extraCredits"] += TELEGRAM_EXTRA_CREDITS_PER_INVOICE
         entry["totalPaidStars"] += stars_paid
         entry["date"] = _tg_usage_today()
@@ -3019,6 +3020,52 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     has_or = bool(OPENROUTER_API_KEY and not OPENROUTER_API_KEY.startswith("YOUR_"))
     has_cerebras = bool(CEREBRAS_API_KEY and not CEREBRAS_API_KEY.startswith("YOUR_"))
 
+    tg_id = None
+    tg_status_lines: List[str] = []
+    if update.effective_user:
+        tg_id = update.effective_user.id
+    elif update.effective_chat:
+        tg_id = update.effective_chat.id
+
+    if tg_id is not None:
+        try:
+            entry = _get_tg_usage_entry(tg_id)
+            used = int(entry.get("used") or 0)
+            extra = int(entry.get("extraCredits") or 0)
+            total_stars = int(entry.get("totalPaidStars") or 0)
+            pro_until_raw = str(entry.get("proUntil") or "").strip()
+            pro_active = _is_tg_pro_active(entry)
+            if pro_active:
+                try:
+                    pro_until_dt = datetime.fromisoformat(pro_until_raw.replace("Z", "+00:00"))
+                    pro_until_str = pro_until_dt.strftime("%Y-%m-%d")
+                except Exception:
+                    pro_until_str = pro_until_raw[:10] or "soon"
+                days_left = max(0, int((pro_until_dt.timestamp() - time.time()) / 86400))
+                tg_status_lines = [
+                    "\n⭐ <b>PRO VIP Member</b> — unlimited generations + priority processing",
+                    f"• Pro expires: <b>{pro_until_str}</b> ({days_left}d remaining)",
+                ]
+            else:
+                if extra > 0:
+                    tg_status_lines = [
+                        "\n🧾 <b>Credits available:</b>",
+                        f"• Paid credits left: <b>{extra}</b>",
+                        f"• Free today: <b>{used}/{TELEGRAM_FREE_AI_DAILY_LIMIT}</b>",
+                        "• Next free slot: <b>reset in 24h</b>",
+                    ]
+                else:
+                    tg_status_lines = [
+                        "\n🧾 <b>Credits available:</b>",
+                        f"• Free today: <b>{used}/{TELEGRAM_FREE_AI_DAILY_LIMIT}</b>",
+                        f"• Paid credits: <b>0</b> (Pro unlocks unlimited)",
+                        "• Upgrade with Telegram Stars to continue instantly",
+                    ]
+            if total_stars > 0:
+                tg_status_lines.append(f"• Lifetime Stars spent: <b>{total_stars}</b>")
+        except Exception as err:
+            logger.debug("status_command: telegram quota display skipped: %s", err)
+
     status_msg = (
         "🟢 <b>NAXORA AI PLATFORM STATUS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3034,6 +3081,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"• [Tier 5] Pollinations AI (Zero Key): <code>ACTIVE 🟢 (Always Available)</code>\n\n"
         f"📺 <b>YouTube Connection:</b> <code>{'CONNECTED ✅' if _youtube_connected() else 'NOT CONNECTED ❌'}</code>\n"
         f"• <b>HTTP Ingress:</b> <code>0.0.0.0:{PORT} (OK)</code>"
+        + (("\n" + "\n".join(tg_status_lines)) if tg_status_lines else "")
     )
     await safe_reply(update, status_msg, parse_mode=ParseMode.HTML)
 
